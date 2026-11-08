@@ -18,6 +18,8 @@ The Mac window is the setup flow. Select a host-owned Vagrant project, select a 
 
 ## Validation limits
 
+The DMG builder typechecks both native entrypoints before downloading Node or installing npm dependencies. `companion/macos/build-app.sh --check` uses the same SDK, target and source list as compilation; it logs the active compiler and SDK. The native compile test also runs under `npm test` on macOS and explicitly skips on Linux. Disclosure state uses a view-owned `StateObject` so command-line builds do not need the newer `SwiftUIMacros.StateMacro` plugin described in [Apple TN3211](https://developer.apple.com/documentation/technotes/tn3211-resolving-swiftui-source-incompatibilities-for-state-and-contentbuilder).
+
 Linux tests cover parsers, policy rejection, private transport options, bounded service probing, gateway isolation and packaging. They do not prove Tart/Softnet packet behavior or compile Swift/AppKit. Validate the DMG on macOS before relying on it: multiple VMs, host-key verification/replacement, missing/stopped Support, normal connect/disconnect, restart revocation, and guest attempts to reach every Mac interface (IPv4/IPv6), shared files and host services. The app inspects the trusted installed hypervisor's runtime configuration; it is not protection against a compromised hypervisor or Mac administrator.
 
 The legacy hand-authored PF `serve` command remains gated. The companion uses the dedicated checked Tart flow instead.

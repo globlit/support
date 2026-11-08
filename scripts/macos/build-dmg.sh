@@ -9,8 +9,9 @@ cache="$repo/.mac-build/cache"
 mkdir -p "$cache" "$repo/release"
 stage=$(mktemp -d "$repo/.mac-build/build.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
-printf 'STEP 1 Checking Apple tools and runtime\n'
-xcrun --find swiftc >/dev/null
+printf 'STEP 1 Checking native compilation\n'
+# Fail before downloads/npm work, using the same sources and flags as the build.
+bash "$repo/companion/macos/build-app.sh" --check
 version=24.14.1
 case "$arch" in
  arm64) checksum=25495ff85bd89e2d8a24d88566d7e2f827c6b0d3d872b2cebf75371f93fcb1fe ;;

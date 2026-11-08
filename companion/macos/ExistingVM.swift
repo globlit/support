@@ -143,9 +143,15 @@ private final class ConnectionOutput {
     func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
 }
 
+// View-owned presentation state survives redraws without requiring SwiftUI's
+// newer @State macro plugin, which is not shipped by every Command Line Tools SDK.
+@MainActor private final class VMConnectionPresentation: ObservableObject {
+    @Published var expandedCheck: String?
+}
+
 @MainActor struct ExistingVMView: View {
     @ObservedObject private var model = ExistingVMConnection.shared
-    @State private var expanded: String?
+    @StateObject private var presentation = VMConnectionPresentation()
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Connect your VM").font(.title2.bold())
@@ -189,11 +195,11 @@ private final class ConnectionOutput {
                                 Text(check.title).font(.headline)
                                 Text(check.detail).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                                 if let help = check.help {
-                                    Button(expanded == check.id ? "Hide steps" : "What to do") { expanded = expanded == check.id ? nil : check.id }.buttonStyle(.link)
-                                    if expanded == check.id {
+                                    Button(presentation.expandedCheck == check.id ? "Hide steps" : "What to do") { presentation.expandedCheck = presentation.expandedCheck == check.id ? nil : check.id }.buttonStyle(.link)
+                                    if presentation.expandedCheck == check.id {
                                         Text(help).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                                         if let text = check.copy {
-                                            ScrollView([.vertical, .horizontal]) { Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(10) }.frame(maxHeight: 130).background(Color.secondary.opacity(0.08)).cornerRadius(6)
+                                            ScrollView([.vertical, .horizontal]) { Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(10) }.frame(maxHeight: 130).background { Color.secondary.opacity(0.08) }.cornerRadius(6)
                                             Button("Copy commands") { model.copy(text) }
                                         }
                                     }
