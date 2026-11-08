@@ -6,7 +6,7 @@ import ServiceManagement
 import CryptoKit
 import Darwin
 
-struct Pair: Codable { let id: String; let token: String }
+struct Pair: Codable { let id: String; let token: String; var connectionID: String? = nil }
 struct Notice: Decodable { let id: String; let title: String; let body: String; let route: String }
 struct Inbox: Decodable { let paused: Bool; let reason: String?; let events: [Notice] }
 struct APIError: Decodable { let error: String }
@@ -63,6 +63,7 @@ final class Transport: NSObject, URLSessionTaskDelegate {
     @Published var useSSH = UserDefaults.standard.object(forKey: "useSSH") as? Bool ?? true
     @Published var login = SMAppService.mainApp.status == .enabled
     private var pair: Pair?
+    private var gatewayConnectionID: String?
     private var runner: Task<Void, Never>?
     private var failures = 0
     private var terminalAuthFailure = false
@@ -92,6 +93,12 @@ final class Transport: NSObject, URLSessionTaskDelegate {
             }
         }
     }
+    func useUnpairedVMPort(_ value: Int) {
+        guard !paired, !working else { return }
+        port = String(value); useSSH = true
+        UserDefaults.standard.set(port, forKey: "supportPort")
+        UserDefaults.standard.set(true, forKey: "useSSH")
+    }
     func validate() throws {
         guard let p = Int(port), (1024...65535).contains(p), String(p) == port else {
             throw CompanionError(message: "Enter a valid Support port (default 4173).")
@@ -101,12 +108,13 @@ final class Transport: NSObject, URLSessionTaskDelegate {
     // A TCP tunnel or guest response cannot impersonate it without this host-only key.
     func tunnel() async throws {
         try validate()
+        gatewayConnectionID = nil
         guard useSSH else { return }
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Support Host", isDirectory: true)
         let file = root.appendingPathComponent("gateway-key-\(port)")
         guard FileManager.default.fileExists(atPath: file.path) else {
-            throw CompanionError(message: "VM access is not active. Open VM connection settings to check your host gateway profile.")
+            throw CompanionError(message: "VM access is not active. Open VM connection, select your VM and complete its connection checks.")
         }
         let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
         let dirAttrs = try FileManager.default.attributesOfItem(atPath: root.path)
@@ -117,7 +125,7 @@ final class Transport: NSObject, URLSessionTaskDelegate {
               ((dirAttrs[.posixPermissions] as? NSNumber)?.intValue ?? 511) & 0o077 == 0,
               file.resolvingSymlinksInPath().path == file.path,
               (attrs[.size] as? NSNumber)?.intValue == 64 else {
-            throw CompanionError(message: "Start the host gateway with private host settings. Direct VM tunnels are not supported.")
+            throw CompanionError(message: "Reconnect from VM connection. The saved host gateway identity is not valid.")
         }
         let text = try String(contentsOf: file, encoding: .utf8)
         guard text.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else {
@@ -140,19 +148,33 @@ final class Transport: NSObject, URLSessionTaskDelegate {
             guard data.count < 1024 else { throw CompanionError(message: "Invalid gateway response.") }
             data.append(byte)
         }
-        struct Proof: Decodable { let version: Int; let proof: String }
+        struct Proof: Decodable { let version: Int; let proof: String; let connectionId: String? }
         let proof = try JSONDecoder().decode(Proof.self, from: data)
-        let expected = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: SymmetricKey(data: key))
+        guard proof.version == 2, let connectionID = proof.connectionId,
+              connectionID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else {
+            throw CompanionError(message: "Reconnect using the updated VM connection window.")
+        }
+        let expected = HMAC<SHA256>.authenticationCode(for: Data((nonce + "\n" + connectionID).utf8), using: SymmetricKey(data: key))
             .map { String(format: "%02x", $0) }.joined()
-        guard (response as? HTTPURLResponse)?.statusCode == 200, proof.version == 1, proof.proof == expected else {
+        guard (response as? HTTPURLResponse)?.statusCode == 200, proof.version == 2, proof.proof == expected else {
             throw CompanionError(message: "This listener is not the trusted host gateway. No credential was sent.")
         }
+        gatewayConnectionID = connectionID
     }
     func stopTunnel() { } // Host gateway lifecycle is independent of notifications.
     func request<T: Decodable>(_ path: String, method: String = "GET", payload: [String: Any]? = nil,
                                authenticated: Bool = true) async throws -> T {
         guard let url = URL(string: base + "/api/companion/" + path) else { throw CompanionError(message: "Invalid connection address.") }
         var req = URLRequest(url: url); req.httpMethod = method; req.setValue(base, forHTTPHeaderField: "Origin")
+        if useSSH {
+            guard let connectionID = gatewayConnectionID else { throw CompanionError(message: "Verify the VM connection before pairing.") }
+            if authenticated && pair?.connectionID != connectionID {
+                throw CompanionError(message: "Notifications are paired with a different connection. Disconnect notifications here, then pair with this workspace. No credential was sent.")
+            }
+            req.setValue(connectionID, forHTTPHeaderField: "X-Support-VM")
+        } else if authenticated && pair?.connectionID != nil {
+            throw CompanionError(message: "This pairing belongs to a VM. Select its VM connection to receive notifications.")
+        }
         if authenticated, let pair { req.setValue("Bearer \(pair.token)", forHTTPHeaderField: "Authorization") }
         if let payload { req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.httpBody = try JSONSerialization.data(withJSONObject: payload) }
         let (bytes, response) = try await session.bytes(for: req)
@@ -186,7 +208,8 @@ final class Transport: NSObject, URLSessionTaskDelegate {
                     try await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
-            guard let result = connected else { throw CompanionError(message: "Could not reach Support.") }
+            guard var result = connected else { throw CompanionError(message: "Could not reach Support.") }
+            result.connectionID = useSSH ? gatewayConnectionID : nil
             try Keychain.save(result); pair = result; paired = true; code = ""; terminalAuthFailure = false; delivered = []
             UserDefaults.standard.set(port, forKey: "supportPort")
             UserDefaults.standard.set(useSSH, forKey: "useSSH")

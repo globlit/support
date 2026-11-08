@@ -4,7 +4,7 @@ import {resolve,join,extname} from 'node:path';
 import {createHash,createHmac} from 'node:crypto';
 
 export const boundaryCSP="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; sandbox allow-scripts allow-same-origin allow-forms allow-downloads";
-export type GatewayOptions={port:number;guestPort:number;socketPath:string;publicDirectory:string;proofKey:Buffer;healthy:()=>boolean;timeoutMs?:number};
+export type GatewayOptions={port:number;guestPort:number;socketPath:string;publicDirectory:string;proofKey:Buffer;healthy:()=>boolean;timeoutMs?:number;connectionId?:string};
 const maxBody=262144,maxResponse=4*1024*1024;
 async function collect(stream:AsyncIterable<Buffer|string>,limit:number){let length=0;const chunks:Buffer[]=[];for await(const data of stream){const b=Buffer.from(data);length+=b.length;if(length>limit)throw Error('Size limit exceeded');chunks.push(b);}return Buffer.concat(chunks);}
 function jsonData(data:Buffer){const parsed:unknown=JSON.parse(data.toString('utf8'));const todo:{value:unknown;depth:number}[]=[{value:parsed,depth:0}];while(todo.length){const {value,depth}=todo.pop()!;if(depth>64)throw Error('Response nesting limit exceeded');if(value&&typeof value==='object')for(const child of Object.values(value))todo.push({value:child,depth:depth+1});}return JSON.stringify(parsed);}
@@ -25,7 +25,8 @@ export async function loadAssets(root:string){
  return assets;
 }
 export async function createGateway(options:GatewayOptions){
- const assets=await loadAssets(options.publicDirectory),origin=`http://127.0.0.1:${options.port}`,guestOrigin=`http://127.0.0.1:${options.guestPort}`,cookieName=`support_session_${options.guestPort}`,browserCookieName=`support_session_${options.port}`;
+ if(options.connectionId!==undefined&&!/^[a-f0-9]{32}$/.test(options.connectionId))throw Error('Invalid VM connection identity.');
+ const assets=await loadAssets(options.publicDirectory),origin=`http://127.0.0.1:${options.port}`,guestOrigin=`http://127.0.0.1:${options.guestPort}`,cookieName=`support_session_${options.guestPort}`,browserCookieName=`support_session_${options.port}${options.connectionId?'_'+options.connectionId:''}`;
  let active=0;
  const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeout:30000,keepAliveTimeout:5000},async(req,res)=>{
   const headers={'Cache-Control':'no-store','Content-Security-Policy':boundaryCSP,'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cross-Origin-Opener-Policy':'same-origin','Permissions-Policy':'camera=(), microphone=(), geolocation=(), usb=(), serial=(), local-network-access=()'};
@@ -43,7 +44,7 @@ export async function createGateway(options:GatewayOptions){
    if(!options.healthy())return error(503,'VM boundary is unavailable. The host gateway is closed.');
    if(path==='/__support/host'&&method==='GET'){
     const nonce=url.searchParams.get('nonce')??'';if(!/^[a-f0-9]{64}$/.test(nonce))return error(400,'Invalid challenge.');
-    res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({version:1,proof:createHmac('sha256',options.proofKey).update(nonce).digest('hex')}));return;
+    res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(options.connectionId?{version:2,connectionId:options.connectionId,proof:createHmac('sha256',options.proofKey).update(nonce+'\n'+options.connectionId).digest('hex')}:{version:1,proof:createHmac('sha256',options.proofKey).update(nonce).digest('hex')}));return;
    }
    const callback=path==='/auth/chatgpt/callback'&&method==='GET';
    if(!path.startsWith('/api/')&&!callback){
@@ -65,7 +66,7 @@ export async function createGateway(options:GatewayOptions){
    if(cookie.length>1)return error(403,'Ambiguous session.');
    const value=cookie[0]?.slice(browserCookieName.length+1);if(value&&/^[A-Za-z0-9_-]{43}$/.test(value))forwarded.Cookie=cookieName+'='+value;
    const csrf=req.headers['x-support-csrf'];if(typeof csrf==='string'&&/^[A-Za-z0-9_-]{43}$/.test(csrf))forwarded['X-Support-CSRF']=csrf;
-   if(path.startsWith('/api/companion/')){const auth=req.headers.authorization;if(auth&&/^Bearer [A-Za-z0-9_-]{43}$/.test(auth))forwarded.Authorization=auth;}
+   if(path.startsWith('/api/companion/')){if(options.connectionId&&req.headers['x-support-vm']!==options.connectionId)return error(409,'This notification pairing belongs to a different VM. Pair with this workspace first.');const auth=req.headers.authorization;if(auth&&/^Bearer [A-Za-z0-9_-]{43}$/.test(auth))forwarded.Authorization=auth;}
    if(body){forwarded['Content-Type']='application/json';forwarded['Content-Length']=String(body.length);}
    const result=await new Promise<{status:number;body:Buffer;cookies:string[];location?:string}>((resolve,reject)=>{
     const upstream=request({socketPath:options.socketPath,path:path+url.search,method,headers:forwarded,agent:false},async response=>{

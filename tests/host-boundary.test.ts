@@ -54,7 +54,7 @@ test('protected browser allows app routes but never guest-provided external dest
  assert.equal(boundaryHref('#/youtrack?issue=LAB-1',true),'#/youtrack?issue=LAB-1');assert.equal(boundaryHref('/downloads/support-companion.zip',true),'/downloads/support-companion.zip');assert.equal(boundaryHref('https://tool.test',false),'https://tool.test');
 });
 
-async function gatewayFixture(){
+async function gatewayFixture(connectionId?:string){
  const root=await mkdtemp(join(tmpdir(),'support-gateway-')),ui=join(root,'public'),socket=join(root,'backend.sock'),key=randomBytes(32);await mkdir(ui);await mkdir(join(ui,'assets'));
  const docs={'/index.html':'<!doctype html><html><head></head><body>HOST UI</body></html>','/assets/app.js':'console.log("trusted host bundle")'};
  const manifest:Record<string,string>={};for(const [path,data] of Object.entries(docs)){await writeFile(join(ui,path),data);manifest[path]=createHash('sha256').update(data).digest('hex');}await writeFile(join(ui,'manifest.json'),JSON.stringify(manifest));
@@ -69,7 +69,7 @@ async function gatewayFixture(){
   res.end(JSON.stringify({text:'<script>alert(1)</script>',url:'http://127.0.0.1:9999',ok:true}));});
  await new Promise<void>(r=>backend.listen(socket,r));
  const probe=createServer();await new Promise<void>(r=>probe.listen(0,'127.0.0.1',r));const port=(probe.address() as {port:number}).port;await new Promise<void>(r=>probe.close(()=>r()));
- const server=await createGateway({port,guestPort:4173,socketPath:socket,publicDirectory:ui,proofKey:key,healthy:()=>healthy,timeoutMs:100});await new Promise<void>(r=>server.listen(port,'127.0.0.1',r));const origin=`http://127.0.0.1:${port}`;
+ const server=await createGateway({port,guestPort:4173,socketPath:socket,publicDirectory:ui,proofKey:key,healthy:()=>healthy,timeoutMs:100,connectionId});await new Promise<void>(r=>server.listen(port,'127.0.0.1',r));const origin=`http://127.0.0.1:${port}`;
  return {root,ui,origin,key,mode:(v:string)=>{mode=v;},health:(v:boolean)=>{healthy=v;},hits:()=>hits,received:()=>received,async done(){server.closeAllConnections();backend.closeAllConnections();await Promise.all([new Promise<void>(r=>server.close(()=>r())),new Promise<void>(r=>backend.close(()=>r()))]);await cleanup(root);}};
 }
 test('gateway serves only local verified assets and data, strips guest authority and requires correct browser origin',async()=>{
@@ -123,4 +123,23 @@ test('unverified native provider cannot activate a tunnel from a generic firewal
   let output='';try{execFileSync(process.execPath,['--import','tsx','host/main.ts','serve',file],{timeout:10000,encoding:'utf8',stdio:['ignore','pipe','pipe']});assert.fail('Unverified provider must not start');}catch(e){output=String((e as {stderr?:Buffer}).stderr??'');}
   assert.match(output,/activation is gated/);assert.deepEqual(await readdir(root),['profile.json']);
  }finally{await cleanup(root);}
+});
+
+test('VM identity binds gateway proof, browser cookies and notification credentials to the selected VM',async()=>{
+ const id='a'.repeat(32),other='b'.repeat(32),f=await gatewayFixture(id);
+ try{
+  const nonce=randomBytes(32).toString('hex');
+  assert.deepEqual(await (await fetch(f.origin+'/__support/host?nonce='+nonce)).json(),{version:2,connectionId:id,proof:createHmac('sha256',f.key).update(nonce+'\n'+id).digest('hex')});
+  for(const binding of [undefined,other]){
+   const before=f.hits(),headers:Record<string,string>={Authorization:'Bearer '+'s'.repeat(43)};if(binding)headers['X-Support-VM']=binding;
+   assert.equal((await fetch(f.origin+'/api/companion/events',{headers})).status,409);assert.equal(f.hits(),before);
+  }
+  assert.equal((await fetch(f.origin+'/api/companion/events',{headers:{'X-Support-VM':id,Authorization:'Bearer '+'s'.repeat(43)}})).status,200);
+  assert.equal(f.received().headers.authorization,'Bearer '+'s'.repeat(43));assert.equal(f.received().headers['x-support-vm'],undefined);
+  const port=new URL(f.origin).port;
+  await fetch(f.origin+'/api/state',{headers:{Cookie:`support_session_${port}_${other}=${'o'.repeat(43)}; support_session_${port}=${'l'.repeat(43)}`}});
+  assert.equal(f.received().headers.cookie,undefined);
+  const response=await fetch(f.origin+'/api/vault',{method:'POST',headers:{Origin:f.origin,'Content-Type':'application/json',Cookie:`support_session_${port}_${id}=${'s'.repeat(43)}`},body:'{}'});
+  assert.equal(f.received().headers.cookie,'support_session_4173='+'s'.repeat(43));assert.ok(response.headers.get('set-cookie')!.startsWith(`support_session_${port}_${id}=`));
+ }finally{await f.done();}
 });

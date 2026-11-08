@@ -13,10 +13,16 @@ import {verifyPF} from './firewall.js';
 import {inputImage} from './input-image.js';
 import {createGateway} from './gateway.js';
 import {tartReadiness} from './tart-readiness.js';
+import {vmCommand,validateVMRequest} from './vm-connection.js';
 
 process.umask(0o077);
 const [command,file,destination]=process.argv.slice(2);
 async function main(){
+ if(['vm-discover','vm-check','vm-trust','vm-connect'].includes(command)){
+  let input='';for await(const chunk of process.stdin){input+=chunk;if(input.length>8192)throw Error('VM selection exceeds size limit.');}
+  await vmCommand(command,validateVMRequest(JSON.parse(input)),report=>console.log(JSON.stringify(report)));return;
+ }
+
  const protectedPaths=[dirname(fileURLToPath(import.meta.url)),join(homedir(),'Library','Application Support','Support Host')];
  if(command==='inspect-vagrant'&&file){
   if(process.platform!=='darwin')throw Error('Run inspect-vagrant on the Mac that owns the VM.');
@@ -34,7 +40,7 @@ async function main(){
    const plugins=await read(executable,['plugin','list']);
    const report=tartReadiness({provider,pluginVersion:plugins.match(/vagrant-tart \(([^ ,)]+)/)?.[1],tartVersion:tart?await read(tart,['--version']):'',tartHelp:tart?await read(tart,['run','--help']):'',softnetVersion:softnet?await read(softnet,['--version']):'',softnetHelp:softnet?await read(softnet,['--help']):''});
    console.log('Tart connection checks');for(const c of report.checks)console.log(`${c.ok?'Available':'Needs attention'} · ${c.name}: ${c.detail}`);
-   console.log('\n'+report.message+'\nSee Setup guide → Tart validation.');
+   console.log('\n'+report.message+'\nOpen VM connection in the Mac companion and select a running VM.');
   }else console.log(JSON.stringify({machines,message:'Choose a Tart-backed Vagrant project. Other providers need their own verified host boundary.'},null,2));return;
  }
  if(command==='input-image'&&file&&destination){console.log(await inputImage(file,destination,protectedPaths));return;}

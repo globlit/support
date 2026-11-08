@@ -14,9 +14,9 @@ The developer source ZIP remains an alternative for maintainers; its `install.sh
 
 For a service running on the Mac, select **On this Mac · local service**, enter its port and pair with a code from Settings → Notifications.
 
-For an Ubuntu VM, manage it yourself with Vagrant/Tart. Support does not create, boot, resize, provision or delete VMs. Open **VM connection**, choose the host-owned Vagrant project and click **Check provider**. The known provider is **vagrant-tart 1.0.0**. The check reports Tart/Softnet capabilities and opens no tunnel. Select a reviewed host gateway profile for a future verified connection; current unverified Tart activation is refused.
+For an Ubuntu VM, open **VM connection**, choose your host-owned Vagrant folder and select the running VM. If you share repositories, select that exact folder under **Shared repositories**. It is a read/write trust exception; Vagrant configuration, SSH keys and the Mac app must stay outside it. Support discovers SSH settings, checks the actual Tart/Softnet processes, asks you to verify the SSH fingerprint once, and checks Support on the VM loopback address. Missing requirements appear beside each check under **What to do**. Click **Recheck**, then **Connect → Open Support** when ready. No host profile or separate setup guide is needed.
 
-Default Tart NAT and default Softnet networking permit host access. The supplied **Setup guide** explains the required host-side network, folder/device and return-path validation. The browser gateway alone is not guest isolation. Never bypass a rejected VM connection by switching to local mode or a direct SSH TCP forward.
+The supported provider is **vagrant-tart 1.0.0** with directional Softnet rules. The app never creates, starts, stops or provisions your VM. Keep the Vagrant project outside guest shares: Vagrant executes its Ruby configuration on your Mac. A rejected connection has no direct-tunnel fallback.
 
 A verified VM connection serves independent host UI assets and bounded JSON, and the companion checks a host-only challenge before pairing, notifications or navigation. It cannot approve plans or authorize workflows.
 

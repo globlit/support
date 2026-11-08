@@ -49,6 +49,9 @@ end
 raise unless SupportBoundary.tart_errors(config).empty?
 raise if SupportBoundary.tart_errors(config(clipboard:true)).empty?
 raise if SupportBoundary.tart_errors(config(volumes:['/Users/person:ro'])).empty?
+raise unless SupportBoundary.tart_errors(config(volumes:['/Users/person/repos:tag=support-repos']), '/Users/person/repos').empty?
+raise if SupportBoundary.tart_errors(config(volumes:['/Users/person']), '/Users/person/repos').empty?
+raise if SupportBoundary.tart_errors(config(volumes:['/Users/person/repos'], extra_run_args:['--dir=/Users/person/repos']), '/Users/person/repos').empty?
 raise if SupportBoundary.tart_errors(config(vnc:true)).empty?
 %w[--dir=/Users/person --disk=/dev/disk0 --rosetta=host --net-fd=3 --net-bridged=en0 --net-host --net-softnet-expose=2222:22 --net-softnet-control-fd=3].each do |arg|
  raise arg if SupportBoundary.tart_errors(config(extra_run_args:[arg])).empty?

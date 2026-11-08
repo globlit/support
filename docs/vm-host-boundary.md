@@ -2,7 +2,7 @@
 
 **Deployment decision:** Support connects to an independently managed VM. The identified provider is **vagrant-tart 1.0.0**. See [existing VM installation and validation](existing-vm.md). The app-owned VM controller was removed; native Tart network validation remains required and activation remains gated.
 
-Implemented 2026-11-08: a separate host UI/data gateway, private-socket SSH transport, a host PF policy generator and verifier, a Vagrant configuration guard, and independent input snapshots/images. **Not yet deployed or certified on the user's Mac. Native VM activation is gated in code.** The current Linux/local service remains unchanged. Neither this code nor a successful `check-network` result proves that an unknown native Vagrant provider's packets traverse PF.
+Implemented 2026-11-08: a separate host UI/data gateway, private-socket SSH transport, a host PF policy generator and verifier, a Vagrant configuration guard, and independent input snapshots/images. **Not yet deployed or certified on the user's Mac. The legacy PF profile activation is gated; the Mac companion now uses the separately checked Tart flow described in [existing-vm.md](existing-vm.md).** The current Linux/local service remains unchanged. Neither this code nor a successful `check-network` result proves that an unknown native Vagrant provider's packets traverse PF.
 
 ## Trust and data flow
 

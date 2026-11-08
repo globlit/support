@@ -43,7 +43,8 @@ export function renderPF(p:NetworkPolicy){
   ''
  ].join('\n');
 }
-export function sshArguments(p:HostProfile,socket:string){
+export type SSHConnection=Pick<HostProfile,'guestPort'|'sshUser'|'identityFile'|'knownHostsFile'>&{network:Pick<NetworkPolicy,'sshPort'|'guestIPv4'>};
+export function sshArguments(p:SSHConnection,socket:string){
  if(!socket.startsWith('/')||socket.includes(':')||/[\r\n\0]/.test(socket))throw Error('Invalid private socket path.');
  return ['-F','/dev/null','-N','-T','-L',`${socket}:127.0.0.1:${p.guestPort}`,'-p',String(p.network.sshPort),'-i',p.identityFile,
   ...['BatchMode=yes','StrictHostKeyChecking=yes',`UserKnownHostsFile=${p.knownHostsFile}`,'GlobalKnownHostsFile=/dev/null','IdentitiesOnly=yes',

@@ -19,6 +19,9 @@ if [[ -n "${SUPPORT_NODE_BINARY:-}" || -n "${SUPPORT_HOST_BUNDLE:-}" ]]; then
   ditto "$SUPPORT_HOST_BUNDLE" "$app_dir/Contents/Resources/Host"
   codesign --force --sign - "$app_dir/Contents/Resources/Runtime/node"
 fi
+mkdir -p "$app_dir/Contents/Resources/Runtime"
+xcrun swiftc -target "$(uname -m)-apple-macosx13.0" -swift-version 5 -O "$source_dir/InspectProcesses.swift" -o "$app_dir/Contents/Resources/Runtime/inspect-processes"
+codesign --force --sign - "$app_dir/Contents/Resources/Runtime/inspect-processes"
 # No virtualization entitlement; this app cannot create a VM.
 codesign --force --sign - --identifier ing.support.companion "$app_dir"
 codesign --verify --deep --strict "$app_dir"

@@ -4,6 +4,6 @@ export function boundaryHref(href:string|undefined,protectedMode=hostBoundary())
  if(!protectedMode)return href;
  // No remote/guest-supplied navigation, even when the destination resembles a local tool.
  // Only app routes and known host-packaged downloads are navigable.
- if(href&&((href.startsWith('#/')&&href.length<=8192&&!/[\x00-\x1f\x7f]/.test(href))||/^\/downloads\/(support-companion\.zip|companion-guide\.html|mac-install\.html|existing-vm-guide\.html)$/.test(href)))return href;
+ if(href&&((href.startsWith('#/')&&href.length<=8192&&!/[\x00-\x1f\x7f]/.test(href))||/^\/downloads\/(support-companion\.zip|companion-guide\.html|mac-install\.html)$/.test(href)))return href;
  return undefined;
 }

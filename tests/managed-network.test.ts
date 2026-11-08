@@ -90,5 +90,6 @@ test('the shipped native companion cannot create or provision a VM',async()=>{
  assert.doesNotMatch(app,/ManagedVMModel|Create.*VM|VZVirtualMachine/);
  assert.doesNotMatch(build,/-framework Virtualization|--entitlements/);
  assert.doesNotMatch(connection,/vagrant.*up|tart.*run|VZVirtualMachine|rootfs.raw/);
- assert.match(connection,/inspect-vagrant/);assert.match(connection,/serve/);
+ assert.match(connection,/vm-discover/);assert.match(connection,/vm-connect/);
+ assert.doesNotMatch(connection,/Host gateway profile|Setup guide|hostProfile/);
 });
