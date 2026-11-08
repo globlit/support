@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.support-data/
+.env*
+*.log
+
+host-dist/
+
+guest-dist/

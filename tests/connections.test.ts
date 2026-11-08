@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {Store} from '../server/store.js';
+import {checkGitLabConnection} from '../server/connections.js';
+function fixture(){const dir=mkdtempSync(join(tmpdir(),'support-connection-'));const store=new Store(dir);store.unlock('connection-test-passphrase',true);store.credential('GitLab','private-test-value');const s=store.snapshot();store.config({...s.config,repositories:[{name:'Demo',path:'/workspace/demo',project:'root/demo',branch:'main',environment:'Development'}],connections:{...s.config.connections,GitLab:{enabled:true,endpoint:'http://127.0.0.1:8929',scope:'',path:''}}},s.configRevision);return {store,close(){store.close();rmSync(dir,{recursive:true,force:true})}}}
+test('GitLab connection check authenticates read-only branch and pipeline requests',async()=>{const f=fixture();try{let calls=0;const result=await checkGitLabConnection(f.store,async(url,init)=>{calls++;assert.equal(init?.method,'GET');assert.equal(init?.redirect,'manual');assert.equal((init?.headers as Record<string,string>)['PRIVATE-TOKEN'],'private-test-value');assert.match(String(url),/projects\/root%2Fdemo\//);return Response.json(String(url).includes('/branches/')?{commit:{id:'a'.repeat(40),parent_ids:[],message:'seed'}}:[{id:1,status:'success'}]);});assert.equal(calls,2);assert.equal(result.liveTest,true);assert.match(result.checks[0].detail,/success/);assert.ok(!JSON.stringify(result).includes('private-test-value'));}finally{f.close()}});
+test('GitLab check reports authentication failures and missing branches without success',async()=>{const f=fixture();try{await assert.rejects(checkGitLabConnection(f.store,async()=>new Response('',{status:401})),/401/);await assert.rejects(checkGitLabConnection(f.store,async()=>new Response('',{status:404})),/not found/);f.store.lock();await assert.rejects(checkGitLabConnection(f.store),/vault/i);}finally{f.close()}});

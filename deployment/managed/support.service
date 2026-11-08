@@ -1,0 +1,34 @@
+[Unit]
+Description=Support managed guest application
+After=local-fs.target support-proxy.service
+Requires=support-proxy.service
+
+[Service]
+User=support
+Group=support
+WorkingDirectory=/opt/support
+ExecStart=/usr/local/bin/node --max-old-space-size=384 /opt/support/server/index.js
+Environment=SUPPORT_DATA_DIR=/var/lib/support
+Environment=SUPPORT_PORT=4173
+Environment=SUPPORT_BIND_HOST=127.0.0.1
+Environment=SUPPORT_PUBLIC_ORIGIN=http://127.0.0.1:4173
+Environment=HTTP_PROXY=http://127.0.0.1:18080
+Environment=HTTPS_PROXY=http://127.0.0.1:18080
+Environment=NO_PROXY=127.0.0.1,localhost
+Environment=NODE_USE_ENV_PROXY=1
+Restart=on-failure
+RestartSec=5
+StateDirectory=support
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/workspace
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=768M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

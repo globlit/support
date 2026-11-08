@@ -1,0 +1,95 @@
+name: support-lab
+x-defaults: &defaults
+  restart: "no"
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "2"
+services:
+  prometheus:
+    <<: *defaults
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    ports: ["127.0.0.1:9090:9090"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=1d", "--storage.tsdb.retention.size=100MB", "--query.max-concurrency=2", "--query.max-samples=100000"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./support-lab.rules.yml:/etc/prometheus/support-lab.rules.yml:ro
+      - prometheus:/prometheus
+  alertmanager:
+    <<: *defaults
+    image: prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.25
+    ports: ["127.0.0.1:9093:9093"]
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager", "--cluster.listen-address=", "--data.retention=24h"]
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager:/alertmanager
+  youtrack:
+    <<: *defaults
+    image: jetbrains/youtrack:2026.2.19728@sha256:c5e9cedc6fb1d7bcc9b3b56fc3f63e563623e1cd39396161eb70957991583950
+    mem_limit: 2048m
+    memswap_limit: 2048m
+    cpus: 1.0
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - youtrack-data:/opt/youtrack/data
+      - youtrack-conf:/opt/youtrack/conf
+      - youtrack-logs:/opt/youtrack/logs
+      - youtrack-backups:/opt/youtrack/backups
+  gitlab:
+    <<: *defaults
+    image: gitlab/gitlab-ce:19.5.3-ce.0@sha256:6863d156a1a477bd6f69fc674b671d0163cd8b06bf63bb17cc4a4a803b78b27c
+    hostname: gitlab
+    mem_limit: 3072m
+    memswap_limit: 3072m
+    cpus: 1.5
+    shm_size: 128m
+    ports: ["127.0.0.1:8929:8929"]
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://127.0.0.1:8929'
+        letsencrypt['enable'] = false
+        puma['worker_processes'] = 0
+        puma['min_threads'] = 1
+        puma['max_threads'] = 2
+        sidekiq['concurrency'] = 5
+        postgresql['shared_buffers'] = '128MB'
+        prometheus_monitoring['enable'] = false
+        gitlab_kas['enable'] = false
+        registry['enable'] = false
+        gitlab_pages['enable'] = false
+        gitlab_rails['gitlab_shell_ssh_port'] = 22
+        gitlab_rails['env'] = { 'MALLOC_CONF' => 'dirty_decay_ms:1000,muzzy_decay_ms:1000' }
+        gitaly['env'] = { 'MALLOC_CONF' => 'dirty_decay_ms:1000,muzzy_decay_ms:1000', 'GITALY_COMMAND_SPAWN_MAX_PARALLEL' => '2' }
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+  runner:
+    <<: *defaults
+    image: gitlab/gitlab-runner:alpine-v19.3.6@sha256:c3cd049b3e9675ea2ecb1ae894d4b96240abba5d2b58ac73474fa2f1a55cc4c6
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ../.support-data/local-lab/runner-config:/etc/gitlab-runner
+      - runner-builds:/home/gitlab-runner
+volumes:
+  runner-builds:
+  prometheus:
+  alertmanager:
+  youtrack-data:
+  youtrack-conf:
+  youtrack-logs:
+  youtrack-backups:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:

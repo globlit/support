@@ -1,0 +1,10 @@
+import type {DashboardData} from './dashboard-model';
+import {runLink} from './dashboard-links';
+import {navigate} from './navigation';
+export function TokenChart({data}:{data:DashboardData}){
+ const buckets=data.tokenSeries??[],max=Math.max(1,...buckets.map(b=>b.input+b.output)),hourly=data.interval==='hour';
+ const open=(date:string)=>navigate({...runLink(data,'all',date),page:'logs',section:undefined,step:undefined,tool:'Model',query:'Model usage',focus:'dashboard'});
+ return <section className="chart-panel token-chart"><header><h2>Token usage</h2><span className="small muted">{hourly?'Hourly':'Daily'} · {data.timezone}</span></header><div className="chart-legend"><span className="legend-input">Input</span><span className="legend-output">Output</span></div>
+ <div className="bar-chart" role="group" aria-label="Token usage by response time. Select a bar for the recorded usage.">{buckets.map((b,i)=><div className="chart-column" key={b.date}><div className="chart-stack">{(['input','output'] as const).map(kind=>b[kind]>0&&<button className={'chart-segment token-'+kind} key={kind} onClick={()=>open(b.date)} style={{height:b[kind]/max*96+'px'}} aria-label={`${b.label}: ${b[kind].toLocaleString()} ${kind} tokens`} title={`${b.label} · ${b.input.toLocaleString()} input · ${b.output.toLocaleString()} output · ${b.responses} responses`}/>)}</div><span>{i%Math.ceil(buckets.length/8)===0||i===buckets.length-1?(hourly?b.label.split(' ')[0]:b.label):'\u00a0'}</span></div>)}</div>
+ <details className="chart-data"><summary>{buckets.some(b=>b.responses)?'Exact counts':'No recorded usage in this period'}</summary><div className="table-wrap"><table><thead><tr><th>{hourly?'Hour':'Day'}</th><th>Input</th><th>Output</th><th>Responses</th></tr></thead><tbody>{buckets.map(b=><tr key={b.date}><td><button className="text-button" onClick={()=>open(b.date)}>{b.label}</button></td><td>{b.input.toLocaleString()}</td><td>{b.output.toLocaleString()}</td><td>{b.responses}</td></tr>)}</tbody></table></div></details></section>;
+}

@@ -1,0 +1,44 @@
+import {SafeLink} from './SafeLink';
+import {sourcePath} from './intake-model';
+import {ErrorNotice,ErrorRecoveryAction} from './ErrorNotice';
+import {latestChange,replyStatus} from './reply-state';
+import {Select} from './Select';
+import {Markdown,MarkdownPreview} from './Markdown';
+import {useEffect,useRef,useState} from 'react';
+import {ResolutionPanel} from './ResolutionPanel';
+import {PipelinePanel} from './PipelinePanel';
+import {useWorkspaceApi} from './WorkspaceRuntime';
+import type {ChangeSet,LiveDetail,Snapshot} from './model';
+export function ChangesPanel({detail,data,refresh,onChanges,view='implementation'}:{view?:'implementation'|'reply';detail:LiveDetail;data:Snapshot;refresh:()=>void;onChanges?:(changes:ChangeSet[])=>void}){const api=useWorkspaceApi();
+ const repositories=data.config.repositories.filter(r=>r.project);
+ const [repo,setRepo]=useState(repositories[0]?.path??''),[paths,setPaths]=useState(''),[changes,setChanges]=useState<ChangeSet[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ useEffect(()=>{let alive=true;api<ChangeSet[]>(sourcePath(detail.issue.connection)+'/'+detail.issue.id+'/changes').then(c=>{if(alive){setChanges(c);onChanges?.(c)}}).catch(e=>{if(alive)setError(e.message)});return()=>{alive=false}},[detail.issue.id,detail.session.revision]);
+ useEffect(()=>{if(changes.length)onChanges?.(changes)},[changes,onChanges]);
+ const trackingRef=useRef({changes,busy});trackingRef.current={changes,busy};
+ useEffect(()=>{let alive=true;let timer:ReturnType<typeof setTimeout>;const poll=async()=>{try{if(data.vault.unlocked&&!trackingRef.current.busy&&document.visibilityState==='visible'){for(const c of trackingRef.current.changes.filter(c=>c.mr)){if(!alive||trackingRef.current.busy)break;try{const fresh=await api<ChangeSet>('/changes/'+c.id+'/track','POST',{});if(alive)setChanges(prev=>prev.map(p=>p.id===fresh.id?fresh:p));}catch{/* Next refresh retries status reads only. */}}}}finally{if(alive)timer=setTimeout(()=>void poll(),30000)}};timer=setTimeout(()=>void poll(),1000);return()=>{alive=false;clearTimeout(timer)}},[detail.issue.id,data.vault.unlocked]);
+ function update(c:ChangeSet){setChanges(prev=>[c,...prev.filter(p=>p.id!==c.id)].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)))}
+ async function run(fn:()=>Promise<ChangeSet>){setBusy(true);setError('');try{const next=await fn();const prior=changes.find(c=>c.id===next.id)?.resolution?.state;update(next);if(next.resolution&&['posted','closed'].includes(next.resolution.state)&&next.resolution.state!==prior)refresh();}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
+ const approved=!!detail.session.approval&&!detail.session.pendingRevision&&!detail.issue.resolved;
+ const latest=latestChange(changes);
+ if(view==='reply')return <section aria-label="YouTrack reply"><div className="heading"><h2>Reply</h2><span className="badge" role="status">{replyStatus(latest)}</span></div>{error&&<ErrorNotice message={error}/>}{busy&&<p role="status">Checking and saving the reviewed operation…</p>}{latest&&(latest.resolution||latest.tracking?.state==='merged')?<ResolutionPanel key={latest.id} c={latest} busy={busy} run={run}/>:<p className="stage-waiting">Waiting for implementation. A reply can be prepared after the merge request is merged and its target-branch pipeline passes. You will review and approve the exact message before it is posted to YouTrack.</p>}</section>;
+ return <section><h2>Changes</h2><p className="subtitle">Prepare a branch from the approved plan, review every file, then approve creating a draft merge request.</p>{error&&<ErrorNotice message={error}/>}<details className="branch-preparation" open={changes.length===0}><summary>{changes.length?'Prepare another change set':'Choose repository and files'}</summary><form onSubmit={e=>{e.preventDefault();void run(()=>api(sourcePath(detail.issue.connection)+'/'+detail.issue.id+'/changes','POST',{repositoryPath:repo,paths:paths.split('\n').map(p=>p.trim()).filter(Boolean),revision:detail.session.revision,sourceUpdated:detail.issue.updated}))}}>
+ <div className="form-grid"><label>Repository<Select value={repo} onChange={e=>setRepo(e.target.value)}><option value="">Choose a configured project</option>{repositories.map(r=><option value={r.path} key={r.path}>{r.project} → {r.branch} · {r.environment}</option>)}</Select></label><label>Files to change<textarea required value={paths} onChange={e=>setPaths(e.target.value)} placeholder={'clusters/dev/service.yaml\nclusters/dev/monitor.yaml'}/><small>One relative path per line, up to 10 files. Only these files are read or changed.</small></label></div>
+ <p className="small muted">Creates one commit on a new support branch in GitLab. Your local checkouts and target branch are not edited. The commit requests CI skipping; GitLab hooks and repository policies still apply.</p>
+ <button className="primary" disabled={busy||!approved||!repo||!paths.trim()||changes.some(c=>['generating','branch_pending','mr_pending'].includes(c.state))}>{busy?'Working…':'Prepare changes on a new branch'}</button>{!approved&&<p className="small muted">Approve the current plan first.</p>}{!repositories.length&&<p className="small muted">In Settings → Repositories, map a repository to its GitLab project and target branch.</p>}</form></details>
+ <div aria-live="polite">{busy&&<p className="muted">Checking sources and saving the reviewed operation. Keep this page open; if interrupted, return here to check status.</p>}</div>
+ {changes.map(c=><ChangeReview key={c.id} c={c} busy={busy} current={approved&&c.sessionRevision===detail.session.revision&&c.configRevision===data.configRevision&&c.sourceUpdated===detail.issue.updated} run={run}/>)}
+ </section>
+}
+function ChangeReview({c,busy,current,run}:{c:ChangeSet;busy:boolean;current:boolean;run:(fn:()=>Promise<ChangeSet>)=>Promise<void>}){const api=useWorkspaceApi();
+ const [title,setTitle]=useState(c.title),[description,setDescription]=useState(c.description);
+ useEffect(()=>{setTitle(c.title);setDescription(c.description)},[c.title,c.description]);
+ const dirty=title!==c.title||description!==c.description;
+ return <article className="change-review"><div className="heading"><h3>{c.project} · Plan v{c.planVersion}</h3><span className="badge">{c.resolution?.state==='closed'?'Done':c.resolution?.state==='reopened'?'Reopened':c.tracking?.state==='merged'?'Merged':({generating:'Preparing',failed:'Needs attention',branch_pending:'Check branch',review:'Review changes',mr_pending:'Check merge request',created:'Merge request created',changed:'Changed · Review required'})[c.state]}</span></div><p className="small source-description">{c.branch} → {c.target}<br/>Base {c.base.slice(0,12)}{c.head&&` · Commit ${c.head.slice(0,12)}`}</p><p>{c.resolution?.state==='closed'?'YouTrack ticket resolved.':c.tracking?.state==='merged'?'Merge request merged. Continue to Reply to verify the result and prepare the message.':c.message}</p><ErrorRecoveryAction message={c.message}/>{!current&&!['failed','created'].includes(c.state)&&<p className="error">This change set is no longer tied to the current approved session. Prepare a new branch after reviewing the plan.</p>}
+ <h4>Branch preparation diff</h4>
+ {c.diffs.map(f=><details className="file-diff" open key={f.path}><summary>{f.path}</summary><pre aria-label={'Diff for '+f.path}>{f.diff.split('\n').map((line,i)=><span key={i} className={line.startsWith('+')?'diff-add':line.startsWith('-')?'diff-remove':line.startsWith('@@')?'diff-context':''}>{line}{'\n'}</span>)}</pre></details>)}
+ {c.state==='review'&&<><label>Merge request title<input maxLength={200} value={title} onChange={e=>setTitle(e.target.value)}/></label><label>Merge request description<textarea maxLength={16000} value={description} onChange={e=>setDescription(e.target.value)}/></label><MarkdownPreview text={description}/><div className="actions"><button disabled={busy||!current||!title.trim()} onClick={()=>void run(()=>api('/changes/'+c.id+'/review','POST',{title,description}))}>{dirty?'Save details and refresh diff':'Refresh diff'}</button><button className="primary" disabled={busy||!current||dirty||!c.reviewHash} onClick={()=>void run(()=>api('/changes/'+c.id+'/approve','POST',{reviewHash:c.reviewHash}))}>Approve diff & create draft MR</button></div><p className="small muted">Approval covers this commit, full diff and displayed message. Branches are checked again before creation. Nothing is merged or deployed by the app.</p></>}
+ {['branch_pending','mr_pending'].includes(c.state)&&<button disabled={busy} onClick={()=>void run(()=>api('/changes/'+c.id+'/reconcile','POST',{}))}>Check remote status · No write retry</button>}
+ {c.mr&&<PipelinePanel c={c} busy={busy} current={current} run={run}/>}
+ {c.mr&&<SafeLink href={c.mr.url} target="_blank" rel="noreferrer">Open merge request !{c.mr.iid} ↗</SafeLink>}
+ </article>
+}

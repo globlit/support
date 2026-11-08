@@ -1,0 +1,16 @@
+groups:
+  - name: support-lab
+    rules:
+      - alert: SupportLabRunbookMissing
+        expr: vector(1) and on() (vector(time()) < 1794107777)
+        for: 0m
+        labels:
+          severity: warning
+          environment: development
+          cluster: local-lab
+          namespace: support-lab
+          service: support-demo
+          test: "true"
+        annotations:
+          summary: "[Support lab] Complete the demo service runbook"
+          description: "Synthetic integration-test alert, not an infrastructure outage. In root/support-flow-demo, update docs/runbook.md with local health checks and rollback instructions. Changes require an engineer-approved plan and diff. This alert expires after eight hours; a Git merge does not clear it automatically."
