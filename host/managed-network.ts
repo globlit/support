@@ -28,10 +28,7 @@ export function destination(policy:ManagedPolicy,value:unknown,local=hostAddress
  const endpoint=policy.endpoints.find(e=>e.host===v.host&&e.port===v.port);if(!endpoint)throw Error('Destination is not approved on the Mac.');
  checkAddress(endpoint.address,endpoint.allowPrivate,local);return endpoint;
 }
-/** Bound to an app-private UNIX socket. The only VZ guest listener forwards here.
- * Wire: one JSON line (<=1024 bytes), then OK\n or DENIED\n, then opaque TCP.
- * There is no DNS, URL fetch, filesystem, process or generic localhost operation.
- */
+/** App-private UNIX socket. Wire: one JSON line (<=1024 bytes), then OK\n or DENIED\n, then opaque TCP. */
 export function createManagedBroker(policy:ManagedPolicy,options:{localAddresses?:()=>string[];connect?:(endpoint:ManagedEndpoint)=>Socket;deadlineMs?:number;maxBytes?:number}={}){
  const clients=new Set<Socket>(),remotes=new Set<Socket>();
  const local=options.localAddresses??hostAddresses;

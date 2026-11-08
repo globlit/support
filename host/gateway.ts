@@ -54,7 +54,7 @@ export async function createGateway(options:GatewayOptions){
    }
    if(!callback&&!/^\/api\/[A-Za-z0-9_/-]+$/.test(path))return error(400,'Invalid API path.');
    if(method==='HEAD')return error(405,'Method not allowed.');
-   // Browser navigation must never display guest API documents or interpret guest HTML.
+   // Never render guest HTML.
    if(!callback&&req.headers['sec-fetch-mode']==='navigate')return error(403,'API navigation is disabled.');
    if(active>=4)return error(503,'Too many active requests.');active++;counted=true;
    let body:Buffer|undefined;
@@ -84,8 +84,7 @@ export async function createGateway(options:GatewayOptions){
    if(callback){res.writeHead(303,{Location:result.status===303&&result.location==='/#/auth?result=success'?'/#/auth?result=success':'/#/auth?result=error'});res.end();return;}
    if(result.status<200||result.status>=300&&result.status<400||result.status>599)return error(502,'Unexpected guest response.');
    const data=jsonData(result.body);
-   // Reconstruct our single session cookie; never forward guest headers, cache policies,
-   // redirects, service-worker scope, CORS, CSP, alternate protocols or other cookies.
+   // Forward only the session cookie.
    if(['/api/vault','/api/session/logout'].includes(path))for(const c of result.cookies){
     const match=c.match(new RegExp('^'+cookieName+'=([A-Za-z0-9_-]{43}|);.*Max-Age=(\\d+)(?:;|$)'));
     if(match&&Number(match[2])<=43200)res.setHeader('Set-Cookie',`${browserCookieName}=${match[1]}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Number(match[2])}`);

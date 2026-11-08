@@ -15,6 +15,6 @@ test('missing URL, query or disabled intake routes directly to YouTrack connecti
 test('missing vault, missing token and rejected credentials each explain their own recovery',()=>{
  const data=fixture();data.vault.initialized=false;assert.equal(youTrackRecovery(data)?.action,'Create Vault');data.vault.initialized=true;data.vault.credentials=[];
  assert.equal(youTrackRecovery(data)?.action,'Add YouTrack token');data.vault.credentials=['YouTrack'];
- for(const error of ['YouTrack rejected the token.','The token cannot read this YouTrack resource.'])assert.equal(youTrackRecovery(data,error,403)?.route.section,'Vault');
+ for(const error of ['YouTrack rejected the token.','The token cannot read this YouTrack resource.'])assert.deepEqual(youTrackRecovery(data,error,403)?.route,{page:'settings',section:'Connections',tool:'YouTrack'});
  assert.equal(youTrackRecovery(data),null);const network=youTrackRecovery(data,'YouTrack could not be reached.',502)!;assert.equal(network.route.tool,'YouTrack');assert.equal(network.retry,true);
 });

@@ -43,7 +43,7 @@ export class AlertHandoffs {
  async carry(id:string,expectedHash:string):Promise<HandoffResult>{
   const release=this.store.claimWork();try{
    const r=await this.read(id),w=r.target.session;
-   // A lost response may be retried safely, even if later ticket work has already advanced.
+   // A retried request is safe.
    const prior=w.alertHandoffs?.find(h=>h.requestHash===expectedHash);
    if(prior)return {detail:r.target,handoff:prior,alreadyImported:true};
    if(expectedHash!==r.review.hash)throw new AppError(409,'The handoff review is stale. Review both sessions again.');
@@ -54,7 +54,7 @@ export class AlertHandoffs {
     const handoff:AlertHandoff={id:r.identity,requestHash:expectedHash,alertId:id,alertConnection:r.source.issue.connection,alertTitle:r.content.alertTitle,alertUpdated:r.content.alertUpdated,alertActive:r.content.alertActive,occurrences:r.content.occurrences,sourcePlanVersion:r.plan.version,sourceRevision:r.source.session.revision,targetPlanVersion:version,at,...humanAttribution(this.store),notes:structuredClone(r.content.notes),replyDraft:r.content.replyDraft,analysis:structuredClone(r.content.analysis)};
     w.plans.push({version,text:r.plan.text,at});
     (w.alertHandoffs??=[]).push(handoff);
-    // Existing notes, history, reply drafts and unresolved revision requests are not overwritten.
+    // Keep existing notes, history, reply drafts, and revision requests.
     if(!w.draft)w.draft=r.content.replyDraft;
     w.approval=null;w.revision++;w.updatedAt=at;
     this.store.saveWorkSession(w);

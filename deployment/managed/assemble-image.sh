@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release-builder operation, never invoked by the model or the Mac guest channel.
+# Release builder only.
 # Usage: assemble-image.sh ROOTFS_TAR OUTPUT_DIR arm64|x86_64
 set -euo pipefail
 [[ $# == 3 && "$(uname -s)" == Linux ]] || { echo 'Usage on Linux: assemble-image.sh ROOTFS_TAR NEW_OUTPUT_DIR arm64|x86_64' >&2; exit 1; }
@@ -14,8 +14,7 @@ stage=$(mktemp -d)
 script_dir=$(cd "$(dirname "$0")" && pwd)
 trap 'rm -rf -- "$stage"' EXIT
 mkdir -p "$stage/root" "$output"
-# A trusted OCI export, not a guest-generated archive. fakeroot retains root ownership
-# in the filesystem without mounting anything or requiring a privileged loop device.
+# fakeroot keeps root ownership without mounting.
 fakeroot bash -euc 'tar --numeric-owner -xpf "$1" -C "$2"; truncate -s 8G "$3"; mkfs.ext4 -q -F -L SUPPORT_ROOT -d "$2" "$3"' _ "$rootfs_tar" "$stage/root" "$output/rootfs.raw"
 python3 - "$stage/root" "$output" "$architecture" "$script_dir" <<'PY'
 import hashlib, json, pathlib, shutil, sys

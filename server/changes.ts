@@ -61,7 +61,7 @@ export class Changes {
    if(!c.files.length)throw new AppError(400,'No file changes were proposed.');
    await this.guard(c,g);if((await g.branch(c.target))?.id!==c.base)throw new AppError(409,'Target branch moved. Prepare again from its latest commit.');if(await g.branch(c.branch))throw new AppError(409,'Generated branch already exists. No write made.');
    await this.guard(c,g);
-   // Durable intent precedes the only commit POST. Recovery only reads this branch.
+   // Persist intent before the commit POST.
    humanAttribution(this.store);activity.event('Creating the approved support branch');c.state='branch_pending';c.message='Branch write requested; verify remote status if interrupted.';this.store.saveChange(c);
    await g.request('repository/commits',{}, {branch:c.branch,start_sha:c.base,force:false,commit_message:`Support change ${c.id} [skip ci]`,actions:c.files.map(f=>({action:f.before===null?'create':f.after===null?'delete':'update',file_path:f.path,...(f.after===null?{}:{content:f.after,encoding:'text'})}))});
    await this.inspect(c,g);await this.guard(c,g);c.state='review';c.reviewHash=this.digest(c);c.message='Branch prepared. Review the full diff before creating a merge request.';this.store.saveChange(c);activity.event('Branch ready for diff review');activity.finish();return c;

@@ -4,14 +4,11 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createServer} from 'node:http';
-import {machinesFromStatus,parseSSH,checkIsolation,checkHostConfigurationBoundary,validateProcessSnapshot,validateRepositoryRoot,directoryShares,isolationSnippet,type ProcessRecord} from '../host/vm-discovery.js';
-import {parseHostKey,probeSupport,validateVMRequest,vmCommand,type VMReport,type VMOperations} from '../host/vm-connection.js';
+import {machinesFromStatus,parseSSH,checkIsolation,checkHostConfigurationBoundary,validateProcessSnapshot,validateRepositoryRoot,validateApprovedShare,UnapprovedSharesError,directoryShares,isolationSnippet,type ProcessRecord} from '../host/vm-discovery.js';
+import {installRoot,parseHostKey,probeSupport,validateVMRequest,vmCommand,classifySSHFailure,sshDiagnosticCommands,SSHForwardError,type VMReport,type VMOperations} from '../host/vm-connection.js';
 const ssh={host:'192.0.2.20',port:22,user:'vagrant',identity:'/Users/operator/Project with spaces/.vagrant/key'};
-const allow='in proto tcp @host port 22,out proto tcp 198.51.100.10/32 port 443';
-const block='in 0.0.0.0/0,out 0.0.0.0/0,out @host';
 function processes():ProcessRecord[]{return [
- {pid:100,ppid:1,executable:'/opt/homebrew/bin/tart',args:['/opt/homebrew/bin/tart','run','support-lab','--no-graphics','--no-audio','--no-clipboard',`--net-softnet-allow=${allow}`,`--net-softnet-block=${block}`]},
- {pid:101,ppid:100,executable:'/opt/homebrew/bin/softnet',args:['/opt/homebrew/bin/softnet','--vm-fd','0','--vm-mac-address','aa:bb:cc:dd:ee:ff','--allow',allow,'--block',block]}
+ {pid:100,ppid:1,executable:'/opt/homebrew/bin/tart',args:['/opt/homebrew/bin/tart','run','support-lab','--no-graphics','--no-audio','--no-clipboard']}
 ];}
 const status='1,lab,provider-name,tart\n1,other,provider-name,virtualbox\n1,lab,state,running\n1,other,state,poweroff\n';
 function sshConfig(identity=ssh.identity){return `Host lab\n HostName ${ssh.host}\n User ${ssh.user}\n Port 22\n IdentityFile "${identity}"\n StrictHostKeyChecking no\n UserKnownHostsFile /dev/null\n ProxyCommand dangerous\n ForwardAgent yes\n`;}
@@ -26,30 +23,25 @@ test('SSH discovery retains exact spaced key path but never dangerous Vagrant SS
  assert.deepEqual(parseSSH(sshConfig()),ssh);
  for(const bad of [sshConfig()+' HostName 127.0.0.1',sshConfig().replace(ssh.host,'localhost'),sshConfig().replace(ssh.host,'127.0.0.1'),sshConfig().replace('Port 22','Port 70000'),sshConfig().replace('User vagrant','User --exec'),sshConfig().replace(ssh.identity,'%d/.ssh/key'),sshConfig()+'\nHost other'])assert.throws(()=>parseSSH(bad));
 });
-test('runtime isolation accepts only a matched Tart VM and its real Softnet policy',()=>{
- const result=checkIsolation(processes(),'support-lab',ssh,['192.168.1.8']);assert.equal(result.pid,100);assert.equal(result.softnetPid,101);
+test('runtime isolation matches one Tart VM and accepts any network mode',()=>{
+ const result=checkIsolation(processes(),'support-lab',ssh,['192.168.1.8']);assert.equal(result.pid,100);
  assert.throws(()=>checkIsolation(processes(),'other-vm',ssh,[]));
- assert.throws(()=>checkIsolation(processes(),'support-lab',ssh,['198.51.100.10']));
  assert.throws(()=>checkIsolation(processes(),'support-lab',ssh,[ssh.host]));
- const unknown=processes();unknown[1].args=null;assert.throws(()=>checkIsolation(unknown,'support-lab',ssh,[]));
- const orphan=processes();orphan[1].ppid=500;assert.throws(()=>checkIsolation(orphan,'support-lab',ssh,[]));
+ const base=result.policy;
+ for(const args of [['--net-softnet'],['--net-host'],['--net-bridged=en0'],['--net-bridged','en0'],['--net-softnet-allow=in proto tcp @host port 22','--net-softnet-block','in 0.0.0.0/0'],['--net-softnet-expose=2222:22'],['--net-future=1']]){
+  const ps=processes();ps[0].args!.push(...args);const changed=checkIsolation(ps,'support-lab',ssh,[]);assert.notEqual(changed.policy,base,args.join(' '));
+ }
 });
-test('all filesystem and network bypass options are refused, including unknown future options',()=>{
- for(const arg of ['--dir=/Users/me','--disk=/dev/disk0','--rosetta=host','--net-host','--net-bridged=en0','--net-fd=3','--net-softnet-control-fd=3','--net-softnet-expose=4173:4173','--vnc','--clipboard','--future-device']){
+test('filesystem, device and host channel options are refused, including unknown future options',()=>{
+ for(const arg of ['--dir=/Users/me','--disk=/dev/disk0','--rosetta=host','--vnc','--clipboard','--future-device']){
   const ps=processes();ps[0].args!.push(arg);assert.throws(()=>checkIsolation(ps,'support-lab',ssh,[]),arg);
  }
- const ps=processes();ps[1].args!.push('--control-fd','1');assert.throws(()=>checkIsolation(ps,'support-lab',ssh,[]));
- const defaultNAT=processes();defaultNAT[0].args=defaultNAT[0].args!.slice(0,6);assert.throws(()=>checkIsolation(defaultNAT,'support-lab',ssh,[]));
+ const audio=processes();audio[0].args=audio[0].args!.filter(a=>a!=='--no-audio');assert.throws(()=>checkIsolation(audio,'support-lab',ssh,[]));
+ const clipboard=processes();clipboard[0].args=clipboard[0].args!.filter(a=>a!=='--no-clipboard');assert.notEqual(checkIsolation(clipboard,'support-lab',ssh,[]).policy,checkIsolation(processes(),'support-lab',ssh,[]).policy);
  const unreadable=processes();unreadable[0].args=null;assert.throws(()=>checkHostConfigurationBoundary(unreadable));
 });
-test('egress cannot admit broad networks, Mac services, inbound connections or policy overrides',()=>{
- for(const extra of ['out 0.0.0.0/0','out proto tcp 127.0.0.1/32 port 443','out proto tcp 169.254.169.254/32 port 80','out proto tcp 192.168.1.8/32 port 443','out proto tcp @host port 443','out proto tcp 198.51.100.10/24 port 443','out proto tcp 198.51.100.10/32 port 0','in proto tcp port 4173','out @peers','out proto tcp 198.51.100.10/32 port 443']){
-  const ps=processes();ps[0].args![6]=`--net-softnet-allow=${allow},${extra}`;ps[1].args![6]=`${allow},${extra}`;assert.throws(()=>checkIsolation(ps,'support-lab',ssh,['192.168.1.8']),extra);
- }
- const ps=processes();ps[1].args![6]='in @host';assert.throws(()=>checkIsolation(ps,'support-lab',ssh,[]));
-});
 test('process snapshots and native requests are bounded and strict',()=>{
- assert.equal(validateProcessSnapshot(processes()).length,2);
+ assert.equal(validateProcessSnapshot(processes()).length,1);
  assert.deepEqual(validateProcessSnapshot([{pid:5,ppid:1,executable:'/usr/bin/other'}]),[{pid:5,ppid:1,executable:'/usr/bin/other',args:null}]);
  assert.throws(()=>checkHostConfigurationBoundary(validateProcessSnapshot([{pid:5,ppid:1,executable:'/opt/homebrew/bin/tart'}])));
  for(const data of [[...processes(),processes()[0]],[{pid:1,ppid:0,executable:'tart',args:'fake'}],Array(4097).fill({})])assert.throws(()=>validateProcessSnapshot(data));
@@ -66,7 +58,7 @@ async function fixture(){
  await mkdir(join(project,'.vagrant','machines','lab','tart'),{recursive:true});await writeFile(join(project,'Vagrantfile'),'# test host-owned configuration',{mode:0o600});await writeFile(join(project,'.vagrant','machines','lab','tart','id'),'support-lab');await writeFile(key,'fixture',{mode:0o600});
  const reports:VMReport[]=[],calls:string[]=[];let ps=processes(),service:'running'|'unavailable'|'different'='running';
  const ops:Partial<VMOperations>={platform:'darwin',root:()=>state,processes:async()=>ps,hostIPs:()=>['192.168.1.8'],vagrantPath:async()=>'/fixture/vagrant',run:async(_binary,args)=>{calls.push(args.join(' '));if(args[0]==='status')return status;if(args[0]==='plugin')return 'vagrant-tart (1.0.0, global)';if(args[0]==='ssh-config')return sshConfig(key);throw Error('Unexpected local command');},scan:async()=>{calls.push('scan');return parseHostKey(keyText,ssh.host,22);},withForward:async(_p,fn)=>{calls.push('forward');return fn('/test/socket',()=>true);},probeSupport:async()=>{calls.push('probe');return service;},serve:async(_p,_socket,_alive,_recheck,connected)=>{calls.push('serve');connected('http://127.0.0.1:4173');}};
- return {root,project,state,calls,reports,ops,setProcesses:(value:ProcessRecord[])=>ps=value,setService:(value:typeof service)=>service=value,async command(command:string,fingerprint?:string,repositories?:string){reports.length=0;await vmCommand(command,{project,machine:'lab',fingerprint,repositories},r=>reports.push(structuredClone(r)),ops);return reports.at(-1)!;},async done(){await rm(root,{recursive:true,force:true});}};
+ return {root,project,state,calls,reports,ops,setProcesses:(value:ProcessRecord[])=>ps=value,setService:(value:typeof service)=>service=value,async command(command:string,fingerprint?:string,repositories?:string,shares?:string[]){reports.length=0;await vmCommand(command,{project,machine:'lab',fingerprint,repositories,shares},r=>reports.push(structuredClone(r)),ops);return reports.at(-1)!;},async done(){await rm(root,{recursive:true,force:true});}};
 }
 test('full wizard discovers, verifies identity, probes Support and rechecks before explicit connect',async()=>{
  const f=await fixture();try{
@@ -77,11 +69,11 @@ test('full wizard discovers, verifies identity, probes Support and rechecks befo
   const dirs=await readdir(f.state);assert.equal(dirs.length,1);assert.match(await readFile(join(f.state,dirs[0],'known_hosts'),'utf8'),/ssh-ed25519/);
  }finally{await f.done();}
 });
-test('unsafe shares stop before Vagrant executes; unsafe networking stops before any SSH traffic',async()=>{
+test('unsafe shares stop before Vagrant executes; enabled audio stops before any SSH traffic',async()=>{
  const f=await fixture();try{
   const shared=processes();shared[0].args!.push('--dir=/Users/operator');f.setProcesses(shared);
   assert.equal((await f.command('vm-check')).ready,false);assert.equal(f.calls.length,0);
-  const nat=processes();nat[0].args=nat[0].args!.slice(0,6);f.setProcesses(nat);
+  const audio=processes();audio[0].args=audio[0].args!.filter(a=>a!=='--no-audio');f.setProcesses(audio);
   const result=await f.command('vm-check');assert.ok(result.checks.find(c=>c.id==='isolation')?.copy);assert.ok(!f.calls.includes('scan'));assert.ok(!f.calls.includes('forward'));assert.equal(result.ready,false);
  }finally{await f.done();}
 });
@@ -141,4 +133,59 @@ test('wizard allows only the selected shared root and still checks all network a
   assert.equal(ready.checks.find(c=>c.id==='repositories')?.detail,repositories);
   const denied=await f.command('vm-connect',undefined,f.project);assert.equal(denied.ready,false);assert.ok(!f.calls.includes('serve'));
  }finally{await f.done();}
+});
+test('approved extra shares exclude the Vagrantfile, Vagrant state, home dot folders and host control paths',()=>{
+ const project='/Users/operator/claude-jail',home='/Users/operator',claude=project+'/.claude',workspace='/Users/operator/work';
+ validateApprovedShare(claude,project,home);validateApprovedShare(workspace,project,home);
+ for(const path of [project,home,'/Users','/',project+'/Vagrantfile',project+'/.vagrant',project+'/.vagrant/machines','/Users/operator/.ssh','/Users/operator/.claude','/Users/operator/.aws/sub','/Users/operator/Library/x','/Users/operator/work/../x'])assert.throws(()=>validateApprovedShare(path,project,home),path);
+ assert.throws(()=>validateApprovedShare(workspace,project,home,[workspace+'/key']));
+ const ps=processes();ps[0].args!.push(`--dir=${claude}:tag=claude`,`--dir=${workspace}:tag=workspace`);
+ checkHostConfigurationBoundary(ps,workspace,[claude]);checkIsolation(ps,'support-lab',ssh,[],workspace,[claude]);checkIsolation(ps,'support-lab',ssh,[],undefined,[claude,workspace]);
+ assert.throws(()=>checkHostConfigurationBoundary(ps,workspace),(e:unknown)=>e instanceof UnapprovedSharesError&&e.shares.length===1&&e.shares[0].path===claude&&e.shares[0].tag==='claude'&&e.shares[0].vm==='support-lab');
+ const before=checkIsolation(ps,'support-lab',ssh,[],workspace,[claude]).policy;
+ const ro=processes();ro[0].args!.push(`--dir=${claude}:ro,tag=claude`,`--dir=${workspace}:tag=workspace`);
+ assert.notEqual(checkIsolation(ro,'support-lab',ssh,[],workspace,[claude]).policy,before);
+ assert.throws(()=>validateVMRequest({project:'/p',shares:['relative']}));assert.throws(()=>validateVMRequest({project:'/p',shares:['/a','/a']}));assert.throws(()=>validateVMRequest({project:'/p',shares:Array.from({length:17},(_,i)=>'/s'+i)}));
+});
+test('wizard reports unapproved shares without running Vagrant, then continues after approval',async()=>{
+ const f=await fixture();try{
+  const claude=join(f.project,'.claude'),workspace=join(f.root,'workspace');await mkdir(claude);await mkdir(workspace);
+  const ps=processes();ps[0].args!.push(`--dir=${claude}:tag=claude`,`--dir=${workspace}:tag=workspace`);f.setProcesses(ps);
+  const blocked=await f.command('vm-discover',undefined,workspace);
+  assert.equal(blocked.machines.length,0);assert.equal(f.calls.length,0);assert.equal(blocked.checks.find(c=>c.id==='shares')?.state,'action');
+  assert.deepEqual(blocked.unapprovedShares?.map(s=>[s.path,s.approvable]),[[claude,true]]);
+  assert.equal((await f.command('vm-discover',undefined,workspace,[claude])).machines.length,2);
+  const check=await f.command('vm-check',undefined,workspace,[claude]);assert.ok(check.fingerprint);
+  const ready=await f.command('vm-trust',check.fingerprint,workspace,[claude]);assert.equal(ready.ready,true);assert.equal(ready.checks.find(c=>c.id==='shares')?.state,'passed');
+  f.ops.probeSupport=async()=>{const changed=processes();changed[0].args!.push(`--dir=${claude}:tag=claude`,`--dir=${workspace}:tag=other`);f.setProcesses(changed);return 'running';};
+  const denied=await f.command('vm-connect',undefined,workspace,[claude]);assert.equal(denied.ready,false);assert.ok(!f.calls.includes('serve'));
+  const exposed=processes();exposed[0].args!.push(`--dir=${f.project}:tag=project`);f.setProcesses(exposed);f.calls.length=0;
+  const unsafe=await f.command('vm-discover');assert.deepEqual(unsafe.unapprovedShares?.map(s=>s.approvable),[false]);assert.equal(f.calls.length,0);
+  assert.equal((await f.command('vm-discover',undefined,undefined,[f.project])).machines.length,0);assert.equal(f.calls.length,0);
+ }finally{await f.done();}
+});
+test('SSH failures map to fixed guidance and never echo SSH output',async()=>{
+ assert.equal(classifySSHFailure('admin@192.0.2.20: Permission denied (publickey,password).'),'auth');
+ assert.equal(classifySSHFailure('Host key verification failed.'),'hostkey');
+ assert.equal(classifySSHFailure('ssh: connect to host 192.0.2.20 port 22: No route to host'),'route');
+ assert.equal(classifySSHFailure('ssh: connect to host 192.0.2.20 port 22: Connection refused'),'refused');
+ assert.equal(classifySSHFailure('kex_exchange_identification: read: Connection reset by peer'),'closed');
+ assert.equal(classifySSHFailure('ssh: connect to host 192.0.2.20 port 22: Operation timed out'),'timeout');
+ assert.equal(classifySSHFailure('',true),'timeout');assert.equal(classifySSHFailure('guest banner text'),'unknown');
+ const p={port:4173,guestPort:4173,sshUser:'admin',identityFile:"/Users/o/it's/private_key",knownHostsFile:'/Users/o/Library/Application Support/Support Host/vm-1/known_hosts',network:{guestIPv4:'192.0.2.20',sshPort:22}};
+ const auth=sshDiagnosticCommands('auth',p);
+ assert.ok(auth.includes("-i '/Users/o/it'\\''s/private_key'"));assert.ok(auth.includes(`'UserKnownHostsFile="/Users/o/Library/Application Support/Support Host/vm-1/known_hosts"'`));assert.match(auth,/authorized_keys/);assert.doesNotMatch(auth,/fail2ban/);
+ assert.match(sshDiagnosticCommands('refused',p),/fail2ban-client unban --all/);assert.doesNotMatch(sshDiagnosticCommands('route',p),/fail2ban|authorized_keys/);
+ const f=await fixture();try{
+  const check=await f.command('vm-check');await f.command('vm-trust',check.fingerprint);
+  f.ops.withForward=async(transport)=>{throw new SSHForwardError('auth',transport);};
+  const failed=await f.command('vm-check');const step=failed.checks.find(c=>c.id==='support');
+  assert.equal(failed.ready,false);assert.equal(step?.title,'SSH connection');assert.equal(step?.detail,'The VM refused the SSH key reported by Vagrant.');assert.match(step?.help??'',/never with a password/);assert.match(step?.copy??'',/ssh -v/);
+ }finally{await f.done();}
+});
+
+test('protected Support code folder is the app bundle when packaged and the checkout root from source',()=>{
+ assert.equal(installRoot('/Applications/Support Companion.app/Contents/Resources/Host/host'),'/Applications/Support Companion.app');
+ assert.equal(installRoot('/workspace/github/support/host'),'/workspace/github/support');
+ assert.equal(installRoot('/host'),'/');
 });

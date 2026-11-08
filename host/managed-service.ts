@@ -7,9 +7,7 @@ import {parseManagedPolicy,createManagedBroker} from './managed-network.js';
 import {createGateway} from './gateway.js';
 import {managedLease} from './managed-lease.js';
 
-/** Launched only by the native app, with an inherited host-only control pipe.
- * Guest bytes never reach stdin; guest status cannot enable/disable this process.
- */
+/** Launched by the native app with a host-only control pipe. */
 async function main(){
  process.umask(0o077);
  if(process.platform!=='darwin')throw Error('Managed host service requires macOS.');
@@ -26,10 +24,9 @@ async function main(){
   await new Promise<void>((r,j)=>{broker.server.once('error',j);broker.server.listen(join(run,'egress.sock'),r);});
   gateway=await createGateway({port,guestPort:4173,socketPath:join(run,'api.sock'),publicDirectory:resolve(dirname(fileURLToPath(import.meta.url)),'../public'),proofKey:key,healthy:()=>lease.running&&!finished});
   await new Promise<void>((r,j)=>{gateway!.once('error',j);gateway!.listen(port,'127.0.0.1',r);});
-  // Publish host proof only after this process owns the loopback listener. Replace a
-  // stale file atomically; a live gateway prevents binding, so its key is untouched.
+  // Publish host proof after binding the listener.
   const staged=join(run,'proof-key');await writeFile(staged,key.toString('hex'),{flag:'wx',mode:0o600});await rename(staged,keyPath);ownsKey=true;
-  // Native parent maintains a lease, independently of guest output. EOF/expiry closes all flows.
+  // The native parent lease closes all flows on EOF or expiry.
   const watchdog=setInterval(()=>lease.tick(),1000);watchdog.unref();
   process.stdin.setEncoding('utf8');process.stdin.on('data',(chunk:string)=>lease.write(chunk));
   process.stdin.on('end',lease.close);process.stdin.on('error',lease.close);

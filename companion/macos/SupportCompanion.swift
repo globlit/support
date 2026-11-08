@@ -47,7 +47,7 @@ enum Keychain {
     }
 }
 
-// No redirects, cookies, proxy credentials or browser session are used for delivery.
+// No redirects, cookies, or proxy credentials.
 final class Transport: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
@@ -104,8 +104,7 @@ final class Transport: NSObject, URLSessionTaskDelegate {
             throw CompanionError(message: "Enter a valid Support port (default 4173).")
         }
     }
-    // In VM mode the host gateway owns SSH and serves only its bundled UI.
-    // A TCP tunnel or guest response cannot impersonate it without this host-only key.
+    // VM mode requires the host-only key.
     func tunnel() async throws {
         try validate()
         gatewayConnectionID = nil
@@ -200,7 +199,7 @@ final class Transport: NSObject, URLSessionTaskDelegate {
                 throw CompanionError(message: "Paste a fresh pairing code from Support → Settings → Notifications.")
             }
             try await tunnel(); status = "Connecting…"
-            // Retry only safe connection failures; pairing credentials are never resent on an ambiguous response.
+            // Retry safe connection failures only. Never resend pairing credentials.
             var connected: Pair?
             for attempt in 0..<5 {
                 do { connected = try await request("pair", method: "POST", payload: ["code": code, "name": String((Host.current().localizedName ?? "My Mac").components(separatedBy: .controlCharacters).joined().prefix(60))], authenticated: false); break }
@@ -229,7 +228,7 @@ final class Transport: NSObject, URLSessionTaskDelegate {
             guard [.authorized, .provisional].contains(permission.authorizationStatus) else {
                 status = "Allow Support Companion notifications in macOS System Settings"; return
             }
-            // A crash after scheduling but before acknowledgement must not alert again.
+            // Do not alert again after a crash.
             let shown = await center.deliveredNotifications()
             for notification in shown where !delivered.contains(notification.request.identifier) { delivered.append(notification.request.identifier) }
             let pending = await center.pendingNotificationRequests()

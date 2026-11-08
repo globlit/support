@@ -22,7 +22,6 @@ export function readLogs(store:Store,{tool,status,before,limit=50,query='',time,
  const clauses:string[]=[],args:(string|number)[]=[];if(tool){clauses.push('tool=?');args.push(tool)}if(status){clauses.push('status=?');args.push(status)}
  if(time){clauses.push('at>=?');args.push(new Date(Date.now()-({hour:3600000,day:86400000,week:604800000}[time])).toISOString());}
  const where=clauses.length?' WHERE '+clauses.join(' AND '):'';limit=Math.max(1,Math.min(100,limit));
- // Iterate at most the retained 2,000 entries; do not materialize every output in memory.
  const rows=store.db.prepare('SELECT seq,value FROM diagnostics'+where+' ORDER BY seq DESC').iterate(...args);
  const entries:Diagnostic[]=[];let total=0,next:number|undefined,last:number|undefined;
  for(const row of rows){const entry=JSON.parse(store.decrypt(String(row.value),store.key)) as Diagnostic;
@@ -37,7 +36,7 @@ export function readLogs(store:Store,{tool,status,before,limit=50,query='',time,
 export function loggedFetch(store:Store,fetcher:typeof fetch=fetch):typeof fetch{
  return async(input,init)=>{
   const url=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url);
-  // OAuth exchanges must never enter diagnostic capture.
+  // Never capture OAuth exchanges.
   if(url.hostname==='auth.openai.com')return fetcher(input,init);
   const config=store.snapshot().config;
   const tool=(['Model','YouTrack','GitLab','Alertmanager','Prometheus','Slack'] as const).find(name=>{try{const base=new URL(config.connections[name].endpoint);return base.origin===url.origin&&url.pathname.startsWith(base.pathname.replace(/\/$/,''));}catch{return false;}});

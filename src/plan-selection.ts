@@ -1,5 +1,4 @@
-// Preserve formatting from the app's already-sanitized Markdown DOM. No HTML is
-// saved or rendered, and arbitrary attributes / URLs are never copied.
+// Copy formatting from sanitized Markdown. Never copy HTML attributes or URLs.
 export function selectionMarkdown(selection:Selection):string{
  const range=selection.getRangeAt(0),fragment=range.cloneContents();
  const escape=(text:string)=>text.replace(/([\\`*_{}\[\]<>])/g,'\\$1');

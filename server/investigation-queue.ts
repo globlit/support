@@ -3,7 +3,7 @@ import {Store,AppError} from './store.js';
 import {YouTrack} from './youtrack.js';
 import {Claude} from './claude.js';
 import {recordDiagnostic} from './diagnostics.js';
-/** Bounded server-owned intake. Re-read each source before starting; never execute plans. */
+/** Server-owned intake. Never executes plans. */
 export class InvestigationQueue {
  private busy=false;private next=0;private offset=0;private revision=0;
  constructor(private store:Store,private source:YouTrack,private agent:Claude){}
@@ -31,7 +31,7 @@ export class InvestigationQueue {
     if(previous?.fingerprint===fingerprint)continue;
     const runs=this.store.investigations(issue.connection,issue.id).filter(r=>!r.kind||r.kind==='investigation');
     if(runs.some(r=>r.startedAt>=(session.handling?.at||'')&&r.sourceFingerprint===issue.sourceFingerprint&&r.sourceUpdated===issue.updated))continue;
-    // Preserve plans imported from alerts and existing reviews. Changed requests get a fresh analysis.
+    // Keep imported and reviewed plans.
     if(session.plans.length&&!session.sourceChangedAt)continue;
     try{await this.agent.start(issue.id,{revision:session.revision,sourceUpdated:issue.updated});}
     catch(e){if(e instanceof AppError&&e.status===409){saturated=true;break;}

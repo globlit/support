@@ -1,10 +1,9 @@
 #!/bin/bash
-# Build an app in a NEW output location; no install, VM setup or workspace mutation.
+# Build the app into a new output folder.
 set -euo pipefail
 [[ "$(uname -s)" == Darwin && $# == 1 ]] || { echo 'Usage on macOS: build-app.sh NEW_APP_PATH | --check' >&2; exit 1; }
 source_dir="$(cd "$(dirname "$0")" && pwd)"
-# Resolve the compiler and SDK together. Do not depend on an inherited SDKROOT
-# or a full Xcode installation; Apple Command Line Tools remain supported.
+# Resolve the compiler and SDK together. Command Line Tools are enough.
 compiler=$(xcrun --sdk macosx --find swiftc)
 sdk=$(xcrun --sdk macosx --show-sdk-path)
 cache=$(mktemp -d "${TMPDIR:-/tmp}/support-swift.XXXXXX")

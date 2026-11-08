@@ -31,7 +31,7 @@ export const runCli:CliRunner=async(path,args,input,signal)=>{
   const timer=setTimeout(()=>stop('Claude CLI did not finish within 60 seconds. Check the CLI in the VM before retrying.'),60000);
   signal?.addEventListener('abort',cancel,{once:true});
   child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>1_000_000)stop('Claude CLI output exceeded its size limit. No result was applied.');else chunks.push(chunk)});
-  // Drain stderr without retaining local paths, credentials or debug content.
+  // Discard stderr.
   child.stderr.on('data',()=>{});child.stdin.on('error',()=>{});
   child.on('error',()=>{failure=new AppError(502,'Could not start Claude CLI. Check its executable path and installation.');});
   child.on('close',code=>{clearTimeout(timer);signal?.removeEventListener('abort',cancel);if(failure)reject(failure);else resolve({stdout:Buffer.concat(chunks).toString('utf8'),code});});

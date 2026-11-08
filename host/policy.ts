@@ -23,10 +23,7 @@ export function validateNetwork(p:NetworkPolicy,hostAddresses=Object.values(netw
   if(!rule||!unicastIPv4(rule.address)||hostAddresses.includes(rule.address)||rule.address===p.guestIPv4||!Number.isInteger(rule.port)||rule.port<1||rule.port>65535||!['tcp','udp'].includes(rule.protocol))throw Error('Egress must name an individual non-host IPv4 address, protocol and port.');
  }
 }
-/** Admin-owned, first filter anchor. No guest packets may establish a connection to self.
- * IPv6, source spoofing and unspecified egress are denied at the dedicated ingress interface.
- * Existing states must be absent when this policy is installed, with the VM powered off.
- */
+/** First PF anchor. Denies guest connections to the Mac, IPv6, spoofing, and unlisted egress. */
 export function renderPF(p:NetworkPolicy){
  validateNetwork(p);
  const dev=p.interface,ip=p.guestIPv4;
@@ -38,16 +35,18 @@ export function renderPF(p:NetworkPolicy){
   `block drop in quick on ${dev} inet from any to { 0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 224.0.0.0/4 }`,
   ...p.egress.map(r=>`pass in quick on ${dev} inet proto ${r.protocol} from ${ip} to ${r.address} port ${r.port}${r.protocol==='tcp'?' flags S/SA':''} keep state (if-bound)`),
   `block drop in quick on ${dev} all`,
-  // Host-originated SSH is permitted, including only replies covered by its state.
+  // Allow host-initiated SSH and its replies.
   `pass out quick on ${dev} inet proto tcp from self to ${ip} port ${p.sshPort} flags S/SA keep state (if-bound)`,
   ''
  ].join('\n');
 }
 export type SSHConnection=Pick<HostProfile,'guestPort'|'sshUser'|'identityFile'|'knownHostsFile'>&{network:Pick<NetworkPolicy,'sshPort'|'guestIPv4'>};
+/** Returns a path as one quoted ssh_config(5) token. */
+export function sshConfigPath(path:string){return '"'+path.replace(/[\\"]/g,'\\$&').replaceAll('%','%%')+'"';}
 export function sshArguments(p:SSHConnection,socket:string){
  if(!socket.startsWith('/')||socket.includes(':')||/[\r\n\0]/.test(socket))throw Error('Invalid private socket path.');
  return ['-F','/dev/null','-N','-T','-L',`${socket}:127.0.0.1:${p.guestPort}`,'-p',String(p.network.sshPort),'-i',p.identityFile,
-  ...['BatchMode=yes','StrictHostKeyChecking=yes',`UserKnownHostsFile=${p.knownHostsFile}`,'GlobalKnownHostsFile=/dev/null','IdentitiesOnly=yes',
+  ...['BatchMode=yes','StrictHostKeyChecking=yes',`UserKnownHostsFile=${sshConfigPath(p.knownHostsFile)}`,'GlobalKnownHostsFile=/dev/null','IdentitiesOnly=yes',
   'IdentityAgent=none','ForwardAgent=no','ForwardX11=no','ForwardX11Trusted=no','PermitLocalCommand=no','ProxyCommand=none','ProxyJump=none',
   'ControlMaster=no','ControlPath=none','Tunnel=no','RemoteCommand=none','RequestTTY=no','GatewayPorts=no','EscapeChar=none',
   'StreamLocalBindMask=0177','StreamLocalBindUnlink=no','ExitOnForwardFailure=yes','ConnectTimeout=10','ServerAliveInterval=15','ServerAliveCountMax=3'

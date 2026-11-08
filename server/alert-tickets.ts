@@ -69,7 +69,7 @@ export class AlertTickets {
    const d=this.editable(id).ticketCreation;if(!d||d.hash!==input.hash)throw new AppError(409,'Reload the current draft before editing.');
    await this.fresh(id);const ctx=this.youtrack.context();this.guard(id,d,ctx);
    const project=await this.project(input.projectId,ctx);this.guard(id,d,ctx);
-   // Keep the immutable reference out of editable text; the exact posted footer is shown separately.
+   // Keep the reference out of editable text.
    if(input.description.includes('Support alert case:'))throw new AppError(400,'The case reference is added separately. Remove it from the editable description.');
    Object.assign(d,{project,title:input.title,description:input.description,revision:d.revision+1});
    this.safeText(d.title+'\n'+this.text(d));d.hash=this.digest(d);return this.persist(id,d);
@@ -93,11 +93,11 @@ export class AlertTickets {
    const existing=await this.existing(d.marker,ctx);this.guard(id,d,ctx);
    if(existing)return this.link(id,existing,ctx,'Existing ticket found. No creation request sent.');
    this.safeText(d.title+'\n'+this.text(d));
-   // Persist intent before the sole POST. Pending never transitions back to draft, even after a restart.
+   // Persist intent before the POST. Pending never returns to draft.
    d.state='pending';d.approval={hash:expectedHash,...humanAttribution(this.store),at:new Date().toISOString()};d.message='Creation requested. Check status if interrupted.';
    this.persist(id,d);intended=true;
    const remoteId=await this.youtrack.createAlertTicket({project:{id:d.project.id},summary:d.title,description:this.text(d)},ctx);
-   // Merge only operation metadata: background polling may have updated the case while POST was in flight.
+   // Merge operation metadata only. Polling may have updated the case.
    const current=this.case(id).ticketCreation!;current.remoteId=remoteId;this.persist(id,current);
    return await this.finish(id,ctx);
   }catch(e){

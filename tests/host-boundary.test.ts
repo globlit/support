@@ -9,7 +9,7 @@ import {execFileSync} from 'node:child_process';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createElement} from 'react';
 import {SafeLink} from '../src/SafeLink.js';
-import {parseProfile,renderPF,sshArguments,validateNetwork,type HostProfile} from '../host/policy.js';
+import {parseProfile,renderPF,sshArguments,sshConfigPath,validateNetwork,type HostProfile} from '../host/policy.js';
 import {checkLoadedPF,verifyPF} from '../host/firewall.js';
 import {snapshot} from '../host/files.js';
 import {createGateway} from '../host/gateway.js';
@@ -35,6 +35,11 @@ test('SSH uses a private Unix socket, pinned keys, no host agent or command feat
  for(const key of ['forwardagent','forwardx11','forwardx11trusted','permitlocalcommand','gatewayports','controlmaster'])assert.match(policy,new RegExp('^'+key+' (no|false)$','m'));
  assert.match(policy,/^identityagent none$/m);assert.match(policy,/^stricthostkeychecking (true|yes)$/m);assert.match(policy,/^streamlocalbindunlink (no|false)$/m);
  assert.doesNotMatch(policy,/^(remoteforward|dynamicforward) /m);assert.throws(()=>sshArguments(profile,'/bad:socket'));
+});
+test('SSH known_hosts path with spaces stays one ssh_config token',()=>{
+ const args=sshArguments({...profile,knownHostsFile:'/Users/o/Library/Application Support/Support Host/vm-1/known_hosts'},'/private/support/backend.sock');
+ assert.ok(args.includes('UserKnownHostsFile="/Users/o/Library/Application Support/Support Host/vm-1/known_hosts"'));
+ assert.equal(sshConfigPath('/a "b"\\c%d'),'"/a \\"b\\"\\\\c%%d"');
 });
 test('snapshot copies regular files independently and omits host execution/configuration folders',async()=>{
  const root=await mkdtemp(join(tmpdir(),'support-copy-'));try{

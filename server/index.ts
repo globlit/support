@@ -7,7 +7,7 @@ import {IncomingReplies} from './incoming-replies.js';
 import {handlingInput,setHandling,ignoreInput,addIgnore,removeIgnore,rules} from './intake.js';
 import {InvestigationQueue} from './investigation-queue.js';
 import {dispositionInput,updateDispositions} from './ai-dispositions.js';
-import {HealthPoller} from './health-poller.js';
+import {HealthPoller,serviceProbe,testConnection} from './health-poller.js';
 import {dashboard} from './dashboard.js';
 import {loggedFetch,readLogs,recordDiagnostic} from './diagnostics.js';
 import {logTools} from '../src/diagnostics-model.js';
@@ -27,7 +27,8 @@ import { AlertTickets,alertDraftInput } from './alert-tickets.js';
 import { Alertmanager } from './alertmanager.js';
 import { Claude } from './claude.js';
 import { YouTrack } from './youtrack.js';
-import { connectionNames } from '../src/model.js';
+import { connectionNames,configSchema } from '../src/model.js';
+import {credentialInput,storedCredential} from './service-auth.js';
 process.umask(0o077);
 const runtime=deployment(),{port}=runtime,origin=runtime.publicOrigin;
 const store=new Store(resolve(process.env.SUPPORT_DATA_DIR??'.support-data'));
@@ -68,7 +69,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   companionScope(path,req.headers.authorization);
   if((req.headers.origin&&req.headers.origin!==origin)||['cross-site','same-site'].includes(String(req.headers['sec-fetch-site']??'')))throw new AppError(403,'Cross-origin API access is not allowed.');
  if(path==='/api/session'&&req.method==='GET')return send(res,sessions.status(req));
- // These three endpoints authenticate with one-use pairing codes or notification-only bearer tokens.
+ // Pairing-code and notification-token endpoints.
  if(path==='/api/companion/pair'&&req.method==='POST')return send(res,companion.pair(pairInput.parse(await body(req))));
  if(path==='/api/companion/events'&&req.method==='GET')return send(res,companion.poll(req.headers.authorization));
  if(path==='/api/companion/ack'&&req.method==='POST')return send(res,companion.ack(req.headers.authorization,ackInput.parse(await body(req)).ids));
@@ -104,7 +105,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(control&&req.method==='POST'){
   const source=control[1]==='alerts'?alerts:control[1]==='slack'?slack:youtrack,payload=await body(req);
   const decision=control[3]==='handling'?handlingInput.parse(payload):undefined;
-  // Stopping agent work must remain possible when the upstream service is unavailable.
+  // Allow stopping work when the upstream is down.
   if(decision?.connection&&['human','refused','done'].includes(decision.mode)){
    const w=store.getWorkSession(decision.connection,control[2]);if(!w)throw new AppError(404,'Work session not found. Refresh the source first.');
    const issue={id:w.issueId,connection:w.connection,key:w.sourceKey??w.issueId,updated:w.sourceUpdated,sourceFingerprint:w.sourceFingerprint,title:'',description:'',resolved:false,status:'',severity:'',assignee:'',project:'',fields:{},url:''};
@@ -206,8 +207,8 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(path==='/api/config'&&req.method==='PUT'){const data=z.object({config:z.unknown(),revision:z.number().int()}).strict().parse(await body(req));return send(res,store.config(data.config,data.revision));}
  if(path==='/api/config/export'&&req.method==='GET'){const state=store.snapshot();return send(res,{format:1,config:state.config});}
  if(path==='/api/repositories/discover'&&req.method==='POST'){const {path:folder}=z.object({path:z.string().min(1).max(2048).refine(isAbsolute,'Use an absolute path')}).strict().parse(await body(req));return send(res,await discover(folder));}
- if(path==='/api/connection/check'&&req.method==='POST'){const {name}=z.object({name:z.enum(connectionNames)}).strict().parse(await body(req));if(name==='Model')return send(res,await checkModelConnection(store,transport));if(name==='Slack'){await slack.poll();return send(res,{checks:[{label:'Slack read access',ok:true,detail:'Read the configured channel. Thread permissions are checked when a request is opened.'}],liveTest:true});}if(name==='GitLab')return send(res,await checkGitLabConnection(store,transport));if(name==='Alertmanager'){await alerts.poll();return send(res,{checks:[{label:'Alertmanager read access',ok:true,detail:'Poll completed. No tickets or silences created.'}],liveTest:true});}if(name==='YouTrack'){const result=await youtrack.list(0);return send(res,{checks:[{label:'YouTrack read access',ok:true,detail:`Read ${result.issues.length} issues from the configured query. No changes sent.`}],liveTest:true});}const c=store.snapshot().config.connections[name];const checks=[];if(c.endpoint)checks.push({label:'Endpoint format',ok:true,detail:'Valid HTTP(S) URL. No network request performed.'});if(c.path){const s=await stat(c.path).catch(()=>null);checks.push({label:'Configured path',ok:!!s,detail:s?'Path exists. Contents were not read.':'Path unavailable on this machine.'});}checks.push({label:'Credential',ok:store.vaultStatus().credentials.includes(name),detail:store.vaultStatus().credentials.includes(name)?'Encrypted credential saved. Authentication has not been tested.':'No token stored; some tools use file-based authentication.'});return send(res,{checks,liveTest:false});}
- if(path==='/api/credential'&&req.method==='POST'){const v=z.object({name:z.enum(connectionNames),value:z.string().min(1).max(16384)}).strict().parse(await body(req));return send(res,store.credential(v.name,v.value));}
+ if(path==='/api/connection/check'&&req.method==='POST'){const {name,config}=z.object({name:z.enum(connectionNames),config:z.unknown().optional()}).strict().parse(await body(req));if(config!==undefined){const result=await testConnection(name,configSchema.parse(config),serviceProbe(store));return send(res,{checks:[{label:`${name} (unsaved settings)`,ok:result.ok,detail:result.detail}],draft:true});}if(name==='Model')return send(res,await checkModelConnection(store,transport));if(name==='Slack'){await slack.poll();return send(res,{checks:[{label:'Slack read access',ok:true,detail:'Read the configured channel. Thread permissions are checked when a request is opened.'}],liveTest:true});}if(name==='GitLab')return send(res,await checkGitLabConnection(store,transport));if(name==='Alertmanager'){await alerts.poll();return send(res,{checks:[{label:'Alertmanager read access',ok:true,detail:'Poll completed. No tickets or silences created.'}],liveTest:true});}if(name==='YouTrack'){const result=await youtrack.list(0);return send(res,{checks:[{label:'YouTrack read access',ok:true,detail:`Read ${result.issues.length} issues from the configured query. No changes sent.`}],liveTest:true});}const c=store.snapshot().config.connections[name];const checks=[];if(c.endpoint)checks.push({label:'Endpoint format',ok:true,detail:'Valid HTTP(S) URL. No network request performed.'});if(c.path){const s=await stat(c.path).catch(()=>null);checks.push({label:'Configured path',ok:!!s,detail:s?'Path exists. Contents were not read.':'Path unavailable on this machine.'});}checks.push({label:'Credential',ok:store.vaultStatus().credentials.includes(name),detail:store.vaultStatus().credentials.includes(name)?'Encrypted credential saved. Authentication has not been tested.':'No token stored; some tools use file-based authentication.'});return send(res,{checks,liveTest:false});}
+ if(path==='/api/credential'&&req.method==='POST'){const v=credentialInput.parse(await body(req));return send(res,'remove' in v?store.removeCredential(v.name):store.credential(v.name,storedCredential(v)));}
  throw new AppError(404,'Not found');});}
  if(req.method!=='GET'&&req.method!=='HEAD')throw new AppError(405,'Method not allowed');
  const file=path==='/'?resolve('dist/index.html'):resolve('dist','.'+decodeURIComponent(path));const rel=relative(resolve('dist'),file);if(rel.startsWith('..')||isAbsolute(rel))throw new AppError(403,'Invalid path');const contents=await readFile(file).catch(()=>{throw new AppError(404,'Not found. Run npm run build first.');});res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'} as Record<string,string>)[extname(file)]??'application/octet-stream'});res.end(req.method==='HEAD'?undefined:contents);

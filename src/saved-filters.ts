@@ -5,7 +5,7 @@ export function parseSavedFilter<T extends FilterValue>(raw:string|null,fallback
  try{const value=JSON.parse(raw??'null');if(typeof fallback==='string')return typeof value==='string'&&value.length<=2000?value as T:fallback;if(Array.isArray(value)&&value.length<=100&&value.every(v=>typeof v==='string'&&v.length<=500))return value as T;}catch{}return fallback;
 }
 function read<T extends FilterValue>(key:string,fallback:T){try{return parseSavedFilter(sessionStorage.getItem('support.filter.'+key),fallback)}catch{return fallback}}
-// Tab-local preferences survive hard refresh; they never enter service config or URLs.
+// Tab-local preferences. Never stored in config or URLs.
 export function useSavedFilter<T extends FilterValue>(key:string,fallback:T):[T,(next:T|((previous:T)=>T))=>void]{
  const preview=useWorkspacePreview();const load=()=>preview?fallback:read(key,fallback);
  const [state,setState]=useState(()=>({key,value:load()}));

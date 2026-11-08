@@ -30,7 +30,7 @@ export function tourHighlight(target:TourRect,context:TourRect,padding=5):TourRe
  const right=Math.min(context.left+context.width-4,target.left+target.width+padding),bottom=Math.min(context.top+context.height-4,target.top+target.height+padding);
  return right>left&&bottom>top?{left,top,width:right-left,height:bottom-top}:null;
 }
-/** Keep a little preceding context; tall sections start at the top instead of halfway through. */
+/** Keep some preceding context. Start tall sections at the top. */
 export function tourScrollDelta(target:TourRect,context:TourRect){
  const inset=Math.min(48,context.height*.12),visible=context.height-2*inset;
  if(target.top<context.top+inset||target.top+target.height>context.top+context.height-inset)

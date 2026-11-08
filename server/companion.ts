@@ -15,7 +15,7 @@ type History={seq:number;seen:Record<string,{signature:string;state:string;at:nu
 const text:Record<Kind,[string,string]>={reviews:['Review ready','Open Support to review the next step.'],blocked:['Work needs attention','Open Support to check what is blocking progress.'],reopened:['Work reopened','Open Support to review the updated request.'],completion:['Work completed','Open Support to view the result.'],test:['Support is connected','Notifications from your workspace can reach this Mac.']};
 export const pairInput=z.object({code:z.string().regex(/^[A-Za-z0-9_-]{43}$/),name:z.string().trim().min(1).max(60).regex(/^[^\x00-\x1f\x7f]+$/)}).strict();
 export const ackInput=z.object({ids:z.array(z.string().uuid()).min(1).max(20)}).strict();
-/** Native credentials are accepted only on delivery endpoints, never workspace APIs. */
+/** Native credentials work on delivery endpoints only. */
 export function companionScope(path:string,authorization:string|undefined){
  if(authorization&&!['/api/companion/events','/api/companion/ack'].includes(path))throw new AppError(403,'Companion credentials only allow notification delivery.');
 }
@@ -43,7 +43,7 @@ export class Companion {
   const pending=this.store.get<{hash:string;expiresAt:number}>('companion.pairing');
   if(!pending||now>=pending.expiresAt||!matches(input.code,pending.hash))throw new AppError(401,'Pairing code expired or invalid. Generate a new code in Support.');
   const devices=this.devices();if(devices.length>=5)throw new AppError(409,'Maximum paired Macs reached.');
-  // Establish a baseline before pairing, so a new Mac never receives old work.
+  // Set a baseline so a new Mac receives no old work.
   this.capture();const token=secret(),id=randomUUID(),h=this.history();
   this.store.transaction(()=>{devices.push({id,name:input.name,hash:hash(token),createdAt:now,startSeq:h.seq,acked:[],offered:[]});this.saveDevices(devices);this.store.put('companion.pairing',null);});
   return {id,token};
@@ -70,7 +70,7 @@ export class Companion {
    if(prior?.signature!==signature&&hadBaseline&&!w.disposition){
     const kind:Kind|undefined=w.stage==='Ticket reopened'||(prior?.state==='completed'&&!['completed','stopped'].includes(w.state))?'reopened':w.state==='blocked'?'blocked':w.state==='completed'?'completion':w.state==='waiting'&&reviewStages.has(w.stage)?'reviews':undefined;
     if(kind&&this.store.snapshot().config.notifications[kind]){
-     // Only a constrained source key can leave the VM. Never titles, reasons, bodies or logs.
+     // Send the source key only.
      const key=/^(?:[A-Z][A-Z0-9_]{0,15}-\d{1,10}|ALERT-[a-f0-9]{8}|SLACK-[a-f0-9]{8})$/.test(w.key)?w.key:undefined;
      const route=routeHash({page:w.source==='alert'?'alerts':w.source==='slack'?'slack':'youtrack',issue:w.issueId,connection:w.connection});
      h.events.push({id:randomUUID(),seq:++h.seq,at:now,kind,workflow:w.id,signature,key,route});
@@ -88,7 +88,7 @@ export class Companion {
   const {devices,device}=this.auth(authorization);device.lastSeen=this.clock();
   if(!this.store.key||this.queueError){this.saveDevices(devices);return this.store.key?{paused:true,reason:this.queueError,events:[]}:{paused:true,events:[]};}
   const prefs=this.store.snapshot().config.notifications,h=this.history();
-  // Disabled or superseded notifications are retired, not replayed when a preference returns.
+  // Retire disabled or superseded notifications.
   const pending=h.events.filter(e=>e.at>=this.clock()-this.store.snapshot().config.retentionDays*86400000&&e.seq>device.startSeq&&(!e.device||e.device===device.id)&&!device.acked.includes(e.id));
   for(const e of pending)if(e.kind!=='test'&&!prefs[e.kind])device.acked.push(e.id);
   const events=pending.filter(e=>!device.acked.includes(e.id)).slice(0,20);

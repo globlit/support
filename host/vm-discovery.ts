@@ -44,7 +44,7 @@ function options(args:string[],flags:string[],values:string[]){
   if(out.has(key))throw Error(`Repeated runtime option: ${key}`);
   if(flags.includes(key)&&equal<0){out.set(key,'');continue;}
   if(values.includes(key)){const value=equal<0?args[++i]:arg.slice(equal+1);if(!value||value.startsWith('-'))throw Error(`Missing value for ${key}`);out.set(key,value);continue;}
-  throw Error(`Unsupported runtime option: ${key}. Remove unapproved shares, extra devices, clipboard, VNC and alternate networking from this VM.`);
+  throw Error(`Unsupported runtime option: ${key}. Remove unapproved shares, extra devices and VNC from this VM.`);
  }
  return {out,positional};
 }
@@ -52,7 +52,7 @@ export function validateProcessSnapshot(value:unknown):ProcessRecord[]{
  if(!Array.isArray(value)||value.length>4096)throw Error('Could not inspect the Mac process table.');
  const seen=new Set<number>();
  for(const row of value){if(!row||!Number.isSafeInteger(row.pid)||row.pid<1||seen.has(row.pid)||!Number.isSafeInteger(row.ppid)||row.ppid<0||typeof row.executable!=='string'||row.executable.length>4096||row.args!=null&&(!Array.isArray(row.args)||row.args.length>512||row.args.some((a:unknown)=>typeof a!=='string'||a.length>16384)))throw Error('Invalid Mac process snapshot.');seen.add(row.pid);}
- // Swift Codable omits nil optional fields; normalize unreadable/not-collected argv.
+ // Normalize missing argv fields from Swift.
  return value.map(row=>({...row,args:row.args??null}));
 }
 export type RepositoryShare={path:string;name?:string;tag:string;readOnly:boolean};
@@ -74,54 +74,63 @@ export function directoryShares(args:string[]):RepositoryShare[]{
  return result;
 }
 const within=(root:string,path:string)=>path===root||(!relative(root,path).startsWith('..')&&!relative(root,path).startsWith('/'));
-/** The user grants exactly one writable repository root, never host control/configuration. */
+const broadRoots=(path:string,home:string)=>[parse(path).root,home,'/Users','/home','/Volumes','/tmp','/private/tmp'];
+const protectedRoots=(home:string,protectedPaths:string[])=>['/Applications','/System','/Library','/usr','/bin','/sbin','/etc','/private/etc','/var','/private/var',join(home,'Library'),join(home,'.ssh'),join(home,'.vagrant.d'),join(home,'.config'),...protectedPaths];
+/** Validates the single writable repositories folder. */
 export function validateRepositoryRoot(path:string,project:string,home:string,protectedPaths:string[]=[]){
- if(!path.startsWith('/')||resolve(path)!==path||/[\0\r\n:]/.test(path)||path.split('/').some(part=>part.startsWith('.'))||[parse(path).root,home,'/Users','/home','/Volumes','/tmp','/private/tmp'].includes(path))throw Error('Choose a narrow, real repositories folder, not your home, a system folder or a hidden settings folder.');
- const protectedRoots=['/Applications','/System','/Library','/usr','/bin','/sbin','/etc','/private/etc','/var','/private/var',join(home,'Library'),join(home,'.ssh'),join(home,'.vagrant.d'),join(home,'.config'),...protectedPaths];
- if(within(path,project)||protectedRoots.some(p=>within(path,p)||within(p,path)))throw Error('The repositories share overlaps Vagrant configuration, host credentials or Support files. Choose a separate folder.');
+ if(!path.startsWith('/')||resolve(path)!==path||/[\0\r\n:]/.test(path)||path.split('/').some(part=>part.startsWith('.'))||broadRoots(path,home).includes(path))throw Error('Choose a narrow, real repositories folder, not your home, a system folder or a hidden settings folder.');
+ if(within(path,project)||protectedRoots(home,protectedPaths).some(p=>within(path,p)||within(p,path)))throw Error('The repositories share overlaps Vagrant configuration, host credentials or Support files. Choose a separate folder.');
 }
-/** Run before Vagrant evaluates Ruby. The selected writable exception may not include host config. */
-export function checkHostConfigurationBoundary(processes:ProcessRecord[],repositories?:string){
+/** Validates an extra share approved by the user. */
+export function validateApprovedShare(path:string,project:string,home:string,protectedPaths:string[]=[]){
+ const underHome=relative(home,path);
+ if(!path.startsWith('/')||resolve(path)!==path||/[\0\r\n:]/.test(path)||broadRoots(path,home).includes(path)||within(home,path)&&underHome.split('/')[0].startsWith('.'))throw Error(`Approved share ${path} must be a narrow folder, not your home, a system folder or a hidden folder in your home.`);
+ if(within(path,project)||protectedRoots(home,[join(project,'Vagrantfile'),join(project,'.vagrant'),...protectedPaths]).some(p=>within(path,p)||within(p,path)))throw Error(`Approved share ${path} overlaps the Vagrantfile, Vagrant machine state, host credentials or Support files. Remove that share from the VM.`);
+}
+export type UnapprovedShare=RepositoryShare&{vm:string};
+export class UnapprovedSharesError extends Error{
+ constructor(readonly shares:UnapprovedShare[]){super(`A running Tart VM shares ${shares.length} folder${shares.length===1?'':'s'} not approved here. Vagrant is not run until every share is approved or removed.`);}
+}
+/** Run before Vagrant evaluates Ruby. */
+export function checkHostConfigurationBoundary(processes:ProcessRecord[],repositories?:string,approved:string[]=[]){
+ const allowed=new Set(repositories?[repositories,...approved]:approved),unapproved:UnapprovedShare[]=[];
  for(const p of processes.filter(p=>basename(p.executable)==='tart')){
   if(!p.args)throw Error('Cannot read a running Tart process. Close other Tart commands and retry; Support cannot verify the folder boundary.');
   if(!p.args.includes('run'))continue;
   if(p.args.some(a=>/^--(disk|rosetta)(=|$)/.test(a)))throw Error('A running Tart VM exposes an extra host disk or Rosetta share. Remove it and restart that VM before continuing.');
-  const shares=directoryShares(p.args);
-  if(shares.length>1||shares.some(share=>!repositories||share.path!==repositories))throw Error('A running Tart VM shares a folder that has not been selected here. Select your repositories folder, or remove the other shares and restart that VM.');
+  const vm=p.args[2]&&!p.args[2].startsWith('-')?p.args[2]:'unknown';
+  for(const share of directoryShares(p.args))if(!allowed.has(share.path))unapproved.push({...share,vm});
  }
+ if(unapproved.length)throw new UnapprovedSharesError(unapproved);
 }
-export function checkIsolation(processes:ProcessRecord[],vmName:string,ssh:SSHSettings,hostIPs:string[],repositories?:string):{pid:number;softnetPid:number;policy:string}{
- checkHostConfigurationBoundary(processes,repositories);
+const netValues=new Set(['--net-bridged','--net-softnet-allow','--net-softnet-block','--net-softnet-expose']);
+/** Splits Tart arguments into network and other options. */
+function splitTartArguments(args:string[]){
+ const rest:string[]=[],network:string[]=[];
+ for(let i=0;i<args.length;i++){
+  const arg=args[i];
+  if(arg==='--dir'){i++;continue;}
+  if(arg.startsWith('--dir='))continue;
+  if(arg.startsWith('--net-')){network.push(arg);if(!arg.includes('=')&&netValues.has(arg)&&args[i+1]!==undefined)network.push(args[++i]);continue;}
+  rest.push(arg);
+ }
+ return {rest,network};
+}
+/** Checks the running Tart VM for shares, devices, and host channels. */
+export function checkIsolation(processes:ProcessRecord[],vmName:string,ssh:SSHSettings,hostIPs:string[],repositories?:string,approved:string[]=[]):{pid:number;policy:string}{
+ checkHostConfigurationBoundary(processes,repositories,approved);
  const candidates=processes.filter(p=>basename(p.executable)==='tart'&&p.args?.[1]==='run'&&p.args.includes(vmName));
  if(candidates.length!==1)throw Error('Cannot match this Vagrant VM to one running Tart process. Start it in Vagrant, then recheck.');
- const tart=candidates[0],config=options(tart.args!.slice(2),['--no-graphics','--no-audio','--no-clipboard','--net-softnet'],['--net-softnet-allow','--net-softnet-block','--dir']);
+ const tart=candidates[0],{rest,network}=splitTartArguments(tart.args!.slice(2)),config=options(rest,['--no-graphics','--no-audio','--no-clipboard'],[]);
  if(config.positional.length!==1||config.positional[0]!==vmName)throw Error('Unexpected Tart launch arguments.');
- const share=directoryShares(tart.args!)[0];
- if(repositories&&(!share||share.path!==repositories||share.readOnly))throw Error('The selected repositories folder is not exposed read/write by this VM. Configure the single Tart volume shown below, restart the VM, then Recheck.');
- for(const flag of ['--no-graphics','--no-audio','--no-clipboard'])if(!config.out.has(flag))throw Error('Disable the Tart GUI, audio and clipboard in this Vagrant machine, then restart it.');
- const allow=config.out.get('--net-softnet-allow'),block=config.out.get('--net-softnet-block');
- if(!allow||!block)throw Error('This VM needs a default-deny Softnet policy. Default NAT or Softnet alone still permits access that Support cannot authorize.');
- const blocked=block.split(',').map(x=>x.trim()).sort();
- if(JSON.stringify(blocked)!==JSON.stringify(['in 0.0.0.0/0','out 0.0.0.0/0','out @host'].sort()))throw Error('Use the supported default-deny Softnet block rules shown below.');
- const rules=allow.split(',').map(x=>x.trim());
- if(rules.filter(x=>x===`in proto tcp @host port ${ssh.port}`).length!==1)throw Error('Allow only host-initiated SSH to this VM, with the SSH port discovered from Vagrant.');
- for(const rule of rules){
-  if(rule===`in proto tcp @host port ${ssh.port}`)continue;
-  const match=rule.match(/^out proto (tcp|udp) ([0-9.]+)\/32 port ([0-9]+)$/);
-  if(!match||Number(match[3])<1||Number(match[3])>65535)throw Error('Infrastructure access must use individual IPv4 /32 addresses and ports. Broad networks, host aliases and inbound services are not accepted.');
-  checkAddress(match[2],true,hostIPs);if(match[2]===ssh.host)throw Error('An egress rule points to the VM itself.');
- }
- if(new Set(rules).size!==rules.length||rules.length>129)throw Error('Duplicate or excessive Softnet rules.');
- const descendants=processes.filter(p=>{let id=p.ppid;for(let n=0;n<4;n++){if(id===tart.pid)return true;id=processes.find(x=>x.pid===id)?.ppid??0;}return false;});
- const children=descendants.filter(p=>basename(p.executable)==='softnet');
- if(children.length!==1||!children[0].args)throw Error('Cannot inspect the running Softnet process. Its actual rules must be readable; no administrator access is requested by Support.');
- const softnet=children[0],runtime=options(softnet.args!.slice(1),[],['--vm-fd','--vm-mac-address','--allow','--block']);
- if(runtime.positional.length||runtime.out.get('--vm-fd')!=='0'||!/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(runtime.out.get('--vm-mac-address')??'')||runtime.out.get('--allow')!==allow||runtime.out.get('--block')!==block)throw Error('Running Softnet settings do not match this VM, or allow runtime policy changes. Restart the VM with the displayed policy.');
+ const shares=directoryShares(tart.args!),share=repositories?shares.find(s=>s.path===repositories):undefined;
+ if(repositories&&(!share||share.readOnly))throw Error('The selected repositories folder is not exposed read/write by this VM. Configure the Tart volume shown below, restart the VM, then Recheck.');
+ for(const flag of ['--no-graphics','--no-audio'])if(!config.out.has(flag))throw Error('Disable the Tart GUI and audio in this Vagrant machine, then restart it.');
  checkAddress(ssh.host,true,hostIPs);
- return {pid:tart.pid,softnetPid:softnet.pid,policy:JSON.stringify({vmName,ssh,allow,block,share})};
+ return {pid:tart.pid,policy:JSON.stringify({vmName,ssh,network,clipboard:!config.out.has('--no-clipboard'),shares:shares.map(s=>JSON.stringify(s)).sort()})};
 }
-export function isolationHelp(port:number,repositories?:string){return `Keep the Vagrant project, SSH keys and Support app outside VM shares. Disable default /vagrant and all other synced folders. ${repositories?'Only the selected repositories folder may be shared read/write.':'Select a repositories folder in this window if you need a writable share.'} Disable SSH agent forwarding.\n\nInside this machine's Tart provider block (named tart below), use these options. Add individual infrastructure IPv4 addresses and ports to the allow list. Restart the VM yourself, then Recheck. Softnet must support directional rules; older builds reject these options.`;}
+export function isolationHelp(port:number,repositories?:string){return `Keep the Vagrant project, SSH keys and Support app outside VM shares. Disable default /vagrant and every synced folder not approved in this window. ${repositories?'The selected repositories folder must be shared read/write.':'Select a repositories folder in this window if you need a writable share.'} Disable SSH agent forwarding.\n\nInside this machine's Tart provider block (named tart below), use these options. Restart the VM yourself, then Recheck. Support does not check or enforce the VM network: configure network isolation yourself.`;}
 export function isolationSnippet(port:number,repositories?:string){
  const volume=repositories ? "'"+(repositories+':tag=support-repos').replaceAll('\\','\\\\').replaceAll("'","\\'")+"'" : '';
- return `tart.gui = false\ntart.audio = false\ntart.clipboard = false\ntart.volumes = [${volume}]\ntart.extra_run_args = [\n  "--net-softnet-block=in 0.0.0.0/0,out 0.0.0.0/0,out @host",\n  "--net-softnet-allow=in proto tcp @host port ${port}"\n]\n# Append explicit infrastructure destinations to the allow string, e.g.\n# ,out proto tcp YOUR_SERVICE_IPV4/32 port 443\n# Outside the provider block, disable other synced folders:\n# config.vm.synced_folder ".", "/vagrant", disabled: true\n# config.ssh.forward_agent = false`;
+ return `tart.gui = false\ntart.audio = false\ntart.volumes = [${volume}]\n# Outside the provider block, disable other synced folders:\n# config.vm.synced_folder ".", "/vagrant", disabled: true\n# config.ssh.forward_agent = false`;
 }

@@ -7,13 +7,15 @@ import {connectionNames,type Config,type ConnectionName} from '../src/model.js';
 import {logTools} from '../src/diagnostics-model.js';
 import {Store,AppError} from './store.js';
 import {serviceBase} from './gitlab.js';
+import {serviceAuthHeaders} from './service-auth.js';
+import {toolboxFiles} from './toolbox.js';
 import {modelKey} from './model-api.js';
 import {claudeCliStatus} from './claude-cli.js';
 import {recordDiagnostic} from './diagnostics.js';
 import {healthIntervalMs,healthTimeouts,recordHealthProbe,toolHealth,type HealthResult} from './tool-health.js';
 const exec=promisify(execFile);
 export type HealthProbe=(name:ConnectionName,config:Config,signal:AbortSignal)=>Promise<HealthResult>;
-// Probe responses are deliberately omitted from logs: only availability and HTTP status are kept.
+// Log availability and HTTP status only.
 class ProbeError extends Error{}
 async function readResponse(response:Response,signal:AbortSignal,limit:number){
  const reader=response.body?.getReader();if(!reader)return '';const chunks:Uint8Array[]=[];let bytes=0;
@@ -23,8 +25,9 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
  const c=config.connections[name];signal.throwIfAborted();
  if(name==='Toolbox'){
   const binary=process.env.SUPPORT_TOOLBOX_BINARY??'/usr/local/bin/toolbox';
-  if(process.platform!=='linux'||!isAbsolute(binary)||!isAbsolute(c.path))return {ok:false,detail:'Set the Toolbox executable and configuration paths inside the Linux VM.'};
-  await access(c.path,constants.R_OK);signal.throwIfAborted();
+  const pasted=store.vaultStatus().credentials.includes('Toolbox');
+  if(process.platform!=='linux'||!isAbsolute(binary)||(!pasted&&!isAbsolute(c.path)))return {ok:false,detail:'Set the Toolbox executable inside the Linux VM, and paste the Toolbox configuration or set its path.'};
+  if(pasted)toolboxFiles(store);else await access(c.path,constants.R_OK);signal.throwIfAborted();
   await exec(binary,['--help'],{signal,timeout:healthTimeouts.Toolbox,killSignal:'SIGKILL',maxBuffer:65536,shell:false});
   return {ok:true,detail:'Local executable responds and its configuration is readable. Cluster connectivity is checked during investigations.'};
  }
@@ -37,7 +40,7 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
  switch(name){
   case 'YouTrack':path='api/users/me?fields=id';headers.Authorization='Bearer '+store.readCredential(name);check=v=>typeof v.id==='string';detail='YouTrack API responds and accepts the saved token.';break;
   case 'GitLab':{const repo=config.repositories.find(r=>r.project);path=repo?'api/v4/projects/'+encodeURIComponent(repo.project!)+'/repository/branches/'+encodeURIComponent(repo.branch):'api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=repo?v=>typeof v.commit?.id==='string':v=>Array.isArray(v);detail=repo?'GitLab responds and the configured repository branch is readable.':'GitLab project API responds and accepts the saved token.';break;}
-  case 'Alertmanager':case 'Prometheus':path='-/ready';format='text';detail='Readiness endpoint reports ready.';{const token=optionalToken();if(token)headers.Authorization='Bearer '+token}break;
+  case 'Alertmanager':case 'Prometheus':path='-/ready';format='text';detail='Readiness endpoint reports ready.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Outline':path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline health endpoint responds.';{const token=optionalToken();if(token)headers.Authorization='Bearer '+token}break;
   case 'Slack':path=base.pathname.replace(/\/$/,'').endsWith('/api')?'api.test':'api/api.test';check=v=>v.ok===true;detail='Slack API responds. This checks availability, not channel permissions.';break;
   case 'Model':{
@@ -53,6 +56,15 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
  const text=await readResponse(response,signal,name==='Model'?2_000_000:131072);let value:unknown;try{value=format==='json'?JSON.parse(text):text}catch{return {ok:false,code:response.status,detail:'Endpoint returned an unexpected response.'}}
  return {ok:check(value),code:response.status,detail:check(value)?detail:'Endpoint returned an unexpected health response.'};
 };}
+function probeFailure(e:unknown,timeout:boolean,ms:number):HealthResult{
+ return {ok:false,detail:timeout?`Timed out after ${ms/1000}s.`:e instanceof ProbeError?e.message:e instanceof AppError&&[400,401,403].includes(e.status)?'Check the saved endpoint, credentials and local tool configuration.':'Connection failed. Check the endpoint, VPN and TLS settings.'};
+}
+/** Runs one read-only probe. Records no health state. */
+export async function testConnection(name:ConnectionName,config:Config,probe:HealthProbe,ms=healthTimeouts[name]):Promise<HealthResult>{
+ const controller=new AbortController();let timeout=false;const timer=setTimeout(()=>{timeout=true;controller.abort()},ms);
+ const aborted=new Promise<never>((_,reject)=>controller.signal.addEventListener('abort',()=>reject(new Error('timeout')),{once:true}));
+ try{return await Promise.race([probe(name,config,controller.signal),aborted]);}catch(e){return probeFailure(e,timeout,ms);}finally{clearTimeout(timer);}
+}
 export class HealthPoller{
  private context='';private next=new Map<ConnectionName,number>();private active=new Map<ConnectionName,AbortController>();private stopped=false;
  constructor(private store:Store,private probe:HealthProbe=serviceProbe(store),private now=()=>Date.now(),private timeouts=healthTimeouts){}
@@ -70,13 +82,13 @@ export class HealthPoller{
   let timeout=false;const timer=setTimeout(()=>{timeout=true;controller.abort()},this.timeouts[name]);
   const aborted=new Promise<HealthResult>(resolve=>controller.signal.addEventListener('abort',()=>resolve({ok:false,detail:timeout?`Timed out after ${this.timeouts[name]/1000}s.`:'Check cancelled.'}),{once:true}));
   let result:HealthResult;
-  try{result=await Promise.race([this.probe(name,config,controller.signal),aborted]);}catch(e){result={ok:false,detail:timeout?`Timed out after ${this.timeouts[name]/1000}s.`:e instanceof ProbeError?e.message:e instanceof AppError&&[400,401,403].includes(e.status)?'Check the saved endpoint, credentials and local tool configuration.':'Connection failed. Check the endpoint, VPN and TLS settings.'};}
+  try{result=await Promise.race([this.probe(name,config,controller.signal),aborted]);}catch(e){result=probeFailure(e,timeout,this.timeouts[name]);}
   finally{clearTimeout(timer);this.active.delete(name)}
   if(this.stopped||!this.store.key||this.identity()!==context)return;
   const before=toolHealth(this.store,this.now()).find(t=>t.name===name)!;
   recordHealthProbe(this.store,name,result,Math.max(0,this.now()-start),this.now());
   const after=toolHealth(this.store,this.now()).find(t=>t.name===name)!;
-  // Log state changes, not each healthy minute, to preserve the bounded diagnostic history.
+  // Log state changes only.
   if(before.state!==after.state||before.label!==after.label)recordDiagnostic(this.store,{tool:logTools.includes(name as typeof logTools[number])?name as typeof logTools[number]:'App',operation:`${name} availability check`,status:result.ok?'ok':'error',durationMs:Math.max(0,this.now()-start),code:result.code,output:after.label+': '+result.detail});
  }
  stop(){this.stopped=true;for(const controller of this.active.values())controller.abort()}

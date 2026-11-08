@@ -22,8 +22,7 @@ export class YouTrack{
   const parsed=issueSchema.safeParse(raw);if(!parsed.success)throw new AppError(502,'YouTrack issue format was not recognized.');
   const i=parsed.data,f=Object.fromEntries((i.customFields??[]).map(f=>[f.name,display(f.value)]));
   const comments=(i.comments??[]).filter(c=>!c.deleted).map(c=>({id:c.id,text:c.text??'',updated:c.updated??c.created??0}));
-  // Content matters even when YouTrack does not advance the issue timestamp.
-  // Canonical ordering avoids invalidating a review just because API ordering changed.
+  // Compare content in canonical order, not the issue timestamp.
   const sourceFingerprint=createHash('sha256').update(JSON.stringify({title:i.summary??'',description:i.description??'',updated:i.updated,resolved:i.resolved??null,project:i.project??null,fields:Object.entries(f).sort(([a],[b])=>a.localeCompare(b)),comments:[...comments].sort((a,b)=>a.id.localeCompare(b.id))})).digest('hex');
   return {comments,sourceFingerprint,id:i.id,key:i.idReadable,title:i.summary??'(Untitled issue)',description:i.description??'',updated:i.updated,resolved:i.resolved!=null,status:f.State??f.Status??(i.resolved!=null?'Resolved':'Unresolved'),severity:f.Criticality??f.Severity??f.Priority??'Unspecified',assignee:f.Assignee??'Unassigned',project:i.project?.name??'',fields:f,url:new URL('issue/'+encodeURIComponent(i.idReadable),ctx.base).href,connection:ctx.connection};
  }

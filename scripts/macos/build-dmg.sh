@@ -1,5 +1,5 @@
 #!/bin/bash
-# Invoked by the Finder build helper. Never uses the current node_modules or data.
+# Called by the Finder build helper.
 set -euo pipefail
 umask 077
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -10,7 +10,7 @@ mkdir -p "$cache" "$repo/release"
 stage=$(mktemp -d "$repo/.mac-build/build.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 printf 'STEP 1 Checking native compilation\n'
-# Fail before downloads/npm work, using the same sources and flags as the build.
+# Typecheck before downloads.
 bash "$repo/companion/macos/build-app.sh" --check
 version=24.14.1
 case "$arch" in
@@ -31,13 +31,13 @@ export NODE_OPTIONS=--max-old-space-size=384
 printf 'STEP 2 Building in an isolated working directory\n'
 work="$stage/work"
 mkdir -p "$work"
-# Fixed source allowlist: no .env, .support-data, repositories, SSH keys or user tokens.
+# Fixed source allowlist.
 for entry in package.json package-lock.json tsconfig.json tsconfig.host.json tsconfig.guest.json vite.config.ts index.html src server host scripts companion deployment tests docs; do
   [[ ! -L "$repo/$entry" ]] || { echo 'Build input cannot be a symlink.' >&2; exit 1; }
   ditto "$repo/$entry" "$work/$entry"
 done
 cd "$work"
-# Nested links are not expected in source and must not import unrelated local files.
+# Reject nested links.
 if [[ -n "$(find . -type l -print -quit)" ]]; then echo 'Remove source symlinks before building.' >&2; exit 1; fi
 npm ci --no-audit --no-fund
 printf 'STEP 3 Building the UI and host gateway\n'
@@ -45,14 +45,14 @@ npm run build
 printf 'STEP 4 Compiling the native companion\n'
 mkdir -p "$stage/volume"
 SUPPORT_NODE_BINARY="$node_dir/bin/node" SUPPORT_HOST_BUNDLE="$work/host-dist" bash companion/macos/build-app.sh "$stage/volume/Support Companion.app"
-# Trusted help is included inside the app and visible on the DMG.
+# Include help in the app and on the DMG.
 cp "$repo/docs/mac-install.html" "$stage/volume/Start here.html"
 ln -s /Applications "$stage/volume/Applications"
 printf 'STEP 5 Creating the drag-to-Applications disk image\n'
 hdiutil create -quiet -volname 'Support' -srcfolder "$stage/volume" -format UDZO -ov "$stage/Support-$arch.dmg"
 hdiutil verify "$stage/Support-$arch.dmg"
 codesign --verify --deep --strict "$stage/volume/Support Companion.app"
-# Only publish a fully built and verified image. A failed rebuild keeps the old one.
+# Publish only a verified image.
 mv "$stage/Support-$arch.dmg" "$repo/release/Support-$arch.dmg"
 shasum -a 256 "$repo/release/Support-$arch.dmg" > "$repo/release/Support-$arch.dmg.sha256"
 printf 'STEP 6 DMG ready\n'

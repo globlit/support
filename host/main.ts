@@ -36,9 +36,9 @@ async function main(){
   if(provider==='tart'){
    const read=async(binary:string,args:string[])=>{try{return (await promisify(execFile)(binary,args,{cwd:location,timeout:10000,maxBuffer:128*1024,env:{PATH:'/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',HOME:homedir(),CHECKPOINT_DISABLE:'1',VAGRANT_CHECKPOINT_DISABLE:'1'}})).stdout.trim();}catch{return '';}};
    const binary=async(name:string)=>{for(const base of ['/opt/homebrew/bin','/usr/local/bin']){const p=join(base,name);if(await lstat(p).catch(()=>null))return p;}return '';};
-   const tart=await binary('tart'),softnet=await binary('softnet');
+   const tart=await binary('tart');
    const plugins=await read(executable,['plugin','list']);
-   const report=tartReadiness({provider,pluginVersion:plugins.match(/vagrant-tart \(([^ ,)]+)/)?.[1],tartVersion:tart?await read(tart,['--version']):'',tartHelp:tart?await read(tart,['run','--help']):'',softnetVersion:softnet?await read(softnet,['--version']):'',softnetHelp:softnet?await read(softnet,['--help']):''});
+   const report=tartReadiness({provider,pluginVersion:plugins.match(/vagrant-tart \(([^ ,)]+)/)?.[1],tartVersion:tart?await read(tart,['--version']):''});
    console.log('Tart connection checks');for(const c of report.checks)console.log(`${c.ok?'Available':'Needs attention'} · ${c.name}: ${c.detail}`);
    console.log('\n'+report.message+'\nOpen VM connection in the Mac companion and select a running VM.');
   }else console.log(JSON.stringify({machines,message:'Choose a Tart-backed Vagrant project. Other providers need their own verified host boundary.'},null,2));return;
@@ -53,9 +53,9 @@ async function main(){
  if(process.getuid?.()===0)throw Error('Run the gateway as the Mac user, never root. PF inspection needs a narrow administrator-provided read mechanism; do not run Support as root.');
  const root=join(homedir(),'Library','Application Support','Support Host');await mkdir(root,{recursive:true,mode:0o700});await privatePath(root,true);
  for(const keyFile of [profile.identityFile,profile.knownHostsFile]){await privatePath(keyFile);if(![root,join(homedir(),'.ssh')].some(base=>{const rel=relative(base,keyFile);return rel!==''&&!rel.startsWith('..')&&!rel.startsWith('/');}))throw Error('Store dedicated SSH files in ~/.ssh or the private Support Host directory, outside exportable workspaces.');}
- // No TCP upstream listener: a browser cannot bypass this gateway and execute guest HTML.
+ // No TCP listener. The browser must use this gateway.
  const run=await mkdtemp(join(root,'run-')),socket=join(run,'backend.sock'),keyPath=join(root,`gateway-key-${profile.port}`),key=randomBytes(32);
- // Existing key is never overwritten: another active host gateway must be stopped first.
+ // Never overwrite an existing key.
  await writeFile(keyPath,key.toString('hex'),{flag:'wx',mode:0o600});
  let ssh:ReturnType<typeof spawn>|undefined,server:Awaited<ReturnType<typeof createGateway>>|undefined,healthy=false,timer:NodeJS.Timeout|undefined,closing=false;
  const stop=async()=>{if(closing)return;closing=true;healthy=false;if(timer)clearTimeout(timer);server?.closeAllConnections();await new Promise<void>(r=>{if(server?.listening)server.close(()=>r());else r();});if(ssh&&ssh.exitCode===null){ssh.kill('SIGTERM');await Promise.race([new Promise(r=>ssh!.once('exit',r)),delay(2000)]);if(ssh.exitCode===null)ssh.kill('SIGKILL');}await unlink(keyPath).catch(()=>{});await rm(run,{recursive:true,force:true});};
@@ -68,7 +68,7 @@ async function main(){
   server=await createGateway({port:profile.port,guestPort:profile.guestPort,socketPath:socket,publicDirectory:resolve(dirname(fileURLToPath(import.meta.url)),'../public'),proofKey:key,healthy:()=>healthy&&!failed&&!closing});
   if(failed||closing||ssh.exitCode!==null)throw Error('SSH ended before the gateway became available.');
   await new Promise<void>((r,j)=>{server!.once('error',j);server!.listen(profile.port,'127.0.0.1',r);});
-  // Losing the audit closes browser access; permanent rules are never removed by exit.
+  // Close browser access when the audit fails.
   const monitor=async()=>{try{await verifyPF(profile.network);if(!closing)timer=setTimeout(()=>void monitor(),5000);}catch{console.error('Host network policy changed. Gateway stopped; stop the VM before repairing host policy.');await stop();}};
   timer=setTimeout(()=>void monitor(),5000);
   for(const signal of ['SIGTERM','SIGINT'] as const)process.once(signal,()=>void stop());

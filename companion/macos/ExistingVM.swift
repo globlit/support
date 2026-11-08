@@ -9,9 +9,12 @@ fileprivate struct VMCheck: Decodable, Identifiable {
     let id: String; let title: String; let state: String; let detail: String
     let help: String?; let copy: String?
 }
+fileprivate struct VMShare: Decodable {
+    let path: String; let approvable: Bool
+}
 private struct VMReport: Decodable {
     let machines: [VMMachine]; let machine: String?; let checks: [VMCheck]; let ready: Bool
-    let fingerprint: String?; let url: String?
+    let fingerprint: String?; let url: String?; let unapprovedShares: [VMShare]?
 }
 private final class ConnectionOutput {
     private let lock = NSLock()
@@ -38,6 +41,8 @@ private final class ConnectionOutput {
     @Published var url: URL?
     @Published var browserPort = UserDefaults.standard.string(forKey: "vmBrowserPort") ?? "4173"
     @Published var repositories = UserDefaults.standard.string(forKey: "vagrantRepositories") ?? ""
+    @Published var approvedShares = UserDefaults.standard.stringArray(forKey: "vagrantApprovedShares") ?? []
+    @Published var pendingShares: [String] = []
     private var child: Process?
     private var pipe: Pipe?
     private var request: Pipe?
@@ -63,6 +68,18 @@ private final class ConnectionOutput {
         repositories = ""; UserDefaults.standard.removeObject(forKey: "vagrantRepositories"); ready = false; checks = []
         status = "Repository sharing removed from this connection. Recheck the VM."
     }
+    func approvePendingShares() {
+        guard !working, !running, !pendingShares.isEmpty else { return }
+        approvedShares = Array(Set(approvedShares + pendingShares)).sorted()
+        UserDefaults.standard.set(approvedShares, forKey: "vagrantApprovedShares"); pendingShares = []
+        run("vm-discover")
+    }
+    func removeShare(_ path: String) {
+        guard !working, !running else { return }
+        approvedShares.removeAll { $0 == path }
+        UserDefaults.standard.set(approvedShares, forKey: "vagrantApprovedShares"); ready = false; checks = []
+        status = "Share approval removed. Recheck the VM."
+    }
     func select(_ name: String) {
         guard !working, !running else { return }
         machine = name; run("vm-check")
@@ -74,17 +91,18 @@ private final class ConnectionOutput {
         guard FileManager.default.isExecutableFile(atPath: node.path), FileManager.default.fileExists(atPath: script.path), FileManager.default.isExecutableFile(atPath: resources.appendingPathComponent("Runtime/inspect-processes").path) else { status = "Install the full DMG build to use VM connection checks."; return }
         var selection: [String: Any] = ["project": project, "port": port]
         if !repositories.isEmpty { selection["repositories"] = repositories }
+        if !approvedShares.isEmpty { selection["shares"] = approvedShares }
         if command != "vm-discover" { selection["machine"] = machine }
         if command == "vm-trust", let fingerprint { selection["fingerprint"] = fingerprint }
         guard let data = try? JSONSerialization.data(withJSONObject: selection) else { return }
         generation = UUID(); let ticket = generation
-        checks = []; ready = false; fingerprint = nil; url = nil; working = true
+        checks = []; pendingShares = []; ready = false; fingerprint = nil; url = nil; working = true
         status = command == "vm-discover" ? "Finding Vagrant VMs…" : "Checking the selected VM…"
         let process = Process(), output = Pipe(), input = Pipe(); child = process; pipe = output; request = input
         process.executableURL = node; process.arguments = ["--max-old-space-size=192", script.path, command]
         process.environment = ["PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": NSHomeDirectory(), "LANG": "C"]
         process.standardInput = input; process.standardOutput = output
-        // Structured host-generated results only. No Vagrant/SSH stderr or guest output in the UI.
+        // Host-generated results only.
         process.standardError = FileHandle.nullDevice
         let capture = ConnectionOutput()
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -120,6 +138,8 @@ private final class ConnectionOutput {
         let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
         guard let report = lines.reversed().compactMap({ try? JSONDecoder().decode(VMReport.self, from: Data($0.utf8)) }).first else { return }
         machines = report.machines; checks = report.checks; ready = report.ready; fingerprint = report.fingerprint
+        let unapproved = report.unapprovedShares ?? []
+        pendingShares = unapproved.allSatisfy({ $0.approvable }) ? unapproved.map { $0.path } : []
         if let value = report.url, let candidate = URL(string: value), candidate.host == "127.0.0.1", candidate.scheme == "http" {
             url = candidate; running = true; working = false; status = "Connected. Open Support in your browser."
             UserDefaults.standard.set(String(candidate.port ?? 4173), forKey: "vmBrowserPort")
@@ -128,7 +148,7 @@ private final class ConnectionOutput {
     }
     func stop() {
         generation = UUID()
-        // Drain discarded output until shutdown so the Node owner can close SSH cleanly.
+        // Drain output so Node can close SSH.
         if let process = child, let output = pipe, process.isRunning {
             output.fileHandleForReading.readabilityHandler = { handle in
                 if handle.availableData.isEmpty { handle.readabilityHandler = nil }
@@ -143,8 +163,7 @@ private final class ConnectionOutput {
     func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
 }
 
-// View-owned presentation state survives redraws without requiring SwiftUI's
-// newer @State macro plugin, which is not shipped by every Command Line Tools SDK.
+// Avoids the @State macro, missing from some Command Line Tools SDKs.
 @MainActor private final class VMConnectionPresentation: ObservableObject {
     @Published var expandedCheck: String?
 }
@@ -173,6 +192,16 @@ private final class ConnectionOutput {
                 if !model.repositories.isEmpty {
                     Text(model.repositories).font(.caption).textSelection(.enabled).lineLimit(2)
                     Text("Read/write exception, including Git metadata. Keep host configuration outside this folder.").font(.caption).foregroundStyle(.secondary)
+                }
+                if !model.approvedShares.isEmpty {
+                    Text("Approved extra shares").font(.headline).padding(.top, 6)
+                    ForEach(model.approvedShares, id: \.self) { path in
+                        HStack {
+                            Text(path).font(.caption).textSelection(.enabled).lineLimit(2); Spacer()
+                            Button { model.removeShare(path) } label: { Image(systemName: "xmark") }.help("Remove this share approval")
+                        }
+                    }
+                    Text("Writable from the VM unless mounted read-only. Host tools must not execute or load configuration from these folders.").font(.caption).foregroundStyle(.secondary)
                 }
             }.disabled(model.working || model.running)
             if !model.project.isEmpty {
@@ -203,6 +232,9 @@ private final class ConnectionOutput {
                                             Button("Copy commands") { model.copy(text) }
                                         }
                                     }
+                                }
+                                if check.id == "shares", check.state == "action", !model.pendingShares.isEmpty {
+                                    Button("Approve these shares") { model.approvePendingShares() }.disabled(model.working)
                                 }
                                 if check.id == "identity", model.fingerprint != nil {
                                     Button("Fingerprints match · Trust this VM") { model.run("vm-trust") }.disabled(model.working)

@@ -25,7 +25,7 @@ export class IncomingReplies{
  }
  async save(ref:string,text:string,expected:string){const issue=await this.source(ref),r=this.get(issue);if(!r||r.state!=='draft'||r.hash!==expected)throw new AppError(409,'Refresh the reply before editing.');this.current(issue,r);this.safe(text);r.text=text;r.hash=hash({...r,hash:undefined});this.store.put(this.key(issue),r);return r;}
  async send(ref:string,expected:string){const release=this.store.claimWork();try{const issue=await this.source(ref),r=this.get(issue);if(!r||r.state!=='draft'||r.hash!==expected)throw new AppError(409,'Review the current reply before sending.');this.current(issue,r);this.safe(r.text);
- // Recheck merged pipeline proof before any external reply. Resolutions.save does not claim a second work lock here.
+ // Recheck merged pipeline proof before replying.
  if(r.changeId){const c=this.store.change(r.changeId);if(!c.resolution||c.resolution.state!=='draft'||c.resolution.sourceUpdated!==issue.updated)throw new AppError(409,'Implementation summary changed. Prepare again.');await this.resolutions.verifyReply(c.id);this.current(await this.source(ref),r);}
  r.approval={...humanAttribution(this.store),hash:expected,at:new Date().toISOString()};r.state='pending';r.message='Reply requested. Check status if the response is interrupted; no automatic retry.';this.store.put(this.key(issue),r);
  if(sourceKind(issue.connection)==='slack'){const c=this.slack.getCase(issue.id);try{const raw=await this.slack.request('chat.postMessage',{}, {channel:c.channel,thread_ts:c.threadTs,text:r.text,client_msg_id:r.id,unfurl_links:false,unfurl_media:false,parse:'none'});if(raw.channel!==c.channel||typeof raw.ts!=='string')throw new Error();r.remoteTs=raw.ts;}catch{this.store.put(this.key(issue),r);return r;}}

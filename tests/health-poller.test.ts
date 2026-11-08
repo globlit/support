@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Store} from '../server/store.js';
 import {defaults,type ConnectionName} from '../src/model.js';
-import {HealthPoller,serviceProbe} from '../server/health-poller.js';
+import {HealthPoller,serviceProbe,testConnection} from '../server/health-poller.js';
 import {toolHealth,healthTimeouts,type HealthResult} from '../server/tool-health.js';
 import {loggedFetch,readLogs} from '../server/diagnostics.js';
 function fixture(names:ConnectionName[]=['YouTrack']){const dir=mkdtempSync(join(tmpdir(),'support-health-')),store=new Store(dir);store.unlock('an isolated health passphrase',true);const config=structuredClone(defaults);for(const name of names){config.connections[name].enabled=true;config.connections[name].endpoint='https://'+name.toLowerCase()+'.internal';config.connections[name].scope='model';}store.config(config,1);return {store,config,close(){store.close();rmSync(dir,{recursive:true,force:true})}}}
@@ -47,4 +47,17 @@ test('model catalogs may exceed 128 KB; repo-scoped GitLab checks avoid instance
  const f=fixture(['Model','GitLab']);f.store.credential('Model','private-test-key');f.store.credential('GitLab','private-git-key');f.config.repositories=[{path:'/workspace/demo',name:'demo',project:'group/demo',branch:'main',environment:'Development'}];
  const urls:string[]=[];const probe=serviceProbe(f.store,async(input)=>{const url=String(input);urls.push(url);return url.includes('repository/branches')?Response.json({commit:{id:'a'.repeat(40)}}):Response.json({id:'model',metadata:'x'.repeat(180000)})});
  try{assert.equal((await probe('Model',f.config,new AbortController().signal)).ok,true);assert.equal((await probe('GitLab',f.config,new AbortController().signal)).ok,true);assert.ok(urls.some(u=>u.endsWith('/api/v4/projects/group%2Fdemo/repository/branches/main')));assert.ok(urls.every(u=>!u.endsWith('/version')));}finally{f.close()}
+});
+test('connection tests use unsaved settings with saved credentials and record no health state or logs',async()=>{
+ const f=fixture(['YouTrack']);f.store.credential('YouTrack','private-test-credential');
+ const draft=structuredClone(f.config);draft.connections.YouTrack.endpoint='https://draft-youtrack.internal';
+ const seen:string[]=[];const probe=serviceProbe(f.store,async(input,init)=>{seen.push(new URL(String(input)).hostname+' '+(init?.headers as Record<string,string>).Authorization);return Response.json({id:'me'})});
+ try{
+  assert.deepEqual(await testConnection('YouTrack',draft,probe),{ok:true,code:200,detail:'YouTrack API responds and accepts the saved token.'});
+  assert.deepEqual(seen,['draft-youtrack.internal Bearer private-test-credential']);
+  assert.equal(f.store.snapshot().config.connections.YouTrack.endpoint,'https://youtrack.internal');
+  assert.equal(readLogs(f.store).total,0);assert.equal(state(f.store).label,'Checking');
+  const slow=await testConnection('YouTrack',draft,()=>new Promise(()=>{}),20);
+  assert.deepEqual(slow,{ok:false,detail:'Timed out after 0.02s.'});
+ }finally{f.close()}
 });

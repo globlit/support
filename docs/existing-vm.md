@@ -1,27 +1,33 @@
-# Existing VM connection — implementation notes
+# VM connection
 
-The Mac window is the setup flow. Select a host-owned Vagrant project, select a VM, complete any inline requirements, then Connect. There is no host profile picker or separate VM setup guide. The app does not provision, boot, restart, suspend or delete VMs. The local-service path is unchanged.
+Open Support from the Mac when it runs in a Tart VM managed by `vagrant-tart` 1.0.0. Support does not create, start, or stop VMs.
 
-## Checks and trust boundaries
+## Prerequisites
 
-- Before running Vagrant, the native helper reads kernel process arguments. Unapproved Tart file shares, extra disks, Rosetta shares or unreadable Tart arguments prevent evaluation of a potentially guest-writable Vagrantfile. This conservatively affects other running Tart VMs too. It cannot undo prior exposure: select only trusted, host-owned Vagrant configuration.
-- Vagrant machine-readable status lists every machine. Only a selected running Tart machine using vagrant-tart 1.0.0 proceeds. Its `.vagrant/machines/<name>/tart/id` is matched to the running Tart process.
-- **Explicit writable exception:** the user may select one repositories folder. Its exact real path must match the running Tart volume. Broad/system/hidden roots, symlink roots and overlaps with Vagrant configuration, SSH identity, credentials or the Mac app are rejected. The UI identifies it as read/write, including Git metadata, and supplies optional Ubuntu mount instructions. This is a trusted exception: guest-written hooks/configuration or project tasks can later execute through host Git/editor use. Full isolation cannot be claimed for code run from this folder. Use separate checkouts/worktrees for concurrent edits; the share itself does not arbitrate concurrent Git operations.
-- SSH destination, user, port and identity file come from that machine's `ssh-config`. Proxy commands, SSH agents, user SSH configuration and Vagrant's relaxed host-key checking are never forwarded.
-- The running VM must have no GUI, clipboard, audio, unapproved file shares, extra disks, VNC, alternate network or live policy-control channel. The actual child Softnet arguments must match Tart's requested rules. Inaccessible process arguments and unknown options fail closed.
-- The supported Softnet policy uses directional default-deny ingress/egress, host-initiated SSH only, and optional explicit IPv4 `/32` infrastructure destinations with individual protocol/port grants. Loopback, current Mac addresses, link-local, multicast, broad networks, other inbound connections and duplicate rules are rejected. Requirements and a short configuration snippet appear only when this check fails.
-- An Ed25519 SSH fingerprint is shown for verification against the VM console before first trust, or explicit replacement after a host-key change. Private pins are scoped to the selected project, machine and discovered connection, stored on the Mac, and checked again before connecting.
-- A short-lived private Unix-socket forward checks the Support session API without unlocking its Vault or starting work. An absent/unreachable API is reported as missing **or stopped**, not conclusively uninstalled; arbitrary installation locations and containers cannot be inferred from a failed HTTP request. Inline commands explain how to start an existing checkout or install inside Ubuntu.
-- Connect repeats the checks and serves the independently bundled host UI. Guest HTML, arbitrary redirects and executable assets do not reach the Mac browser. The only SSH forward is from a private Unix socket to guest loopback port 4173. No reverse forward, host shell, SSH agent or VM lifecycle command is offered. The app checks an existing repository share; it never changes Vagrant configuration or mounts a folder itself.
-- Browser cookies and notification pairing are scoped to the selected VM and pinned SSH identity. Selecting another VM cannot forward the previous VM's session/notification token. Older unscoped VM notification pairings need pairing again; local-service pairing is unchanged.
-- Runtime checks repeat every two seconds. A changed VM/process/policy, unreadable boundary or SSH loss revokes the data gateway. Disconnect leaves the VM and its network rules running. Treat changes to Mac network addresses or infrastructure grants as an operator network-policy change: disconnect, update/restart the VM policy, then recheck. Closing the gateway alone does not change the VM network.
+- Support running in the VM. See the [service guide](service.md).
+- `tart.gui = false` and `tart.audio = false` in the `Vagrantfile`.
+- The Vagrant project folder outside every folder shared with the VM.
+- macOS 13 or newer with Apple Command Line Tools.
 
-## Validation limits
+## Install the Mac app
 
-The DMG builder typechecks both native entrypoints before downloading Node or installing npm dependencies. `companion/macos/build-app.sh --check` uses the same SDK, target and source list as compilation; it logs the active compiler and SDK. The native compile test also runs under `npm test` on macOS and explicitly skips on Linux. Disclosure state uses a view-owned `StateObject` so command-line builds do not need the newer `SwiftUIMacros.StateMacro` plugin described in [Apple TN3211](https://developer.apple.com/documentation/technotes/tn3211-resolving-swiftui-source-incompatibilities-for-state-and-contentbuilder).
+1. Double-click **Build Support.app** in Finder.
+2. Open `release/Support-<arch>.dmg` and drag **Support Companion** to **Applications**.
+3. If Gatekeeper blocks the app, click **Open Anyway** in **System Settings → Privacy & Security**.
 
-Linux tests cover parsers, policy rejection, private transport options, bounded service probing, gateway isolation and packaging. They do not prove Tart/Softnet packet behavior or compile Swift/AppKit. Validate the DMG on macOS before relying on it: multiple VMs, host-key verification/replacement, missing/stopped Support, normal connect/disconnect, restart revocation, and guest attempts to reach every Mac interface (IPv4/IPv6), shared files and host services. The app inspects the trusted installed hypervisor's runtime configuration; it is not protection against a compromised hypervisor or Mac administrator.
+## Connect
 
-The legacy hand-authored PF `serve` command remains gated. The companion uses the dedicated checked Tart flow instead.
+1. In **Support Companion**, open **VM connection**.
+2. Click **Choose folder…** and select the folder that contains the `Vagrantfile`.
+3. Optional: select one folder under **Shared repositories**.
+4. If **Running VM shares** lists other shares, approve them or remove them from the `Vagrantfile`.
+5. Select the VM.
+6. Compare the fingerprint in the app with this command's output in the VM:
 
-Source contracts: [vagrant-tart machine identity](https://github.com/letiemble/vagrant-tart/blob/v1.0.0/lib/vagrant-tart/action/create_instance.rb), [Tart runtime networking](https://github.com/cirruslabs/tart/blob/main/Sources/tart/Commands/Run.swift), [Softnet directional rules](https://github.com/openai/softnet/blob/main/src/main.rs). Unknown installed options are rejected rather than inferred from these upstream sources.
+   ```shell
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
+   ```
+
+7. If they match, click **Fingerprints match · Trust this VM**, then **Connect** and **Open Support**.
+
+If a check fails, click **What to do**, apply the change, and click **Recheck**.

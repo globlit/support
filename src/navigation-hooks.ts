@@ -1,7 +1,7 @@
 import {useEffect,useState} from 'react';
 import type {Route} from './navigation';
 import {useWorkspaceNavigation} from './WorkspaceRuntime';
-// Small URL-backed choices (tabs, filters). Draft text never goes into the route.
+// URL-backed tabs and filters. Draft text stays out of the route.
 export function useRouteChoice<K extends keyof Omit<Route,'page'|'issue'|'connection'|'result'>,T extends string>(key:K,values:readonly T[],fallback:T):[T,(value:string|((current:T)=>T))=>void]{
  const {navigate,readRoute}=useWorkspaceNavigation();
  const read=()=>{const value=readRoute()[key];return values.includes(value as T)?value as T:fallback;};

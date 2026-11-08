@@ -6,10 +6,10 @@ import {existsSync} from 'node:fs';
 import {tartReadiness} from '../host/tart-readiness.js';
 
 test('Tart installation facts never authorize an unverified VM connection',()=>{
- const ready=tartReadiness({provider:'tart',pluginVersion:'1.0.0',tartVersion:'Tart installed',softnetVersion:'Softnet installed',tartHelp:'--net-softnet-block',softnetHelp:'@host in proto tcp'});
+ const ready=tartReadiness({provider:'tart',pluginVersion:'1.0.0',tartVersion:'Tart installed'});
  assert.ok(ready.checks.every(c=>c.ok));assert.equal(ready.ready,false);assert.match(ready.message,/No SSH tunnel/);
  const missing=tartReadiness({provider:'tart',pluginVersion:'1.0.0'});
- assert.deepEqual(missing.checks.map(c=>c.ok),[true,true,false,false,false]);
+ assert.deepEqual(missing.checks.map(c=>c.ok),[true,true,false]);
  const other=tartReadiness({provider:'virtualbox',pluginVersion:'0.9'});assert.equal(other.checks[0].ok,false);assert.equal(other.checks[1].ok,false);
 });
 
@@ -30,7 +30,7 @@ test('Finder launcher and packaging scripts are syntactically valid without exec
  for(const file of ['Build Support.app/Contents/MacOS/Build Support','scripts/macos/build-dmg.sh','companion/macos/build-app.sh','companion/macos/install.sh'])execFileSync('bash',['-n',file]);
 });
 
-test('Tart guard rejects explicit provider shares, clipboard and alternate host channels',t=>{
+test('Tart guard rejects unapproved shares, extra disks and VNC, and accepts clipboard and any network mode',t=>{
  const ruby=['/usr/bin/ruby','/opt/vagrant/embedded/bin/ruby'].find(p=>existsSync(p));
  if(!ruby){t.skip('Ruby/Vagrant runtime is not installed.');return;}
  const script=`
@@ -47,14 +47,17 @@ def config(**changes)
  OpenStruct.new({clipboard:false,volumes:[],extra_run_args:[],vnc:false,vnc_experimental:false}.merge(changes))
 end
 raise unless SupportBoundary.tart_errors(config).empty?
-raise if SupportBoundary.tart_errors(config(clipboard:true)).empty?
+raise unless SupportBoundary.tart_errors(config(clipboard:true)).empty?
 raise if SupportBoundary.tart_errors(config(volumes:['/Users/person:ro'])).empty?
 raise unless SupportBoundary.tart_errors(config(volumes:['/Users/person/repos:tag=support-repos']), '/Users/person/repos').empty?
 raise if SupportBoundary.tart_errors(config(volumes:['/Users/person']), '/Users/person/repos').empty?
 raise if SupportBoundary.tart_errors(config(volumes:['/Users/person/repos'], extra_run_args:['--dir=/Users/person/repos']), '/Users/person/repos').empty?
 raise if SupportBoundary.tart_errors(config(vnc:true)).empty?
-%w[--dir=/Users/person --disk=/dev/disk0 --rosetta=host --net-fd=3 --net-bridged=en0 --net-host --net-softnet-expose=2222:22 --net-softnet-control-fd=3].each do |arg|
+%w[--dir=/Users/person --disk=/dev/disk0 --rosetta=host --vnc --vnc-experimental].each do |arg|
  raise arg if SupportBoundary.tart_errors(config(extra_run_args:[arg])).empty?
+end
+%w[--net-softnet --net-host --net-bridged=en0 --net-fd=3 --net-softnet-expose=2222:22 --net-softnet-control-fd=3].each do |arg|
+ raise arg unless SupportBoundary.tart_errors(config(extra_run_args:[arg])).empty?
 end
 `;
  execFileSync(ruby,['-e',script],{stdio:'pipe'});

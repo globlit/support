@@ -28,7 +28,6 @@ module SupportBoundary
         errors.concat(SupportBoundary.tart_errors(machine.provider_config, repositories))
       end
       machine.config.vm.networks.each do |kind, options|
-        errors << 'Support VM must not use public/bridged LAN networking.' if kind == :public_network
         errors << 'Forwarded ports bypass the host gateway; remove this forwarding rule.' if kind == :forwarded_port && options[:disabled] != true
       end
       { 'Support host boundary' => errors }
@@ -39,12 +38,13 @@ module SupportBoundary
     match = value.match(/\A(?:[a-zA-Z0-9_.-]{1,64}:)?(\/[^:]+)(?::tag=[a-zA-Z0-9_.-]{1,64})?\z/)
     match && match[1] == repositories
   end
+  # Returns error messages for Tart provider settings. Clipboard sharing and every network mode are accepted.
   def self.tart_errors(provider, repositories = nil)
     errors = []
-    errors << 'Tart clipboard sharing must be disabled.' if provider.clipboard
-    errors << 'Tart volumes must contain only the explicitly selected repositories folder.' unless provider.volumes.empty? || provider.volumes.length == 1 && approved_volume?(provider.volumes.first, repositories)
+    errors << 'Tart volumes must contain only the explicitly selected repositories folder.' unless provider.volumes.empty? || provider.volumes.length == 1 && approved_volume?(provider.volumes.first,
+repositories)
     args = provider.extra_run_args
-    forbidden = %w[--disk --rosetta --net-bridged --net-host --net-fd --net-softnet-expose --net-softnet-control-fd --vnc --vnc-experimental]
+    forbidden = %w[--disk --rosetta --vnc --vnc-experimental]
     shares = provider.volumes.dup
     args.each_with_index do |arg, i|
       shares << args[i + 1] if arg == '--dir'
@@ -52,7 +52,7 @@ module SupportBoundary
     end
     errors << 'Only one approved repository share is permitted.' unless shares.empty? || shares.length == 1 && shares.first && approved_volume?(shares.first, repositories)
     if args.any? { |arg| forbidden.any? { |flag| arg == flag || arg.start_with?(flag + '=') } }
-      errors << 'Tart extra arguments contain a host share, device, alternate network or remote-control bypass.'
+      errors << 'Tart extra arguments contain a host disk, Rosetta share or remote-control bypass.'
     end
     errors << 'Tart VNC must be disabled.' if provider.vnc || provider.vnc_experimental
     errors

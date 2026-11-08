@@ -3,7 +3,7 @@ import {promisify} from 'node:util';
 import {readFile,lstat,realpath} from 'node:fs/promises';
 import {renderPF,type NetworkPolicy} from './policy.js';
 const exec=promisify(execFile);
-// Fixed binaries/arguments only. No privileged HTTP API, no password collection or shell.
+// Fixed binaries and arguments only.
 async function pf(args:string[]){return (await exec(process.getuid?.()===0?'/sbin/pfctl':'/usr/bin/sudo',process.getuid?.()===0?args:['-n','/sbin/pfctl',...args],{timeout:4000,maxBuffer:128*1024,env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin',LC_ALL:'C'}})).stdout;}
 export function normalizedRules(text:string){return text.split('\n').map(s=>s.trim()).filter(s=>/^(block |pass |anchor )/.test(s)).map(s=>s.replace(/\s+/g,' ')).join('\n');}
 export function checkLoadedPF({info,main,loaded,expected,interfaces,pfInterfaces}:{info:string;main:string;loaded:string;expected:string;interfaces:string;pfInterfaces?:string},policy:NetworkPolicy){
@@ -14,7 +14,7 @@ export function checkLoadedPF({info,main,loaded,expected,interfaces,pfInterfaces
  if(pfInterfaces&&/skip/i.test(pfInterfaces))throw Error('PF skip interfaces require administrator review; isolation cannot be verified.');
  if(!new RegExp('^'+policy.interface+':','m').test(interfaces))throw Error('Dedicated VM interface is missing.');
 }
-/** Audit only. Admin must install rules with the VM powered off; never flush the Mac's rules/states. */
+/** Audit only. Never changes PF rules. */
 export async function verifyPF(policy:NetworkPolicy){
  if(process.platform!=='darwin')throw Error('VM host enforcement requires macOS. This Linux service is unchanged.');
  const file='/etc/pf.anchors/support_vm';

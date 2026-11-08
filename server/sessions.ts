@@ -6,7 +6,7 @@ import type {Deployment} from './deployment.js';
 const token=()=>randomBytes(32).toString('base64url');
 const digest=(s:string)=>createHash('sha256').update(s).digest('hex');
 type Session={principal:Principal;csrf:string;expires:number;epoch:number};
-/** Session secrets never persist; a restart requires the existing Vault passphrase, not a startup token. */
+/** Session secrets are never persisted. */
 export class Sessions{
  private entries=new Map<string,Session>();
  constructor(private store:Store,private config:Deployment,private clock=Date.now){workspaceIdentity(store);

@@ -10,11 +10,11 @@ const route=(message:string,context?:ConnectionName)=>{const action=errorRecover
 test('Vault access errors from every page lead to Vault without depending on the tool context',()=>{
  for(const context of [undefined,'Model','GitLab','YouTrack','Alertmanager','Toolbox'] as const)for(const message of ['Unlock the credential vault in Settings → Vault first.','Unlock the Vault to read investigations.','Unlock Settings → Vault to view logs.','Polling paused · Vault locked','Incorrect vault passphrase.','Create the vault first.'])assert.equal(route(message,context),'#/settings?section=Vault',message);
 });
-test('service tokens route to Vault; model API keys and subscription accounts route to Model',()=>{
- for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack'])assert.equal(route(`Save the ${name} credential in the Vault first.`),'#/settings?section=Vault');
+test('service credentials route to their connection settings; model API keys and subscription accounts route to Model',()=>{
+ for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack'])assert.equal(route(`Save the ${name} credential in the Vault first.`),`#/settings?section=Connections&tool=${name}`);
  for(const message of ['Save the Model credential in the Vault first.','Save the ChatGPT credential in the Vault first.','Continue with ChatGPT in Settings → Model first.','ChatGPT authentication expired or was revoked. Sign in again.','Sign in to Claude Code in the VM with your Claude subscription, then check the connection in Settings → Model.','Save an API key for the selected model provider first.'])assert.equal(route(message),'#/settings?section=Model',message);
- assert.equal(route('YouTrack rejected the token.','Model'),'#/settings?section=Vault');
- assert.equal(route('Service returned HTTP 401. Check access and configuration.','GitLab'),'#/settings?section=Vault');
+ assert.equal(route('YouTrack rejected the token.','Model'),'#/settings?section=Connections&tool=YouTrack');
+ assert.equal(route('Service returned HTTP 401. Check access and configuration.','GitLab'),'#/settings?section=Connections&tool=GitLab');
  assert.equal(route('Connection returned HTTP 403. Check access and endpoint settings.','Model'),'#/logs?step=error&tool=Model');
 });
 test('configuration failures select the actual tool; Toolbox never asks for a service token',()=>{

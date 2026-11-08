@@ -1,5 +1,5 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
-// Small dependency-free ZIP writer (stored entries). Fixed allowlist, never workspace data.
+// Minimal ZIP writer for a fixed file list.
 const entries=['SupportCompanion.swift','ExistingVM.swift','InspectProcesses.swift','build-app.sh','Info.plist','install.sh','README.md'];
 function crc32(data){let crc=0xffffffff;for(const byte of data){crc^=byte;for(let n=0;n<8;n++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return (crc^0xffffffff)>>>0;}
 const local=[],central=[];let offset=0;

@@ -48,7 +48,7 @@ for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
     let executable = count > 0 ? String(cString: path) : String(fields[2])
     let name = URL(fileURLWithPath: executable).lastPathComponent
     // Retain parent IDs for ancestry; do not collect other applications' arguments.
-    result.append(ProcessInfo(pid: pid, ppid: ppid, executable: executable, args: ["tart", "softnet"].contains(name) ? arguments(pid) : nil))
+    result.append(ProcessInfo(pid: pid, ppid: ppid, executable: executable, args: name == "tart" ? arguments(pid) : nil))
     if result.count > 4096 { exit(1) }
 }
 FileHandle.standardOutput.write(try JSONEncoder().encode(result))

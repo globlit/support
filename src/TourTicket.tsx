@@ -8,7 +8,7 @@ import {SlackRequests} from './SlackRequests';
 import {createTourFixture} from './tour-fixtures';
 import type {TourScene} from './tour-journey';
 
-// No duplicate ticket markup: the tour mounts the same screens as the workspace.
+// Reuse the workspace screens.
 export function TourTicket({scene}:{scene:TourScene}){
  const fixture=useMemo(()=>createTourFixture(scene),[scene]);
  const {snapshot,preview}=fixture;

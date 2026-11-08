@@ -13,7 +13,7 @@ export async function privatePath(path:string, directory=false){
 }
 const within=(root:string,child:string)=>child===root||(!relative(root,child).startsWith('..')&&!relative(root,child).startsWith('/'));
 const excluded=new Set(['.git','.ssh','.aws','.kube','.support-data','.vagrant','node_modules','.DS_Store','.env','.netrc','.npmrc','.gitconfig']);
-/** Export independent regular files; never mount the source or copy back guest outputs. */
+/** Exports independent regular files. */
 export async function snapshot(source:string,destination:string,{protectedPaths=[],maxBytes=256*1024*1024,maxFiles=20000}:{protectedPaths?:string[];maxBytes?:number;maxFiles?:number}={}){
  const root=resolve(source),dest=resolve(destination);
  if(await realpath(root)!==root||!(await lstat(root)).isDirectory())throw Error('Select a real directory, not a symlink.');

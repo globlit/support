@@ -27,7 +27,7 @@ export function usageSeries(buckets:DashboardData['daily'],interval:'hour'|'day'
 export function dashboard(store:Store,overview:AIOverview,days:number,interval:'hour'|'day'='day'){const config=store.snapshot().config;const result=dashboardSummary(overview,days,config.timezone,config.retentionDays,Date.now(),interval);pruneLogs(store);const since=interval==='hour'?Date.parse(result.daily[0].date):Date.now()-days*86400000;result.tools=store.db.prepare("SELECT tool AS name,count(*) AS requests,sum(CASE WHEN status='error' THEN 1 ELSE 0 END) AS errors FROM diagnostics WHERE at>=? GROUP BY tool ORDER BY requests DESC").all(new Date(since).toISOString()) as DashboardData['tools'];result.health=toolHealth(store);
  const tokens=usageSeries(result.daily,interval,config.timezone);
  const usage={responses:0,input:0,output:0,cacheRead:0,cacheReadReported:0,cacheWrite:0,limits:[] as import('../src/telemetry-model.js').RateLimit[],limitsAt:undefined as string|undefined};
- // At most 2,000 retained, encrypted diagnostics. Do not expose model bodies.
+ // Do not expose model bodies.
  for(const row of store.db.prepare("SELECT value FROM diagnostics WHERE tool='Model' ORDER BY seq DESC").iterate()){
   const entry=JSON.parse(store.decrypt(String(row.value),store.key!)) as Diagnostic,t=entry.telemetry;if(!t)continue;
   if(t.usage&&tokens.add(entry.at,t.usage)){usage.responses++;usage.input+=t.usage.input;usage.output+=t.usage.output;usage.cacheRead+=t.usage.cacheRead??0;usage.cacheWrite+=t.usage.cacheWrite??0;if(t.usage.cacheRead!==undefined)usage.cacheReadReported++;}

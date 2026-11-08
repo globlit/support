@@ -1,6 +1,6 @@
 import {isIP} from 'node:net';
 export type Deployment={mode:'local'|'container';port:number;bindHost:string;publicOrigin:string;host:string;sessionSeconds:number;cookieName:string};
-/** Deployment authority belongs to the operator, never editable tool/model settings. */
+/** Reads deployment settings from the environment only. */
 export function deployment(env:NodeJS.ProcessEnv=process.env):Deployment{
  const mode=env.SUPPORT_DEPLOYMENT??'local';
  if(mode!=='local'&&mode!=='container')throw new Error('SUPPORT_DEPLOYMENT must be local or container. Hosted deployment is disabled until OIDC and runner isolation are implemented.');

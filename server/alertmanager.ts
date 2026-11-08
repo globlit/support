@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
 import {boundedJSON,serviceBase} from './gitlab.js';
+import {serviceAuthHeaders} from './service-auth.js';
 import {localAction,YouTrack} from './youtrack.js';
 import type {Claude} from './claude.js';
 import type {AlertCase,AlertMember,AlertQueue,SourceIssue,AlertDetail} from '../src/model.js';
@@ -23,7 +24,7 @@ export class Alertmanager {
  private pollConnection?:string;
  private ticking=false;
  constructor(private store:Store,private fetcher:typeof fetch=fetch){
-  // A process restart cannot resume a model call. Keep the case and require an explicit retry.
+  // Require an explicit retry after a restart.
   for(const c of store.alertCases())if(c.run?.state==='running'){
    c.run.state='failed';c.run.error='Investigation interrupted by restart. Analyze again.';store.saveAlert(c);
   }
@@ -34,12 +35,12 @@ export class Alertmanager {
   if(!s.vault.unlocked)throw new AppError(423,'Unlock the vault to poll alerts.');
   const base=serviceBase(c.endpoint);
   if(/\/api\/v2\/?$/.test(base.pathname))throw new AppError(400,'Use the Alertmanager base URL, without /api/v2.');
-  // Changing matchers or grouping creates a separate scope, never marking the old scope absent.
+  // New matchers or grouping create a separate scope.
   const configured=s.config.alerting.groupBy.split(',').map(k=>k.trim()).filter(Boolean);
   const keys=configured.length?[...new Set(['alertname',...configured])].sort():[];
   return {base,keys,filters:c.scope.split('\n').map(v=>v.trim()).filter(Boolean),
    connection:'alertmanager:'+digest([base.href,c.scope.trim(),keys]),revision:s.configRevision,epoch:this.store.credentialEpoch,
-   token:s.vault.credentials.includes('Alertmanager')?this.store.readCredential('Alertmanager'):undefined};
+   headers:serviceAuthHeaders(this.store,'Alertmanager')};
  }
  private check(ctx:ReturnType<Alertmanager['context']>){
   if(ctx.revision!==this.store.snapshot().configRevision||ctx.epoch!==this.store.credentialEpoch||!this.store.key)
@@ -63,7 +64,7 @@ export class Alertmanager {
   const ctx=this.context(),url=new URL('api/v2/alerts',ctx.base);
   for(const key of ['active','silenced','inhibited','unprocessed'])url.searchParams.set(key,'true');
   for(const filter of ctx.filters)url.searchParams.append('filter',filter);
-  const raw=await boundedJSON(this.fetcher,url,ctx.token?{Authorization:'Bearer '+ctx.token}:{});
+  const raw=await boundedJSON(this.fetcher,url,ctx.headers);
   const alerts=z.array(alertSchema).max(5000).parse(raw);this.check(ctx);
   const secrets=this.store.secretValues();
   const groups=new Map<string,{labels:Record<string,string>;members:AlertMember[]}>();
@@ -71,7 +72,7 @@ export class Alertmanager {
    if(!['warning','critical'].includes(a.labels.severity?.toLowerCase()))continue;
    const keyLabels=ctx.keys.length?Object.fromEntries(ctx.keys.map(k=>[k,a.labels[k]??''])):
     Object.fromEntries(Object.entries(a.labels).filter(([k])=>k!=='severity'));
-   // Hash the original identity before redaction, so two sensitive label values cannot collapse together.
+   // Hash the identity before redaction.
    const id=digest([ctx.connection,sorted(keyLabels)]);
    const group=groups.get(id)??{labels:this.cleanLabels(keyLabels,secrets),members:[]};
    const member={fingerprint:a.fingerprint,labels:this.cleanLabels(a.labels,secrets),annotations:this.cleanLabels(a.annotations,secrets),startsAt:a.startsAt,state:a.status.state};
@@ -96,7 +97,7 @@ export class Alertmanager {
    for(const c of old)if(c.active&&!groups.has(c.id)){
     c.active=false;c.updated=Math.max(Date.now(),c.updated+1);this.store.saveAlert(c);this.store.workSession(this.source(c));
    }
-   // Prune only inactive local cases. Active or linked cases are retained for continuity.
+   // Prune inactive cases only.
    const cutoff=Date.now()-this.store.snapshot().config.retentionDays*86400000;
    for(const c of this.store.alertCases())if(!c.active&&!c.ticket&&c.ticketCreation?.state!=='pending'&&Date.parse(c.lastSeen)<cutoff){
     this.store.db.prepare('DELETE FROM alert_cases WHERE id=?').run(c.id);
@@ -157,7 +158,7 @@ export class Alertmanager {
    if(!next)return;
    try{await this.analyze(next.id,{revision:next.session.revision,sourceUpdated:next.updated},claude);}
    catch(e){
-    // Busy work is retried later. Configuration failures are visible and never loop model calls.
+    // Retry busy work later.
     if(e instanceof AppError&&e.status===409)return;
     const c=this.store.alert(next.id);c.autoAttempt=c.episodes;this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(c.connection+':'+c.id,this.source(c).sourceFingerprint??String(c.updated),new Date().toISOString());
     c.run={id:'',issueId:c.id,state:'failed',startedAt:new Date().toISOString(),events:[],error:e instanceof AppError?e.message:'Investigation could not start.'};this.store.saveAlert(c);

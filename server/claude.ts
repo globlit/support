@@ -3,8 +3,9 @@ import {configuredModelFetch,modelKey} from './model-api.js';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
-import {readToolbox,contexts,resources} from './toolbox.js';
+import {readToolbox,toolboxFiles,contexts,resources} from './toolbox.js';
 import {YouTrack} from './youtrack.js';
+import {serviceAuthHeaders} from './service-auth.js';
 import type {AnalysisRun,SourceIssue} from '../src/model.js';
 
 const inputSchema=z.object({plan:z.string().trim().min(1).max(16000),replyDraft:z.string().max(16000),findings:z.array(z.object({callId:z.string(),summary:z.string().max(4000)}).strict()).max(12).optional()}).strict();
@@ -42,7 +43,7 @@ export class Claude {
    if(detail.issue.resolved||detail.issue.updated!==expected.sourceUpdated||detail.session.revision!==expected.revision)throw new AppError(409,'The ticket or work session changed. Refresh before analyzing.');
    Object.assign(run,{connection:detail.issue.connection,sourceUpdated:detail.issue.updated,sourceFingerprint:detail.issue.sourceFingerprint,model:model.scope});this.runs.set(run.id,run);this.store.saveInvestigation(run);
    this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(detail.issue.connection+':'+id,detail.issue.sourceFingerprint??String(detail.issue.updated),new Date().toISOString());
-   // Bounded, filtered tool traces are encrypted in the local vault.
+   // Tool traces are encrypted in the Vault.
    while(this.runs.size>50)this.runs.delete(this.runs.keys().next().value!);
    void this.execute(run,detail.issue,expected.revision,base,key,model.scope,config,controller,check,source).finally(()=>{this.active.delete(run.id);release();});
    return this.status(run.id);
@@ -104,12 +105,11 @@ export class Claude {
      if(!available.some(t=>t.name===use.name))throw new AppError(403,'Model requested an unavailable tool. No action was taken.');
      const trace:AnalysisRun['events'][number]={at:new Date().toISOString(),text:use.name,callId:use.id,tool:use.name,input:filteredJSON(use.input).slice(0,8000),status:'running'};run.events.push(trace);persist();let result:unknown;
      if(use.name==='toolbox_get'){
-      event('Reading Kubernetes resources through Toolbox');result=await this.toolboxReader(config,use.input,controller.signal);check();
+      event('Reading Kubernetes resources through Toolbox');result=await this.toolboxReader(config,use.input,controller.signal,toolboxFiles(this.store));check();
      }else if(use.name==='prometheus_query'){
       const {query}=z.object({query:z.string().min(1).max(2000)}).strict().parse(use.input);
       event('Reading Prometheus metrics');const c=config.connections.Prometheus;const u=new URL('api/v1/query',this.base(c.endpoint));u.searchParams.set('query',redact(query));u.searchParams.set('timeout','10s');u.searchParams.set('limit','100');
-      const token=this.store.vaultStatus().credentials.includes('Prometheus')?this.store.readCredential('Prometheus'):null;
-      result=await request(u,token?{Authorization:`Bearer ${token}`} : {});
+      result=await request(u,serviceAuthHeaders(this.store,'Prometheus'));
      }else if(use.name==='gitlab_pipelines'){
       const {project}=z.object({project:z.string().min(1).max(300).regex(/^[a-zA-Z0-9_\/-]+$/)}).strict().parse(use.input);
       if(project.split('/').some(s=>!s||s==='.'||s==='..'))throw new AppError(400,'Invalid GitLab project.');

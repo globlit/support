@@ -3,7 +3,7 @@ import {redactDiagnostic} from './diagnostics.js';
 export type ResponseFailure={httpStatus:number;event?:string;code?:string;param?:string;requestId?:string;reason?:string;message?:string;summary:string};
 const object=(v:unknown):Record<string,unknown>=>v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 
-// Only error fields are retained. Never copy response output, prompts or reasoning.
+// Keep error fields only.
 export function responseFailure(payload:unknown,response:Response,event?:string,secrets:string[]=[]):ResponseFailure{
  const root=object(payload),nested=object(root.response),error=object(nested.error??root.error);
  const clean=(v:unknown,max=160)=>typeof v==='string'?redactDiagnostic(v,secrets).replace(/[\x00-\x1f\x7f]/g,' ').slice(0,max):undefined;

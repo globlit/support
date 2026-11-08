@@ -19,7 +19,7 @@ const outputSchema=z.discriminatedUnion('type',[
  z.object({type:z.literal('reasoning'),id:z.string(),encrypted_content:z.string().optional()}).passthrough(),
  z.object({type:z.literal('message'),content:z.array(z.object({type:z.string(),text:z.string().optional()}))}).passthrough(),
 ]);
-// One adapter per run. Raw provider history stays in memory, never in work sessions.
+// Provider history stays in memory.
 export function modelFetch(provider:ModelProvider,fetcher:typeof fetch=fetch,subscription=false,options:{secrets?:string[];onUsage?:(usage:TokenUsage|undefined,limits:RateLimit[])=>void;onFailure?:(failure:ResponseFailure)=>void}={}):typeof fetch{
  if(provider==='anthropic')return async(url,init)=>{const response=await fetcher(url,init);if(response.status>=400){const key=new Headers(init?.headers).get('x-api-key');const result=responseFailure(await readFailureBody(response),response,undefined,[...(key?[key]:[]),...(options.secrets??[])]);options.onFailure?.(result);throw new AppError(502,result.summary);}const limits=rateLimits(response.headers,'anthropic');if(options.onUsage&&response.ok){const chunks:Uint8Array[]=[];let bytes=0;if(response.body)for await(const chunk of response.body as unknown as AsyncIterable<Uint8Array>){bytes+=chunk.length;if(bytes>2_000_000)throw new AppError(502,'Model response too large.');chunks.push(chunk);}const text=Buffer.concat(chunks).toString();let usage:TokenUsage|undefined;try{usage=tokenUsage(JSON.parse(text).usage,'anthropic')}catch{}options.onUsage(usage,limits);return new Response(text,{status:response.status,headers:response.headers});}return response;};
  const history=new Map<string,unknown[]>();

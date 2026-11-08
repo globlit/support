@@ -1,7 +1,6 @@
 import type {ChangeSet} from './model';
 
-// Only a verified resolution draft can become a reply for review. Investigation
-// drafts and source-branch CI results never establish implementation completion.
+// Only a verified resolution draft can become a reply.
 export function replyStatus(change?:ChangeSet){
  const state=change?.resolution?.state;
  if(state==='posting')return 'Confirming delivery';

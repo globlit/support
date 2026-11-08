@@ -53,7 +53,7 @@ export class ChatGPT{
    if(!scopes.includes('chatgpt.tokens.use.direct')){this.invalidate();throw new AppError(403,'ChatGPT plan permission is no longer granted.');}
    this.lastMessage='Account session refreshed.';return t.access_token;
   }catch(e){
-   // A transient network/provider failure is not a sign-out. Never erase a newer login.
+   // A network failure is not a sign-out.
    if(e instanceof AppError&&e.status===401){try{const d=current();d.accounts=d.accounts.map(x=>x.client===a.client?{...x,tokens:undefined}:x);this.save(d);this.lastMessage='ChatGPT requires sign-in again. Your registration is retained.';}catch{/* Vault or account already changed. */}}
    throw e;
   }

@@ -3,8 +3,7 @@ import {api} from './api';
 import {navigate,parseRoute,type Route} from './navigation';
 import type {HandlingMode} from './intake-model';
 
-// Scoped dependencies let the tour render production screens without service access,
-// browser navigation, or changes to the engineer's saved filters.
+// Lets the tour render real screens without service access.
 export type WorkspacePreview={
  request:typeof api;
  route:Route;
