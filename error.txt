@@ -1,0 +1,30 @@
+
+> support@0.1.0 build:host
+> tsc -p tsconfig.host.json && node scripts/package-host.mjs
+
+Packaged independent host UI and data gateway (host-dist).
+STEP 4 Compiling the native companion
+/Users/user/claude_access/github/support/.mac-build/build.Jfz1de/work/companion/macos/ExistingVM.swift:148:24: error: external macro implementation type 'SwiftUIMacros.StateMacro' could not be found for macro 'State()'; plugin for module 'SwiftUIMacros' not found
+146 | @MainActor struct ExistingVMView: View {
+147 |     @ObservedObject private var model = ExistingVMConnection.shared
+148 |     @State private var expanded: String?
+    |                        `- error: external macro implementation type 'SwiftUIMacros.StateMacro' could not be found for macro 'State()'; plugin for module 'SwiftUIMacros' not found
+149 |     var body: some View {
+150 |         VStack(alignment: .leading, spacing: 16) {
+
+SwiftUI.State:1:145: note: 'State()' declared here
+1 | @attached(accessor, names: named(init), named(get), named(set)) @attached(peer, names: prefixed(`_`), prefixed(__), prefixed(`$`)) public macro State() = #externalMacro(module: "SwiftUIMacros", type: "StateMacro")
+  |                                                                                                                                                 `- note: 'State()' declared here
+
+/Users/user/claude_access/github/support/.mac-build/build.Jfz1de/work/companion/macos/ExistingVM.swift:148:24: error: external macro implementation type 'SwiftUIMacros.StateMacro' could not be found for macro 'State()'; plugin for module 'SwiftUIMacros' not found
+146 | @MainActor struct ExistingVMView: View {
+147 |     @ObservedObject private var model = ExistingVMConnection.shared
+148 |     @State private var expanded: String?
+    |                        `- error: external macro implementation type 'SwiftUIMacros.StateMacro' could not be found for macro 'State()'; plugin for module 'SwiftUIMacros' not found
+149 |     var body: some View {
+150 |         VStack(alignment: .leading, spacing: 16) {
+
+SwiftUI.State:1:145: note: 'State()' declared here
+1 | @attached(accessor, names: named(init), named(get), named(set)) @attached(peer, names: prefixed(`_`), prefixed(__), prefixed(`$`)) public macro State() = #externalMacro(module: "SwiftUIMacros", type: "StateMacro")
+  |                                                                                                                                                 `- note: 'State()' declared here
+
