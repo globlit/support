@@ -1,6 +1,10 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {createElement} from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 // Small dependency-free ZIP writer (stored entries). Fixed allowlist, never workspace data.
-const entries=['SupportCompanion.swift','ManagedFiles.swift','ManagedTransport.swift','ManagedVM.swift','ManagedVMView.swift','ManagedVM.entitlements','Info.plist','install.sh','README.md'];
+const entries=['SupportCompanion.swift','ExistingVM.swift','build-app.sh','Info.plist','install.sh','README.md'];
 function crc32(data){let crc=0xffffffff;for(const byte of data){crc^=byte;for(let n=0;n<8;n++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return (crc^0xffffffff)>>>0;}
 const local=[],central=[];let offset=0;
 for(const filename of entries){
@@ -23,3 +27,7 @@ const markup=guide.split('\n\n').map(block=>{
 }).join('\n');
 await writeFile(new URL('companion-guide.html',out),`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Support Companion · Setup</title><style>:root{color-scheme:light dark}body{font:15px/1.65 system-ui;margin:48px auto;padding:0 24px;max-width:850px}li{margin:10px 0}code{font-size:.9em;padding:2px 5px;background:#8882;border-radius:4px}h1,h2{line-height:1.2}h2{margin-top:32px}a{color:inherit}</style><a href="/#/settings?section=Notifications">← Return to Support</a><main>${markup}</main></html>`);
 console.log('Packaged Mac companion source installer and setup guide.');
+
+await writeFile(new URL('mac-install.html',out),await readFile(new URL('../docs/mac-install.html',import.meta.url)));
+const vmGuide=await readFile(new URL('../docs/existing-vm.md',import.meta.url),'utf8');
+await writeFile(new URL('existing-vm-guide.html',out),`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Support · Existing VM</title><style>:root{color-scheme:light dark}body{font:14px/1.6 system-ui;max-width:900px;margin:40px auto;padding:0 24px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#8881;padding:16px;border-radius:8px}code{font-size:.9em}li{margin:8px 0}a{color:inherit}h2{margin-top:32px}</style><h1>Existing VM setup</h1>${renderToStaticMarkup(createElement(ReactMarkdown,{remarkPlugins:[remarkGfm],children:vmGuide}))}</html>`);

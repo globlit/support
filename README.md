@@ -2,9 +2,11 @@
 
 A local-first support workspace for infrastructure engineers. The first implementation includes the application shell, live ticket flows, persistent settings, encrypted credentials, repository discovery and resumable onboarding.
 
-**This is a foundation build, not an autonomous operator.** Read-only YouTrack intake is implemented. Claude/OpenAI plan preparation and scoped Toolbox reads are implemented. Approved plans can prepare GitLab branches, followed by separately approved draft merge requests. Reviewed resolution comments and separate approved ticket closure are available. Cluster mutation is not implemented. A native macOS notification companion is available as a source installer in Settings → Notifications. YouTrack, GitLab, Alertmanager and Model checks authenticate with read-only requests; other checks validate saved configuration.
+**This is a foundation build, not an autonomous operator.** Read-only YouTrack intake is implemented. Claude/OpenAI plan preparation and scoped Toolbox reads are implemented. Approved plans can prepare GitLab branches, followed by separately approved draft merge requests. Reviewed resolution comments and separate approved ticket closure are available. Cluster mutation is not implemented. A native macOS notification companion has a Finder-launched DMG builder; see Settings → Notifications → Install on Mac. YouTrack, GitLab, Alertmanager and Model checks authenticate with read-only requests; other checks validate saved configuration.
 
 ## Run inside your Ubuntu VM
+
+Support does not manage VMs. See [Mac DMG installation and existing Vagrant/Tart setup](docs/existing-vm.md). The commands below preserve local development; the legacy SSH forward does **not** provide the required guest-to-Mac isolation.
 
 Requires Node.js 24+ and npm. No Lima dependency. Use your existing VM based on Apple virtualization.
 
@@ -61,7 +63,7 @@ Configuration exports contain selected internal URLs and paths, but no stored to
 - Toolbox reads enforce allowed contexts and namespace exclusions. Secrets, ConfigMaps, logs, raw URLs and port forwarding are not exposed.
 - Repository discovery scans at most two levels and 500 directories; it does not follow symlinks or run Git. Base branch defaults to `main` and must be reviewed.
 - Configuration changes conservatively clear all existing approvals.
-- Mac notifications: pair the native menu-bar app in Settings → Notifications. See [Mac installation, SSH pairing and troubleshooting](companion/macos/README.md). The server remains loopback-only; native OS behavior must be verified on macOS.
+- Mac notifications: pair the native menu-bar app in Settings → Notifications. See [Mac installation, existing VM and troubleshooting](companion/macos/README.md). The server remains loopback-only; native OS behavior must be verified on macOS.
 - Retention is configurable up to 30 days. Successful alert polls prune inactive, unlinked alert cases and their local work sessions after this period. Active, linked or pending-creation cases and other work history are retained; general history cleanup is not implemented.
 - UI feedback drafts survive tab changes within an open ticket; only submitted drafts/notes survive reload.
 - Source status mapping, support scheduling, reusable workflow execution and rotation handover remain future work.

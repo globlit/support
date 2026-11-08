@@ -4,29 +4,21 @@ A native menu-bar app for macOS 13 or newer (Apple silicon or Intel). It deliver
 
 ## Install on the Mac
 
-1. Download the source installer from **Support → Settings → Notifications** and unzip it.
-2. Install Apple Command Line Tools if needed: `xcode-select --install`. Use current tools (Xcode/Command Line Tools 15 or newer).
-3. Open Terminal in the extracted folder and run `bash install.sh`. It compiles locally, signs the app with a local ad-hoc signature and installs it into `~/Applications/Support Companion.app`. No sudo, package manager or external dependency download is used by the installer. Apple may need to download its tools separately.
-4. Keep the companion open; its bell icon appears in the menu bar. Launch at login is optional.
+After pulling this repository on the Mac, double-click **Build Support.app** in Finder. If Apple Command Line Tools are missing, accept their installation prompt and reopen the builder when finished. The graphical builder compiles an ad-hoc-signed companion and produces a DMG. Open it and drag **Support Companion** onto **Applications**. No terminal commands, Apple membership, Homebrew or Docker are required for this workflow. Users receiving an already built DMG need no compiler or Node installation.
 
-No Apple Developer membership or dedicated Mac build machine is planned. This development source installer does not ship a notarized binary; unsigned/ad-hoc release packaging will retain the expected per-app Gatekeeper warning. Rebuilds with ad-hoc signatures may require Keychain or notification permission again. Existing Keychain pairing is preserved, unless macOS denies access to the newly built app.
+The app is not notarized. Gatekeeper may require the per-app Open Anyway action in Privacy & Security. Do not disable Gatekeeper globally. Rebuilds can require fresh notification or Keychain permission; existing pairing/data are not erased.
 
-## Connect from the host Mac to the Ubuntu VM
+The developer source ZIP remains an alternative for maintainers; its `install.sh` is not the normal end-user installation flow. macOS compilation and launch must still be checked on the target Mac; Linux cannot produce a verified native DMG.
 
-VM connections now require the **host gateway**. The companion no longer opens a raw browser-facing SSH tunnel. Existing local-service mode is unchanged; do not select it as a bypass for a VM connection.
+## Connect a local service or existing VM
 
-The host gateway serves an independently packaged UI and bounded data, verifies host PF rules and owns a private Unix-socket SSH forward. The companion checks a fresh challenge against a private host key before sending a pairing code/token or opening the browser. Guest HTML or a process occupying the port cannot satisfy that challenge without the host key.
+For a service running on the Mac, select **On this Mac · local service**, enter its port and pair with a code from Settings → Notifications.
 
-This is development integration, not yet a certified native Vagrant installation. Follow the repository's `docs/vm-host-boundary.md` for the provider/network checks, no-share Vagrant guard and input images. Native NAT must not be assumed filterable. Actual Mac validation remains required. Native activation is currently gated in code until the actual provider network and folder controls are verified. The gateway development bundle needs Node 24; final drag-install packaging is separate work.
+For an Ubuntu VM, manage it yourself with Vagrant/Tart. Support does not create, boot, resize, provision or delete VMs. Open **VM connection**, choose the host-owned Vagrant project and click **Check provider**. The known provider is **vagrant-tart 1.0.0**. The check reports Tart/Softnet capabilities and opens no tunnel. Select a reviewed host gateway profile for a future verified connection; current unverified Tart activation is refused.
 
-After a verified native-provider adapter is implemented and the host gateway can be activated:
+Default Tart NAT and default Softnet networking permit host access. The supplied **Setup guide** explains the required host-side network, folder/device and return-path validation. The browser gateway alone is not guest isolation. Never bypass a rejected VM connection by switching to local mode or a direct SSH TCP forward.
 
-1. Choose **In my VM · host gateway** and its Support port (default 4173). No SSH host, key or tunnel options are supplied by the VM.
-2. Open the host-served Support page and unlock with the existing Vault passphrase.
-3. In **Settings → Notifications**, generate a pairing code, then paste it into the companion and select **Pair this Mac**.
-4. Allow native notifications and send a test. Clicking a notification revalidates the host gateway before opening the app.
-
-For a service actually running locally on the Mac, choose **On this Mac · local service**. It does not claim VM isolation. Do not expose Support on the LAN or retain old TCP forwards to the guest UI.
+A verified VM connection serves independent host UI assets and bounded JSON, and the companion checks a host-only challenge before pairing, notifications or navigation. It cannot approve plans or authorize workflows.
 
 ## Preferences and delivery
 
@@ -38,13 +30,13 @@ Private previews are enabled by default. If disabled, notifications may include 
 
 ## Pairing and removal
 
-The device token is stored in the Mac's Keychain. Support stores only its hash. Pairing codes are also stored only as hashes. The VM's outbox and workflow fingerprints are encrypted using the unlocked Vault key. No push provider or Apple push service is involved; notification traffic stays on the local connection or SSH tunnel.
+The device token is stored in the Mac's Keychain. Support stores only its hash. Pairing codes are also stored only as hashes. The VM's outbox and workflow fingerprints are encrypted using the unlocked Vault key. No push provider or Apple push service is involved; notification traffic stays on the local connection or protected host gateway.
 
 **Remove Mac** in Support revokes access immediately. **Disconnect** in the companion removes the local Keychain item and delivered notifications, but does not delete the server-side device; remove it in Support too. At most five Macs can be paired. Paired tokens grant only notification poll/ack access; they do not unlock the Vault or authorize workspace actions. This is not isolation from software already controlling your local OS: Support itself remains a trusted, local application.
 
 ## Troubleshooting
 
-- **Host gateway unavailable:** verify the separately installed host gateway, reviewed PF policy, dedicated forwarding key and pinned SSH host key. A missing host proof must never be bypassed with a direct tunnel.
+- **Host gateway unavailable:** open VM connection and check the provider report, profile and free browser port. A missing host proof must never be bypassed with a direct tunnel.
 - **Pairing code expired:** generate another code with the Vault unlocked. A lost response during pairing may leave an offline device entry; remove that entry and pair again.
 - **Paired but silent:** send a test with the Vault unlocked, then check System Settings → Notifications → Support Companion and Focus settings. Server “Connected” only confirms polling.
 - **Vault locked:** open Support and unlock Settings → Vault. No service token replacement is necessary.
@@ -58,6 +50,6 @@ The device token is stored in the Mac's Keychain. Support stores only its hash. 
 The backend pairing, scope, privacy, queue, lock and retry behavior is covered by repository tests. The native app needs a macOS build and an end-to-end notification check; Linux cannot compile AppKit or validate OS permissions, login launch, Keychain prompts or notification delivery. Perform those checks on the intended Mac before rollout.
 
 
-Before rollout on a Mac, verify: (1) installation and notification permission, (2) pairing and a test banner, (3) clicking the banner opens the correct page, (4) locking and unlocking the Vault pauses and resumes delivery, (5) sleeping/restarting the VM reconnects without duplicate banners, (6) Remove Mac immediately blocks delivery, and (7) Launch at login survives a Mac sign-out/sign-in. Also verify that an occupied local port and an unknown SSH host key fail without pairing.
+Before rollout on a Mac, verify: (1) installation and notification permission, (2) pairing and a test banner, (3) clicking the banner opens the correct page, (4) locking and unlocking the Vault pauses and resumes delivery, (5) sleeping/restarting the VM reconnects without duplicate banners, (6) Remove Mac immediately blocks delivery, and (7) Launch at login survives a Mac sign-out/sign-in. Also verify that an occupied local port, missing host proof and failed VM boundary all refuse pairing.
 
 Apple API references: [local notifications](https://developer.apple.com/documentation/usernotifications/scheduling-a-notification-locally-from-your-app), [notification permission](https://developer.apple.com/documentation/usernotifications/asking-permission-to-use-notifications), [login items](https://developer.apple.com/documentation/servicemanagement/smappservice), and [loopback ATS exceptions](https://developer.apple.com/documentation/BundleResources/Information-Property-List/NSAppTransportSecurity/NSExceptionDomains).

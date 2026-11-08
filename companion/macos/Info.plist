@@ -10,6 +10,6 @@
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
-<key>NSLocalNetworkUsageDescription</key><string>Connect to your chosen VM over SSH to receive Support notifications.</string>
+<key>NSLocalNetworkUsageDescription</key><string>Connect to the local Support service or protected host gateway to receive notifications.</string>
 <key>NSAppTransportSecurity</key><dict><key>NSExceptionDomains</key><dict><key>127.0.0.1</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict></dict></dict>
 </dict></plist>

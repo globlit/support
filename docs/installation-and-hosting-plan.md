@@ -1,5 +1,8 @@
 # Support installation and hosting plan
 
+**Current decision — 2026-11-08:** Users manage their own VM with vagrant-tart 1.0.0. Support does not create, provision or control VM lifecycle. The earlier managed-default stages below are superseded by [existing VM setup](existing-vm.md); the companion is delivered as an ad-hoc-signed drag-to-Applications DMG built on an existing Mac. No Apple membership or dedicated Mac runner is required. Tart isolation must be validated before its connection is enabled.
+
+
 Status: implementation roadmap, updated 2026-11-08. Step-one implementation and its verification boundaries are recorded in [security-foundation.md](security-foundation.md). The host gateway, network-policy tools and no-share input boundary are implemented in [vm-host-boundary.md](vm-host-boundary.md), pending native-provider Mac validation. This document does not claim that a DMG, managed VM, container deployment or hosted authentication already exists.
 
 The intended product is one Mac application, one browser UI and one workflow engine, with three deployment choices. Keep YouTrack authoritative and retain all plan, diff, ticket creation and reply approvals.
@@ -296,6 +299,6 @@ Additional required validation:
 
 ## 11. Recommended scope
 
-Deliver the native DMG and existing-VM bundle first, then the managed VM default. Keep browser workflows shared throughout. Develop hosted identity and the restricted runner protocol before enabling hosted infrastructure access. The company-IP allowlist reduces exposure; OIDC, application authorization, independent runner policy and protected GitOps delivery provide the authority boundaries.
+Finish the existing-VM connection adapter and validate Tart/Softnet isolation on the intended Mac. The DMG builder and connection diagnostics preserve local-service mode. App-owned VM creation and image distribution are out of scope. Hosted identity and independent runner isolation remain required before hosted infrastructure access.
 
 The remaining deployment-specific inputs are the actual ingress/gateway implementation, company egress CIDRs (including runner egress), Google Workspace domain/client registration, existing key/backup services and supported Mac baseline. These are configuration/release inputs, not reasons to redesign the three-mode architecture.

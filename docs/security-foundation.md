@@ -33,6 +33,8 @@ Historical plan approvals without an authenticated actor ID are preserved in `st
 
 ## VM-to-Mac boundary
 
+Support now targets an [existing Vagrant/Tart VM](existing-vm.md); the app-owned VM controller is removed. The host UI gateway and no-direct-tunnel protections remain. Tart/Softnet runtime enforcement still requires Mac validation; installation diagnostics do not authorize a connection.
+
 The next implementation slice replaces the raw TCP forward with a host-owned UI/data gateway and a private Unix-socket SSH forward. The companion now requires host-only proof in VM mode. Host PF generation/verification, independent input snapshots and a no-share Vagrant configuration guard are implemented in [vm-host-boundary.md](vm-host-boundary.md).
 
 That document supersedes the initial tunnel design and lists the provider-specific Mac validation still required. These controls have not been installed on the user's Mac, and an unknown native Vagrant NAT path is not assumed isolated. Local mode and its authenticated sessions remain unchanged.

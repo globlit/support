@@ -11,12 +11,13 @@ architecture=$3
 command -v fakeroot >/dev/null
 command -v mkfs.ext4 >/dev/null
 stage=$(mktemp -d)
+script_dir=$(cd "$(dirname "$0")" && pwd)
 trap 'rm -rf -- "$stage"' EXIT
 mkdir -p "$stage/root" "$output"
 # A trusted OCI export, not a guest-generated archive. fakeroot retains root ownership
 # in the filesystem without mounting anything or requiring a privileged loop device.
 fakeroot bash -euc 'tar --numeric-owner -xpf "$1" -C "$2"; truncate -s 8G "$3"; mkfs.ext4 -q -F -L SUPPORT_ROOT -d "$2" "$3"' _ "$rootfs_tar" "$stage/root" "$output/rootfs.raw"
-python3 - "$stage/root" "$output" "$architecture" <<'PY'
+python3 - "$stage/root" "$output" "$architecture" "$script_dir" <<'PY'
 import hashlib, json, pathlib, shutil, sys
 root, output = map(pathlib.Path, sys.argv[1:3])
 kernels = sorted((root/'boot').glob('vmlinuz-*'))
@@ -24,7 +25,8 @@ if len(kernels) != 1:
     raise SystemExit('Expected one reviewed kernel in the rootfs export.')
 kernel = kernels[0]
 initrd = root/'boot'/('initrd.img-'+kernel.name.removeprefix('vmlinuz-'))
-shutil.copyfile(kernel, output/'vmlinuz')
+import runpy
+runpy.run_path(str(pathlib.Path(sys.argv[4])/'prepare-kernel.py'))['prepare'](kernel, output/'vmlinuz', sys.argv[3])
 shutil.copyfile(initrd, output/'initrd')
 hashes = {}
 for name in ['vmlinuz','initrd','rootfs.raw']:

@@ -7,3 +7,7 @@ dist/
 host-dist/
 
 guest-dist/
+__pycache__/
+
+.mac-build/
+release/

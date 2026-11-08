@@ -1,5 +1,7 @@
 # VM host boundary
 
+**Deployment decision:** Support connects to an independently managed VM. The identified provider is **vagrant-tart 1.0.0**. See [existing VM installation and validation](existing-vm.md). The app-owned VM controller was removed; native Tart network validation remains required and activation remains gated.
+
 Implemented 2026-11-08: a separate host UI/data gateway, private-socket SSH transport, a host PF policy generator and verifier, a Vagrant configuration guard, and independent input snapshots/images. **Not yet deployed or certified on the user's Mac. Native VM activation is gated in code.** The current Linux/local service remains unchanged. Neither this code nor a successful `check-network` result proves that an unknown native Vagrant provider's packets traverse PF.
 
 ## Trust and data flow
@@ -28,7 +30,7 @@ The native companion's VM mode verifies a fresh HMAC challenge using a host-only
 
 ## Native Vagrant provider: required integration checks
 
-The user uses Vagrant with native Apple virtualization. The exact plugin/provider and its network implementation are not yet identified from host output. Apple NAT alone is not a host-access boundary. PF is an administrator facility, not a supported Apple application API; this implementation is an **advanced, reviewed bridge profile**, not automatic firewall provisioning for arbitrary native NAT.
+The user uses Vagrant with native Apple virtualization. The provider is vagrant-tart 1.0.0; the installed Tart/Softnet versions, actual runtime arguments and host network enforcement still require inspection. Apple NAT alone is not a host-access boundary. PF is an administrator facility, not a supported Apple application API; this implementation is an **advanced, reviewed bridge profile**, not automatic firewall provisioning for arbitrary native NAT.
 
 Run `node host-dist/host/main.js inspect-vagrant /host/vagrant/project` on the Mac to report the exact provider and VM state. This uses the existing, host-trusted Vagrantfile and never starts or provisions a VM. The output identifies the missing provider integration; it is not an attestation.
 

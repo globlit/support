@@ -7,7 +7,26 @@ import {join} from 'node:path';
 import {parseManagedPolicy,destination,checkAddress,createManagedBroker} from '../host/managed-network.js';
 import {toolboxEnvironment} from '../server/toolbox.js';
 import {cliEnvironment} from '../server/claude-cli.js';
+import {managedLease} from '../host/managed-lease.js';
+import {execFileSync} from 'node:child_process';
 const policy=parseManagedPolicy({version:1,endpoints:[{host:'gitlab.company.test',address:'198.51.100.31',port:443,allowPrivate:false}]});
+test('native control lease closes irreversibly on invalid messages, expiry or parent exit',()=>{
+ for(const fail of ['eof','invalid','overflow','expiry','late-heartbeat']){
+  let now=0,closed=0;const lease=managedLease(()=>closed++,()=>now);
+  lease.write('BOOTING\n');assert.equal(lease.running,false);
+  lease.write('RUN');assert.equal(lease.running,false);lease.write('NING\n');assert.equal(lease.running,true);
+  now=5000;lease.write('RUNNING\n');now=10000;lease.tick();assert.equal(closed,0);
+  if(fail==='eof')lease.close();
+  if(fail==='invalid')lease.write('UNKNOWN\nRUNNING\n');
+  if(fail==='overflow')lease.write('x'.repeat(1025));
+  if(fail==='expiry'){now=11001;lease.tick();}
+  if(fail==='late-heartbeat'){now=11001;lease.write('RUNNING\n');}
+  assert.equal(closed,1);assert.equal(lease.running,false);lease.write('RUNNING\n');lease.tick();lease.close();assert.equal(closed,1);assert.equal(lease.running,false);
+ }
+});
+test('guest proxy protocol and half-close regression suite',()=>{
+ execFileSync('python3',['-B','-m','unittest','discover','-s','tests','-p','guest_bridge_test.py'],{timeout:20000,stdio:'pipe',env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
+});
 test('managed policy pins exact authority/IP/port and forbids every host address form',()=>{
  assert.equal(destination(policy,{version:1,host:'gitlab.company.test',port:443},[]).address,'198.51.100.31');
  for(const address of ['127.0.0.1','0.0.0.0','169.254.1.1','224.0.0.1','255.255.255.255','::1','::ffff:127.0.0.1','192.168.1.10'])assert.throws(()=>checkAddress(address,true,['192.168.1.10']));
@@ -50,15 +69,26 @@ test('an established connection is revoked when its pinned IP becomes a Mac addr
   assert.equal(f.connects(),1);assert.equal(await exchange(f.client(),request),'DENIED\n');assert.equal(f.connects(),1);
  }finally{await f.done();}
 });
+test('broker caps pending clients and closes an idle approved stream at its absolute deadline',async()=>{
+ const f=await fixture();try{
+  for(let n=0;n<8;n++){const c=f.client();await new Promise<void>(r=>c.once('connect',r));}
+  const excess=f.client();await new Promise<void>((r,j)=>{const timer=setTimeout(()=>j(Error('Connection cap did not close excess client')),1000);excess.once('close',()=>{clearTimeout(timer);r();});});
+  assert.equal(f.connects(),0);
+ }finally{await f.done();}
+ const bounded=await fixture({deadlineMs:100});try{
+  assert.equal(await exchange(bounded.client(),request),'OK\n');assert.equal(bounded.connects(),1);
+ }finally{await bounded.done();}
+});
 test('networkless guest tools retain explicit proxy settings without host agents or injection variables',()=>{
  const input={HTTP_PROXY:'http://127.0.0.1:18080',HTTPS_PROXY:'http://127.0.0.1:18080',NO_PROXY:'127.0.0.1,localhost',NODE_USE_ENV_PROXY:'1',SSH_AUTH_SOCK:'/host/agent',NODE_OPTIONS:'--require /host/payload',GIT_ASKPASS:'/host/command'};
  for(const env of [toolboxEnvironment(input),cliEnvironment(input)]){assert.equal(env.HTTPS_PROXY,input.HTTPS_PROXY);assert.equal(env.NODE_USE_ENV_PROXY,'1');assert.equal(env.SSH_AUTH_SOCK,undefined);assert.equal(env.NODE_OPTIONS,undefined);assert.equal(env.GIT_ASKPASS,undefined);}
 });
-test('native managed device policy and install entitlement expose no NIC or directory sharing',async()=>{
- const source=await readFile('companion/macos/ManagedVM.swift','utf8');
- assert.match(source,/config.networkDevices = \[\]/);assert.match(source,/config.directorySharingDevices = \[\]/);
- assert.doesNotMatch(source,/VZNATNetworkDeviceAttachment|VZBridgedNetworkDeviceAttachment|VZVirtioFileSystemDeviceConfiguration|VZSharedDirectory/);
- assert.match(source,/url: input, readOnly: true/);assert.match(source,/forPort: 4174/);assert.match(source,/flock\(lockFD, LOCK_EX \| LOCK_NB\)/);
- const entitlements=await readFile('companion/macos/ManagedVM.entitlements','utf8');assert.match(entitlements,/com.apple.security.virtualization/);assert.doesNotMatch(entitlements,/com.apple.vm.networking|device-access/);
- const transport=await readFile('companion/macos/ManagedTransport.swift','utf8');assert.match(transport,/device.connect\(toPort: 4173\)/);assert.match(transport,/connection.destinationPort == 4174/);assert.doesNotMatch(transport,/AF_INET|\/usr\/bin\/ssh|Process\(/);
+test('the shipped native companion cannot create or provision a VM',async()=>{
+ const app=await readFile('companion/macos/SupportCompanion.swift','utf8');
+ const build=await readFile('companion/macos/build-app.sh','utf8');
+ const connection=await readFile('companion/macos/ExistingVM.swift','utf8');
+ assert.doesNotMatch(app,/ManagedVMModel|Create.*VM|VZVirtualMachine/);
+ assert.doesNotMatch(build,/-framework Virtualization|--entitlements/);
+ assert.doesNotMatch(connection,/vagrant.*up|tart.*run|VZVirtualMachine|rootfs.raw/);
+ assert.match(connection,/inspect-vagrant/);assert.match(connection,/serve/);
 });

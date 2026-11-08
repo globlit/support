@@ -12,6 +12,7 @@ import {privatePath,snapshot} from './files.js';
 import {verifyPF} from './firewall.js';
 import {inputImage} from './input-image.js';
 import {createGateway} from './gateway.js';
+import {tartReadiness} from './tart-readiness.js';
 
 process.umask(0o077);
 const [command,file,destination]=process.argv.slice(2);
@@ -23,7 +24,18 @@ async function main(){
   let executable='';for(const candidate of ['/opt/homebrew/bin/vagrant','/usr/local/bin/vagrant','/usr/bin/vagrant'])if(await lstat(candidate).catch(()=>null)){executable=candidate;break;}
   if(!executable)throw Error('Vagrant was not found on this Mac.');
   const result=await promisify(execFile)(executable,['status','--machine-readable'],{cwd:location,timeout:20000,maxBuffer:128*1024,env:{PATH:'/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',HOME:homedir(),VAGRANT_CWD:location,VAGRANT_VAGRANTFILE:'Vagrantfile',CHECKPOINT_DISABLE:'1',VAGRANT_CHECKPOINT_DISABLE:'1'}});
-  const rows=result.stdout.split('\n').map(line=>line.split(','));console.log(JSON.stringify({machines:rows.filter(row=>['provider-name','state'].includes(row[2])).map(row=>({machine:row[1],field:row[2],value:row.slice(3).join(',')}))},null,2));return;
+  const rows=result.stdout.split('\n').map(line=>line.split(','));
+  const machines=rows.filter(row=>['provider-name','state'].includes(row[2])).map(row=>({machine:row[1],field:row[2],value:row.slice(3).join(',')}));
+  const provider=rows.find(row=>row[2]==='provider-name')?.[3]??'';
+  if(provider==='tart'){
+   const read=async(binary:string,args:string[])=>{try{return (await promisify(execFile)(binary,args,{cwd:location,timeout:10000,maxBuffer:128*1024,env:{PATH:'/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin',HOME:homedir(),CHECKPOINT_DISABLE:'1',VAGRANT_CHECKPOINT_DISABLE:'1'}})).stdout.trim();}catch{return '';}};
+   const binary=async(name:string)=>{for(const base of ['/opt/homebrew/bin','/usr/local/bin']){const p=join(base,name);if(await lstat(p).catch(()=>null))return p;}return '';};
+   const tart=await binary('tart'),softnet=await binary('softnet');
+   const plugins=await read(executable,['plugin','list']);
+   const report=tartReadiness({provider,pluginVersion:plugins.match(/vagrant-tart \(([^ ,)]+)/)?.[1],tartVersion:tart?await read(tart,['--version']):'',tartHelp:tart?await read(tart,['run','--help']):'',softnetVersion:softnet?await read(softnet,['--version']):'',softnetHelp:softnet?await read(softnet,['--help']):''});
+   console.log('Tart connection checks');for(const c of report.checks)console.log(`${c.ok?'Available':'Needs attention'} · ${c.name}: ${c.detail}`);
+   console.log('\n'+report.message+'\nSee Setup guide → Tart validation.');
+  }else console.log(JSON.stringify({machines,message:'Choose a Tart-backed Vagrant project. Other providers need their own verified host boundary.'},null,2));return;
  }
  if(command==='input-image'&&file&&destination){console.log(await inputImage(file,destination,protectedPaths));return;}
  if(command==='snapshot'&&file&&destination){console.log(await snapshot(file,destination,{protectedPaths}));return;}

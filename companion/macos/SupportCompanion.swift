@@ -106,7 +106,7 @@ final class Transport: NSObject, URLSessionTaskDelegate {
             .appendingPathComponent("Library/Application Support/Support Host", isDirectory: true)
         let file = root.appendingPathComponent("gateway-key-\(port)")
         guard FileManager.default.fileExists(atPath: file.path) else {
-            throw CompanionError(message: "VM access is not activated. Start the managed VM from Managed VM setup first.")
+            throw CompanionError(message: "VM access is not active. Open VM connection settings to check your host gateway profile.")
         }
         let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
         let dirAttrs = try FileManager.default.attributesOfItem(atPath: root.path)
@@ -261,15 +261,8 @@ final class Transport: NSObject, URLSessionTaskDelegate {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     @MainActor static var model: Companion?
-    @MainActor static var managed: ManagedVMModel?
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        MainActor.assumeIsolated {
-            guard Self.managed?.active == true || Self.managed?.busy == true else { return .terminateNow }
-            let alert = NSAlert(); alert.messageText = "Stop the managed VM before quitting"; alert.informativeText = "This lets Linux finish pending writes and preserves your workspace."; alert.addButton(withTitle: "Keep Support open"); alert.runModal(); return .terminateCancel
-        }
-    }
     func applicationDidFinishLaunching(_ notification: Notification) { UNUserNotificationCenter.current().delegate = self }
-    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { Self.model?.shutdown() } }
+    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { Self.model?.shutdown(); ExistingVMConnection.shared.stop() } }
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completion: @escaping (UNNotificationPresentationOptions) -> Void) { completion([.banner, .sound, .list]) }
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
@@ -290,10 +283,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             HStack { Image(systemName: "bell.badge").font(.largeTitle).foregroundStyle(.green); VStack(alignment: .leading) { Text("Support Companion").font(.title2.bold()); Text("Your workspace, in reach.").foregroundStyle(.secondary) } }
             Label(model.status, systemImage: model.paired ? "link" : "link.badge.plus").font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             if !model.paired {
-                Picker("Support runs", selection: $model.useSSH) { Text("Managed VM / host gateway").tag(true); Text("On this Mac · local service").tag(false) }
+                Picker("Support runs", selection: $model.useSSH) { Text("Existing VM · host gateway").tag(true); Text("On this Mac · local service").tag(false) }
                 if model.useSSH {
-                    Button("Managed VM setup…") { openWindow(id: "managed-vm") }
-                    Text("Create and start the managed VM, then pair using the same browser port. Existing Vagrant mode remains unavailable.").font(.caption).foregroundStyle(.secondary)
+                    Text("Start your VM separately. Support connects through a verified host gateway; it does not create or manage VMs.").font(.caption).foregroundStyle(.secondary)
+                    Button("VM connection settings…") { openWindow(id: "vm-connection") }
                 }
                 HStack { Text("Support port"); TextField("4173", text: $model.port).frame(width: 100) }
                 SecureField("Pairing code from Settings → Notifications", text: $model.code)
@@ -316,11 +309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 @main @MainActor struct SupportCompanionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model: Companion
-    @StateObject private var managed: ManagedVMModel
     init() {
         let instance = Companion()
         _model = StateObject(wrappedValue: instance)
-        let machine = ManagedVMModel(); _managed = StateObject(wrappedValue: machine); AppDelegate.managed = machine
         AppDelegate.model = instance
     }
     @Environment(\.openWindow) private var openWindow
@@ -328,12 +319,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Window("Support Companion", id: "companion") {
             CompanionView(model: model).onAppear { AppDelegate.model = model }
         }.windowResizability(.contentSize)
-        Window("Managed VM", id: "managed-vm") { ManagedVMView(model: managed) }.windowResizability(.contentSize)
+        Window("VM connection", id: "vm-connection") { ExistingVMView() }.windowResizability(.contentSize)
         MenuBarExtra("Support", systemImage: "bell.badge") {
             Text(model.status)
             Button("Open Support") { model.open() }
+            Button("VM connection…") { openWindow(id: "vm-connection"); NSApp.activate(ignoringOtherApps: true) }
             Button("Companion settings…") { openWindow(id: "companion"); NSApp.activate(ignoringOtherApps: true) }
-            Button("Managed VM…") { openWindow(id: "managed-vm"); NSApp.activate(ignoringOtherApps: true) }
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }

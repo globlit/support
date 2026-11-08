@@ -9,12 +9,27 @@ module SupportBoundary
       enabled = machine.config.vm.synced_folders.values.reject { |folder| folder[:disabled] }
       errors << 'Support VM must have NO synced folders, including /vagrant and /workspace. Use an independent input disk or guest Git clone.' unless enabled.empty?
       errors << 'SSH agent forwarding must be disabled.' if machine.config.ssh.forward_agent
+      if machine.provider_name.to_s == 'tart'
+        errors.concat(SupportBoundary.tart_errors(machine.provider_config))
+      end
       machine.config.vm.networks.each do |kind, options|
         errors << 'Support VM must not use public/bridged LAN networking.' if kind == :public_network
         errors << 'Forwarded ports bypass the host gateway; remove this forwarding rule.' if kind == :forwarded_port && options[:disabled] != true
       end
       { 'Support host boundary' => errors }
     end
+  end
+  def self.tart_errors(provider)
+    errors = []
+    errors << 'Tart clipboard sharing must be disabled.' if provider.clipboard
+    errors << 'Tart provider volumes must be empty; read-only host shares are also forbidden.' unless provider.volumes.empty?
+    args = provider.extra_run_args
+    forbidden = %w[--dir --disk --rosetta --net-bridged --net-host --net-fd --net-softnet-expose --net-softnet-control-fd --vnc --vnc-experimental]
+    if args.any? { |arg| forbidden.any? { |flag| arg == flag || arg.start_with?(flag + '=') } }
+      errors << 'Tart extra arguments contain a host share, device, alternate network or remote-control bypass.'
+    end
+    errors << 'Tart VNC must be disabled.' if provider.vnc || provider.vnc_experimental
+    errors
   end
   class Plugin < Vagrant.plugin('2')
     name 'Support host boundary'

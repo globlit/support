@@ -1,0 +1,9 @@
+[Unit]
+Description=Independent read-only Support inputs
+
+[Mount]
+What=/dev/vdb
+Where=/mnt/inputs
+Type=iso9660
+Options=ro,nodev,nosuid,noexec
+DirectoryMode=0555

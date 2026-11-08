@@ -1,6 +1,8 @@
 import {readFile,writeFile,mkdir,readdir,cp,rm} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 const root=new URL('../host-dist/public/',import.meta.url);
+await mkdir(new URL('../host-dist/',import.meta.url),{recursive:true});
+await writeFile(new URL('../host-dist/package.json',import.meta.url),JSON.stringify({private:true,type:'module',engines:{node:'>=24.5.0'}},null,2));
 await rm(root,{recursive:true,force:true});await mkdir(root,{recursive:true});
 // Locally built trusted UI, not fetched from the guest at startup or on update.
 for(const name of ['index.html','assets','downloads'])await cp(new URL('../dist/'+name,import.meta.url),new URL(name,root),{recursive:true});
