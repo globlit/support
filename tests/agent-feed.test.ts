@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Store} from '../server/store.js';
 import {AgentFeed,agentHalted,assertAgentRunning,setAgentHalted} from '../server/agent-feed.js';
-import {mergeEntries} from '../src/AgentConsole.js';
+import {mergeEntries,runTabs,clock,runKey} from '../src/AgentConsole.js';
 
 test('the feed keeps the latest entries, replays after a sequence number and tracks running runs',()=>{
  const feed=new AgentFeed(),seen:number[]=[];let states=0;feed.on('entry',e=>seen.push(e.seq));feed.on('state',()=>states++);
@@ -32,4 +32,13 @@ test('the console merges entries by sequence and drops duplicates',()=>{
  const e=(seq:number)=>({seq,at:'',runId:'r',title:'t',kind:'step' as const,text:String(seq)});
  assert.deepEqual(mergeEntries([e(1),e(3)],[e(2),e(3)]).map(x=>x.seq),[1,2,3]);
  assert.equal(mergeEntries([],Array.from({length:1600},(_,i)=>e(i))).length,1500);
+});
+
+test('the console header lists running runs first, then recent finished runs, by ticket key',()=>{
+ const e=(seq:number,runId:string,title:string)=>({seq,at:'2026-01-01T09:05:07Z',runId,title,kind:'step' as const,text:''});
+ const entries=[e(1,'a','INFRA-1 · Old'),e(2,'b','INFRA-2 · Live'),e(3,'c','alert-9 · Disk')];
+ const tabs=runTabs(entries,[{runId:'b',title:'INFRA-2 · Live',route:{page:'youtrack',issue:'2-2'},startedAt:'',lastStep:''}]);
+ assert.deepEqual(tabs.map(t=>[t.key,t.running]),[['INFRA-2',true],['alert-9',false],['INFRA-1',false]]);
+ assert.equal(runKey('INFRA-7 · Title · with dot'),'INFRA-7');
+ assert.match(clock('2026-01-01T09:05:07Z'),/^\d{2}:\d{2}:\d{2}$/);
 });
