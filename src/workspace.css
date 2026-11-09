@@ -389,3 +389,47 @@ summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; bo
 .number-field button { width: 36px; padding: 0; font-size: 16px; line-height: 1; flex-shrink: 0; }
 .key-help-tip { display: flex; align-items: center; gap: 6px; }
 .ignore-rules { margin-top: 28px; }
+.agent-console { position: fixed; right: 16px; bottom: 16px; z-index: 40; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); box-shadow: 0 6px 24px #0002; font-size: 12px; color: var(--text); }
+.agent-console.minimized { display: flex; align-items: center; gap: 6px; padding: 4px; max-width: min(460px, calc(100vw - 32px)); }
+.agent-summary { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; border: 0; background: none; padding: 5px 8px; text-align: left; font-size: 12px; }
+.agent-summary strong { white-space: nowrap; font-weight: 600; }
+.agent-last { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.agent-chevron { color: var(--muted); margin-left: auto; }
+.agent-dot { display: inline-block; flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .6; }
+.agent-dot.running { background: var(--green); opacity: 1; animation: investigation-pulse 1.4s ease-in-out infinite; }
+.agent-dot.stopped { background: var(--red); opacity: 1; }
+.agent-kill { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--line)); white-space: nowrap; font-size: 12px; padding: 5px 10px; }
+.agent-kill:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 10%, transparent); }
+.agent-resume { white-space: nowrap; font-size: 12px; padding: 5px 10px; }
+.agent-console.open { display: flex; flex-direction: column; width: min(620px, calc(100vw - 32px)); height: min(380px, calc(100dvh - 96px)); min-width: 320px; min-height: 180px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); resize: both; overflow: hidden; direction: rtl; }
+.agent-console.open > * { direction: ltr; }
+.agent-console header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--sidebar); }
+.agent-console header strong { font-weight: 600; white-space: nowrap; }
+.agent-console header select { min-width: 0; max-width: 220px; padding: 3px 8px; font-size: 11px; min-height: 0; }
+.agent-actions { display: flex; gap: 6px; margin-left: auto; }
+.agent-actions button { font-size: 12px; padding: 4px 10px; }
+.agent-minimize { width: 30px; padding: 0 !important; }
+.agent-banner { margin: 0; padding: 6px 10px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--red) 7%, transparent); }
+.agent-banner.muted { background: var(--surface); color: var(--muted); }
+.agent-log { flex: 1; overflow: auto; padding: 6px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.55; background: var(--bg); }
+.agent-line { display: grid; grid-template-columns: 62px minmax(60px, max-content) 14px minmax(0, 1fr); gap: 6px; padding: 0 10px; }
+.agent-line time { color: var(--muted); }
+.agent-run { border: 0; background: none; padding: 0; min-height: 0; font: inherit; color: var(--muted); text-align: left; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.agent-run:hover { color: var(--text); text-decoration: underline; background: none; }
+.agent-marker { color: var(--muted); text-align: center; }
+.agent-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-line.output .agent-text { color: var(--muted); }
+.agent-line.command .agent-text, .agent-line.command .agent-marker { color: var(--amber); }
+.agent-line.error .agent-text, .agent-line.error .agent-marker { color: var(--red); }
+.agent-line.run-start, .agent-line.run-end { font-weight: 600; }
+.agent-line.run-start { margin-top: 6px; }
+.agent-empty { margin: 0; padding: 12px; color: var(--muted); font-family: inherit; }
+.agent-follow { position: absolute; right: 16px; bottom: 12px; font-size: 11px; padding: 4px 10px; box-shadow: 0 2px 8px #0002; }
+.page { padding-bottom: 72px; }
+@media (max-width: 480px) {
+ .agent-console { left: 8px; right: 8px; bottom: 8px; }
+ .agent-console.minimized { max-width: none; }
+ .agent-console.open { width: auto; min-width: 0; height: 60dvh; resize: none; }
+ .agent-line { grid-template-columns: 54px 14px minmax(0, 1fr); }
+ .agent-line .agent-run { display: none; }
+}

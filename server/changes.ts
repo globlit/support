@@ -1,3 +1,4 @@
+import {assertAgentRunning} from './agent-feed.js';
 import {humanAttribution} from './identity.js';
 import {assertAgentWork} from './intake.js';
 import {configuredModelFetch,modelKey} from './model-api.js';
@@ -34,7 +35,7 @@ export class Changes {
   for(const f of c.files){const diff=d.diffs.find(d=>d.new_path===f.path&&d.old_path===f.path);if(!diff||diff.collapsed||diff.too_large||diff.renamed_file||!diff.diff||diff.new_file!==(f.before===null)||diff.deleted_file!==(f.after===null)||[diff.a_mode,diff.b_mode].some(m=>m&&m!=='0'&&m!=='000000'&&m!=='100644'&&m!=='100755'))throw new AppError(409,'Unsupported or incomplete file diff. Review is blocked.');if((f.before!==null&&f.after!==null&&diff.a_mode!==diff.b_mode)||(f.before===null&&diff.b_mode!=='100644'))throw new AppError(409,'Unexpected file mode change.');if(await g.file(f.path,branch.id)!==f.after)throw new AppError(409,'Remote file differs from the prepared change.');}
   c.head=branch.id;c.diffs=d.diffs.map(d=>({path:d.new_path,diff:d.diff})).sort((a,b)=>a.path.localeCompare(b.path));
  }
- async prepare(id:string,input:z.infer<typeof prepareSchema>){
+ async prepare(id:string,input:z.infer<typeof prepareSchema>){assertAgentRunning(this.store);
   const release=this.store.claimWork();let c:ChangeSet|undefined;let activity:ReturnType<Store['trackRun']>|undefined;
   try{
    const issue=await this.readSource(id),w=this.store.workSession(issue),s=this.store.snapshot();

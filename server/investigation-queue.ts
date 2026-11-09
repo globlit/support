@@ -1,3 +1,4 @@
+import {agentHalted} from './agent-feed.js';
 import {handling,isIgnored} from './intake.js';
 import {Store,AppError} from './store.js';
 import {YouTrack} from './youtrack.js';
@@ -9,7 +10,7 @@ export class InvestigationQueue {
  constructor(private store:Store,private source:YouTrack,private agent:Claude){}
  async tick(now=Date.now()){
   const snapshot=this.store.snapshot(),config=snapshot.config;
-  if(this.busy||!this.store.key||!config.autoInvestigate||!config.connections.YouTrack.enabled||!config.connections.Model.enabled)return;
+  if(this.busy||!this.store.key||agentHalted(this.store)||!config.autoInvestigate||!config.connections.YouTrack.enabled||!config.connections.Model.enabled)return;
   if(this.revision!==snapshot.configRevision){this.offset=0;this.next=0;this.revision=snapshot.configRevision;}
   if(now<this.next||!this.store.canAnalyze())return;
   this.busy=true;this.next=now+60000;

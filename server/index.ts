@@ -1,3 +1,5 @@
+import {agentFeed,agentHalted,setAgentHalted,type FeedEntry} from './agent-feed.js';
+import {killAllSandbox,sandboxHealth} from './sandbox.js';
 import {deployment} from './deployment.js';
 import {Sessions} from './sessions.js';
 import {withIdentity,workspaceIdentity,assertActiveRequest} from './identity.js';
@@ -45,6 +47,8 @@ const health=new HealthPoller(store);
 const healthTimer=setInterval(()=>void health.tick(),1000);healthTimer.unref();
 const youtrack=new YouTrack(store,transport);
 const claude=new Claude(store,youtrack,transport);
+/** Kill switch, running investigations and sandbox status, as shown in the agent console. */
+const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands}});
 const notifications=new Notifications(store,()=>aiOverview(store,claude).workflows);
 const notificationTimer=setInterval(()=>notifications.tick(),5000);notificationTimer.unref();
 const intake=new InvestigationQueue(store,youtrack,claude);
@@ -87,6 +91,22 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(path==='/api/session/logout'&&req.method==='POST'){sessions.logout(req,res);return send(res,{authenticated:false});}
  if(path==='/api/notifications'&&req.method==='GET')return send(res,notifications.list(notificationQuery.parse(Object.fromEntries(url.searchParams)).after));
  if(path==='/api/notifications/test'&&req.method==='POST'){await body(req);return send(res,notifications.test());}
+ if(path==='/api/agent/state'&&req.method==='GET')return send(res,await agentState());
+ if(path==='/api/agent/feed'&&req.method==='GET'){
+  const after=Number(req.headers['last-event-id']??url.searchParams.get('after')??NaN);
+  res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store','Connection':'keep-alive','X-Accel-Buffering':'no'});
+  const entry=(e:FeedEntry)=>res.write(`id: ${e.seq}\nevent: entry\ndata: ${JSON.stringify(e)}\n\n`);
+  const state=()=>void agentState().then(v=>res.write(`event: state\ndata: ${JSON.stringify(v)}\n\n`)).catch(()=>{});
+  res.write('retry: 3000\n\n');for(const e of agentFeed.since(Number.isFinite(after)?after:undefined))entry(e);state();
+  const heartbeat=setInterval(()=>{if(!sessions.valid(session)||!store.key){res.end();return;}res.write(': heartbeat\n\n');},20000);
+  agentFeed.on('entry',entry);agentFeed.on('state',state);
+  res.on('close',()=>{clearInterval(heartbeat);agentFeed.off('entry',entry);agentFeed.off('state',state);});
+  return;
+ }
+ const agentRunStop=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/stop$/);
+ if(agentRunStop&&req.method==='POST'){await body(req);claude.cancel(agentRunStop[1]);return send(res,await agentState());}
+ if(path==='/api/agent/halt'&&req.method==='POST'){await body(req);setAgentHalted(store,true);claude.cancelAll();stopTunnels();await killAllSandbox();return send(res,await agentState());}
+ if(path==='/api/agent/resume'&&req.method==='POST'){await body(req);setAgentHalted(store,false);return send(res,await agentState());}
  if(path==='/api/chatgpt'&&req.method==='GET')return send(res,chatGPT(store).status());
  if(path==='/api/chatgpt/models'&&req.method==='GET')return send(res,{models:await chatGPT(store).models()});
  if(path==='/api/chatgpt/start'&&req.method==='POST'){rateLimit();const v=z.object({account:z.string().max(200).optional()}).strict().parse(await body(req));return send(res,chatGPT(store).begin(origin,v.account));}
@@ -227,4 +247,4 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  const file=path==='/'?resolve('dist/index.html'):resolve('dist','.'+decodeURIComponent(path));const rel=relative(resolve('dist'),file);if(rel.startsWith('..')||isAbsolute(rel))throw new AppError(403,'Invalid path');const contents=await readFile(file).catch(()=>{throw new AppError(404,'Not found. Run npm run build first.');});res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'} as Record<string,string>)[extname(file)]??'application/octet-stream'});res.end(req.method==='HEAD'?undefined:contents);
  }catch(e){if(req.url?.startsWith('/api/')&&!req.url.startsWith('/api/logs'))recordDiagnostic(store,{tool:'App',operation:(req.method??'GET')+' '+req.url.split('?')[0],status:'error',durationMs:0,output:e instanceof AppError?e.message:'Request validation or processing failed.'});if(e instanceof z.ZodError)return send(res,{error:e.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; ')},400);send(res,{error:e instanceof AppError?e.message:'The operation failed. No credentials were logged.',...(e instanceof AppError&&e.code?{code:e.code}:{})},e instanceof AppError?e.status:500);}});
 server.listen(port,runtime.bindHost,()=>{console.log(`Support\nOpen: ${origin}\nDeployment: ${runtime.mode}; browser authentication required. Approved GitLab branches and reviewed draft merge requests available. Cluster writes disabled.`)});
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();stopTunnels();clearInterval(notificationTimer);clearInterval(slackTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();stopTunnels();void killAllSandbox();clearInterval(notificationTimer);clearInterval(slackTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});

@@ -3,6 +3,7 @@ import {promisify} from 'node:util';
 import {isAbsolute,join} from 'node:path';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
+import {createServer,connect,type Server} from 'node:net';
 import {z} from 'zod';
 import type {Config} from '../src/model.js';
 import {AppError,type Store} from './store.js';
@@ -67,6 +68,33 @@ function toolboxBinary(){
  return binary;
 }
 /** Runs one Toolbox read. Pasted files go to a private temporary folder, deleted after the run. */
+/** Input of `toolbox_logs`: one pod's container logs. */
+export const logsInput=z.object({
+ context:z.string().min(1).max(253),namespace:namespaceName,
+ pod:z.string().max(253).regex(/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/),
+ container:z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/).optional(),
+ previous:z.boolean().optional(),
+ tail:z.number().int().min(1).max(2000).optional(),
+ since:z.string().regex(/^\d{1,5}[smh]$/,'Use a duration such as 30s, 15m or 2h.').optional(),
+}).strict();
+/** Returns the Toolbox arguments that read one pod's logs. Fails for a context that the configuration does not allow. */
+export function toolboxLogsArgs(config:Config,input:unknown,configPath:string,allowedContexts:string[]){
+ const p=logsInput.parse(input);
+ if(!config.connections.Toolbox.enabled||!configPath||!isAbsolute(configPath)||!allowedContexts.includes(p.context))throw new AppError(403,'Toolbox context is not enabled in Settings.');
+ return ['--config',configPath,'kubectl','logs',p.pod,'-n',p.namespace,'--context',p.context,...(p.container?['-c',p.container]:[]),...(p.previous?['--previous']:[]),'--tail',String(p.tail??200),...(p.since?['--since',p.since]:[])];
+}
+/** Reads one pod's logs through Toolbox, which sanitizes them. Returns Toolbox's JSON, or the text when it is not JSON. */
+export async function readToolboxLogs(config:Config,input:unknown,signal:AbortSignal,files:ToolboxFiles|null=null){
+ const binary=toolboxBinary(),allowed=toolboxContexts(config,files);
+ toolboxLogsArgs(config,input,files?'/pasted':config.connections.Toolbox.path,allowed);
+ let run:Awaited<ReturnType<typeof toolboxRunConfig>>|undefined;
+ try{
+  run=await toolboxRunConfig(config,files);
+  const {stdout}=await exec(binary,toolboxLogsArgs(config,input,run.configPath,allowed),{signal,timeout:30000,maxBuffer:2_000_000,encoding:'utf8',shell:false,env:run.env});
+  try{return JSON.parse(stdout);}catch{return {logs:stdout.slice(-20000)};}
+ }catch{throw new AppError(502,'Toolbox could not read the logs. Check the pod, container, context access and response size.');}
+ finally{await run?.cleanup();}
+}
 export async function readToolbox(config:Config,input:unknown,signal:AbortSignal,files:ToolboxFiles|null=null){
  const binary=toolboxBinary();
  const allowed=toolboxContexts(config,files);
@@ -175,9 +203,38 @@ export async function startPortForward(config:Config,input:unknown,files:Toolbox
   let out='';
   const timer=setTimeout(()=>{child.kill('SIGTERM');reject(new AppError(504,'The tunnel did not start within 20 seconds.'));},20000);
   child.stdout!.on('data',(chunk:Buffer)=>{out+=chunk.toString('utf8');const end=out.indexOf('\n');if(end<0)return;clearTimeout(timer);
-   try{resolve(JSON.parse(out.slice(0,end)));}catch{child.kill('SIGTERM');reject(new AppError(502,`Toolbox refused the tunnel: ${out.slice(0,end).slice(0,200)}`));}});
+   let status:unknown;try{status=JSON.parse(out.slice(0,end));}catch{child.kill('SIGTERM');reject(new AppError(502,`Toolbox refused the tunnel: ${out.slice(0,end).slice(0,200)}`));return;}
+   void relayPorts(tunnelLocalPorts(p.ports,status),child).then(relays=>resolve(relays.length?{tunnel:status,reachableFromSandbox:relays.map(r=>`${r.address}:${r.port} → local ${r.local}`)}:{tunnel:status,reachableFromSandbox:[],note:'No relay: SUPPORT_RELAY_BIND is not set, so sandbox commands cannot reach this tunnel.'}),()=>resolve({tunnel:status,reachableFromSandbox:[],note:'The relay for sandbox commands could not start.'}));});
   child.once('exit',()=>{clearTimeout(timer);reject(new AppError(502,`The tunnel stopped before it started: ${out.trim().split('\n')[0]?.slice(0,200)||'no output'}`));});
  });
 }
 /** Stops every running tunnel. */
 export function stopTunnels(){for(const t of tunnels)t.kill('SIGTERM');}
+
+/**
+ * Returns the local ports of a tunnel: LOCAL for LOCAL:REMOTE, REMOTE for a bare REMOTE, and for :REMOTE the
+ * port numbers found under keys containing "local" in Toolbox's status.
+ */
+export function tunnelLocalPorts(ports:string[],status:unknown){
+ const found:number[]=[];
+ const walk=(v:unknown,key='')=>{if(Array.isArray(v))v.forEach(x=>walk(x,key));else if(v&&typeof v==='object')for(const [k,x] of Object.entries(v))walk(x,k);else if(/local/i.test(key)){const n=typeof v==='number'?v:Number(String(v).match(/:(\d{1,5})$/)?.[1]??v);if(Number.isInteger(n)&&n>0&&n<65536)found.push(n);}};
+ walk(status);
+ const explicit=ports.filter(p=>!p.startsWith(':')).map(p=>Number(p.includes(':')?p.split(':')[0]:p));
+ return [...new Set([...explicit,...(ports.some(p=>p.startsWith(':'))?found:[])])];
+}
+/**
+ * Listens on SUPPORT_RELAY_BIND, one random port per tunnel port, and forwards each connection to 127.0.0.1:<local>.
+ * The relays close when the tunnel process exits. Returns no relay when SUPPORT_RELAY_BIND is not set.
+ */
+export async function relayPorts(locals:number[],tunnel:ChildProcess,address=process.env.SUPPORT_RELAY_BIND?.trim()){
+ if(!address||!locals.length)return [];
+ const servers:Server[]=[];
+ const relays=await Promise.all(locals.map(local=>new Promise<{address:string;port:number;local:number}>((resolve,reject)=>{
+  const server=createServer(socket=>{const upstream=connect(local,'127.0.0.1');socket.pipe(upstream).pipe(socket);const close=()=>{socket.destroy();upstream.destroy();};socket.on('error',close);upstream.on('error',close);});
+  servers.push(server);server.once('error',reject);
+  server.listen(0,address,()=>resolve({address,port:(server.address() as {port:number}).port,local}));
+ })));
+ const close=()=>{for(const s of servers)s.close();};
+ if(tunnel.exitCode!==null||tunnel.signalCode!==null)close();else tunnel.once('exit',close);
+ return relays;
+}

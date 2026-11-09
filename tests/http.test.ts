@@ -92,3 +92,17 @@ test('kubeconfig merging accepts more than 20 files',{timeout:20000},async()=>{
   assert.doesNotMatch(text,/Too big/);assert.equal(r.status,process.platform==='linux'?400:403);
  }finally{await f.done()}
 });
+
+test('agent console routes require a session, and the kill switch blocks new runs until resumed',{timeout:15000},async()=>{
+ const f=await fixture(),c=f.client(),other=f.client();try{
+  await c.post('/api/vault',{action:'initialize',passphrase});
+  for(const path of ['/api/agent/state','/api/agent/feed'])assert.equal((await other.get(path)).status,401,path);
+  for(const path of ['/api/agent/halt','/api/agent/resume'])assert.equal((await other.post(path,{})).status,401,path);
+  let state=await (await c.get('/api/agent/state')).json();assert.equal(state.halted,false);assert.deepEqual(state.running,[]);assert.equal(state.sandbox.configured,false);
+  const feed=await c.get('/api/agent/feed');assert.equal(feed.status,200);assert.match(feed.headers.get('content-type')??'',/text\/event-stream/);
+  const reader=feed.body!.getReader();const first=new TextDecoder().decode((await reader.read()).value);assert.match(first,/retry: 3000/);
+  state=await (await c.post('/api/agent/halt',{})).json();assert.equal(state.halted,true);
+  state=await (await c.post('/api/agent/resume',{})).json();assert.equal(state.halted,false);
+  await reader.cancel();
+ }finally{await f.done()}
+});

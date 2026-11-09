@@ -1,3 +1,4 @@
+import {assertAgentRunning} from './agent-feed.js';
 import {humanAttribution} from './identity.js';
 import {configuredModelFetch,modelKey} from './model-api.js';
 import {createHash,randomUUID} from 'node:crypto';
@@ -28,7 +29,7 @@ export class Pipelines extends Changes {
  async track(id:string){const release=this.store.claimWork();try{const c=this.store.change(id);try{c.tracking=await this.read(c,this.git(c));if(c.resolution?.state==='closed'){const issue=await this.youtrack.issue(c.issueId);if(issue.connection===c.connection&&!issue.resolved){c.resolution.state='reopened';c.resolution.message='The ticket was reopened in YouTrack. Engineer review is required; it will not be closed again automatically.';}}}catch(e){const message=e instanceof AppError?e.message:'GitLab status is unavailable.';c.tracking=c.tracking?{...c.tracking,error:message}:{checkedAt:'',error:message,state:'unknown',mergeStatus:'unknown',draft:false,head:c.head??'',targetHead:null,pipeline:null,jobs:[],jobsLimited:false};}this.store.saveChange(c);return c;}finally{release();}}
  private eligible(c:ChangeSet,t:MergeTracking){if(t.error||t.state!=='opened'||t.head!==c.head||!t.targetHead||!t.pipeline||t.pipeline.sha!==t.head||t.pipeline.status!=='failed'||t.jobsLimited)throw new AppError(409,'Diagnosis requires an open, unchanged MR with a failed pipeline for its source commit and a complete job list. Merged-result pipelines need manual review.');}
  private redact(text:string){let value=text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'');for(const token of this.store.secretValues()){if(token)value=value.split(token).join('<redacted>');}return value.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,'<redacted>').replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/_.=-]+/gi,'$1 <redacted>').replace(/(["']?(?:password|token|secret|api[_-]?key|authorization)["']?\s*[:=]\s*)["']?[^\s,"';]+/gi,'$1<redacted>');}
- async diagnose(id:string,feedback=''){
+ async diagnose(id:string,feedback=''){assertAgentRunning(this.store);
   const release=this.store.claimWork();let activity:ReturnType<Store['trackRun']>|undefined;try{
    const c=this.store.change(id),g=this.git(c);if(c.fixes?.some(f=>f.state==='pushing'))throw new AppError(409,'Reconcile the pending fix first.');await this.guard(c,g);const t=await this.read(c,g);this.eligible(c,t);
    activity=this.store.trackRun('diagnosis',c.connection,c.issueId,this.store.snapshot().config.connections.Model.scope);activity.event('Reading failed jobs and scoped repository files');

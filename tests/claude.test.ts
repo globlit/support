@@ -24,7 +24,7 @@ test('Toolbox reads refuse secrets, extra flags, unlisted contexts and resources
  assert.deepEqual(toolboxArgs(open,{context:'dev',resource:'nodes'},path,dev),['--config',path,'kubectl','get','nodes','--context','dev','-o','json']);
  assert.ok(toolboxArgs(open,{context:'dev',namespace:'apps',resource:'configmaps'},path,dev));
 }finally{f.done()}});
-test('rejects partial plans, redirects and unbounded tool loops',async()=>{const f=fixture();try{for(const response of [()=>new Response('private upstream error',{status:302,headers:{Location:'https://elsewhere.example'}}),()=>Response.json({stop_reason:'max_tokens',content:[{type:'text',text:'truncated'}]}),()=>reply('prepare_plan',{plan:'missing reply field'})]){const c=new Claude(f.store,f.yt,(async()=>response()) as typeof fetch);const r=await c.start('2-42',{revision:1,sourceUpdated:1000});assert.equal((await wait(c,r.id)).state,'failed');}let calls=0;const c=new Claude(f.store,f.yt,(async(url)=>{calls++;return String(url).includes('claude.internal')?reply('prometheus_query',{query:'up'}):Response.json({data:[]})}) as typeof fetch);const r=await c.start('2-42',{revision:1,sourceUpdated:1000});assert.match((await wait(c,r.id)).error!,/turn limit/);assert.equal(calls,14);assert.equal((await f.yt.work('2-42')).session.plans.length,0);}finally{f.done()}});
+test('rejects partial plans, redirects and unbounded tool loops',async()=>{const f=fixture();try{for(const response of [()=>new Response('private upstream error',{status:302,headers:{Location:'https://elsewhere.example'}}),()=>Response.json({stop_reason:'max_tokens',content:[{type:'text',text:'truncated'}]}),()=>reply('prepare_plan',{plan:'missing reply field'})]){const c=new Claude(f.store,f.yt,(async()=>response()) as typeof fetch);const r=await c.start('2-42',{revision:1,sourceUpdated:1000});assert.equal((await wait(c,r.id)).state,'failed');}let calls=0;const c=new Claude(f.store,f.yt,(async(url)=>{calls++;return String(url).includes('claude.internal')?reply('prometheus_query',{query:'up'}):Response.json({data:[]})}) as typeof fetch);const r=await c.start('2-42',{revision:1,sourceUpdated:1000});assert.match((await wait(c,r.id)).error!,/turn limit/);assert.equal(calls,50);assert.equal((await f.yt.work('2-42')).session.plans.length,0);}finally{f.done()}});
 test('tool trace survives service recreation, is encrypted, and binds conclusions to calls',async()=>{const f=fixture();let turn=0;try{const c=new Claude(f.store,f.yt,(async(url)=>{if(String(url).includes('claude.internal'))return turn++===0?reply('prometheus_query',{query:'up'}):reply('prepare_plan',{plan:'## Findings\nNo series returned.',replyDraft:'',findings:[{callId:'call-prometheus_query',summary:'No series were returned; service health is not established.'}]});return Response.json({data:{result:[]},token:'hidden-output-value'});}) as typeof fetch);const r=await c.start('2-42',{revision:1,sourceUpdated:1000});await wait(c,r.id);const recreated=new Claude(f.store,f.yt);const saved=recreated.status(r.id),trace=saved.events.find(e=>e.tool);assert.equal(trace?.input,'{"query":"up"}');assert.match(trace?.result??'',/redacted/);assert.ok(!JSON.stringify(saved).includes('hidden-output-value'));assert.match(trace?.conclusion??'',/No series/);assert.equal(saved.planVersion,1);const raw=String(f.store.db.prepare('SELECT value FROM investigations WHERE id=?').get(r.id)!.value);assert.ok(!raw.includes('No series'));const session=String(f.store.db.prepare('SELECT value FROM work_sessions').get()!.value);assert.ok(!session.includes('hidden-output-value'));assert.ok(!session.includes('"result":'));f.store.lock();assert.throws(()=>f.store.investigation(r.id),/Unlock/);}finally{f.done()}});
 test('interrupted saved investigation becomes failed and old traces expire',async()=>{const f=fixture();try{const issue=await f.yt.issue('2-42');const run={id:'interrupted',issueId:issue.id,connection:issue.connection,state:'running' as const,events:[],startedAt:new Date().toISOString()};f.store.saveInvestigation(run);const c=new Claude(f.store,f.yt);assert.equal(c.status(run.id).state,'failed');f.store.saveInvestigation({...run,id:'expired',startedAt:'2020-01-01T00:00:00Z'});assert.throws(()=>f.store.investigation('expired'),/expired/);}finally{f.done()}});
 
@@ -61,4 +61,29 @@ test('plan findings are constrained to checks from the current run',async()=>{
  const actual=planTool(['call-real-1','call-real-2']).input_schema as any;
  assert.deepEqual(actual.required,['plan','replyDraft','findings']);
  assert.deepEqual(actual.properties.findings.items.properties.callId.enum,['call-real-1','call-real-2']);
+});
+test('the agent runs sandbox commands and new read tools, and the kill switch blocks new runs',async()=>{
+ const f=fixture();const previous=process.env.SUPPORT_SANDBOX_URL;process.env.SUPPORT_SANDBOX_URL='http://sandbox.internal';let turn=0;const offered:string[][]=[];const seen:string[]=[];
+ try{
+  const c=new Claude(f.store,f.yt,(async(url,opts)=>{const u=new URL(String(url));
+   if(u.hostname==='claude.internal'){const body=JSON.parse(String(opts?.body));offered.push(body.tools.map((t:{name:string})=>t.name));
+    if(turn++===0)return reply('run_command',{command:'echo $((1+1))'});
+    if(turn===2)return reply('gitlab_file',{project:'team/service',path:'deploy/values.yaml'});
+    return final();}
+   seen.push(u.hostname+u.pathname);
+   if(u.hostname==='sandbox.internal'){if(u.pathname==='/v1/exec'){assert.equal(JSON.parse(String(opts?.body)).command,'echo $((1+1))');return new Response('{"type":"stdout","data":"2\\n"}\n{"type":"exit","code":0,"durationMs":3}\n');}return Response.json({deleted:true});}
+   if(u.hostname==='gitlab.internal')return Response.json({file_path:'deploy/values.yaml',encoding:'base64',content:Buffer.from('replicas: 2').toString('base64')});
+   return Response.json({});
+  }) as typeof fetch,async()=>({data:[]}));
+  const run=await c.start('2-42',{revision:1,sourceUpdated:1000});const done=await wait(c,run.id);assert.equal(done.state,'ready',done.error);
+  for(const name of ['run_command','toolbox_logs','gitlab_file','gitlab_tree','gitlab_search','gitlab_job_log','gitlab_projects','youtrack_search','youtrack_issue','prometheus_query_range'])assert.ok(offered[0].includes(name),name);
+  const events=done.events.filter(e=>e.tool);assert.ok((events[0].result??'').includes('"exitCode":0'));assert.ok((events[0].result??'').includes('"output":"2\\n"'));assert.ok((events[1].result??'').includes('replicas: 2'));
+  assert.ok(seen.includes('gitlab.internal/api/v4/projects/team%2Fservice/repository/files/deploy%2Fvalues.yaml'));
+  await new Promise(r=>setTimeout(r,20));assert.ok(seen.some(s=>s.startsWith('sandbox.internal/v1/runs/')),'run folder cleaned up');
+  const {config,configRevision}=f.store.snapshot();f.store.config({...config,agentCommands:false},configRevision);turn=0;offered.length=0;
+  const d=await f.yt.work('2-42');const second=await c.start('2-42',{revision:d.session.revision,sourceUpdated:1000});await wait(c,second.id);assert.ok(!offered[0].includes('run_command'));
+  const {setAgentHalted}=await import('../server/agent-feed.js');setAgentHalted(f.store,true);
+  const latest=await f.yt.work('2-42');await assert.rejects(c.start('2-42',{revision:latest.session.revision,sourceUpdated:1000}),/agent is stopped/);
+  setAgentHalted(f.store,false);
+ }finally{if(previous===undefined)delete process.env.SUPPORT_SANDBOX_URL;else process.env.SUPPORT_SANDBOX_URL=previous;f.done()}
 });
