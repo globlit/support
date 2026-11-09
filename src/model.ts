@@ -8,12 +8,34 @@ const path=text.refine(v=>!v||v.startsWith('/'),'Use an absolute path.');
 export const connectionSchema=z.object({endpoint,scope:text,path,enabled:z.boolean()}).strict();
 export const alertingDefaults={pollSeconds:60,groupBy:'',autoInvestigate:false,defaultHandling:'ignore' as const};
 export const alertingSchema=z.object({pollSeconds:z.number().int().min(15).max(900),groupBy:z.string().max(500).refine(v=>!v.trim()||v.split(',').every(k=>/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k.trim())), 'Use comma-separated label names.'),autoInvestigate:z.boolean(),defaultHandling:z.enum(['ignore','ticket','investigate']).default('ignore')}).strict();
-const configObject=z.object({modelAuth:z.enum(['api_key','chatgpt','claude_cli']).default('api_key'),modelProvider:z.enum(['anthropic','openai']).default('anthropic'),alerting:alertingSchema.default(alertingDefaults),engineer:z.string().trim().min(1).max(80),timezone:z.string().refine(v=>{try{new Intl.DateTimeFormat('en',{timeZone:v});return true;}catch{return false;}},'Unknown timezone'),theme:z.enum(['auto','light','dark']),hoursStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),hoursEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),connections:z.record(z.enum(connectionNames),connectionSchema),excludedNamespaces:z.string().max(2048),retentionDays:z.number().int().min(1).max(30),maxRuns:z.number().int().min(1).max(4).default(2),autoInvestigate:z.boolean().default(true),notifications:z.object({reviews:z.boolean(),blocked:z.boolean(),reopened:z.boolean(),completion:z.boolean(),privatePreview:z.boolean()}).strict(),onboardingStep:z.number().int().min(0).max(6),onboardingComplete:z.boolean()}).strict();
+/** Kubernetes namespace name, or a pattern where "*" matches any characters, such as "kube-*" or "*gitlab*". */
+export const namespacePattern=z.string().trim().min(1).max(63).regex(/^[a-z0-9*]([-a-z0-9*]*[a-z0-9*])?$/,'Use a namespace name or a pattern with *, such as kube-* or *gitlab*.');
+/** Toolbox behaviour that Support writes into the generated Toolbox configuration. */
+export const toolboxSettingsSchema=z.object({
+ excludedNamespaces:z.array(namespacePattern).max(100),
+ allowConfigMaps:z.boolean(),
+ allowClusterScoped:z.boolean(),
+ allowPortForward:z.boolean(),
+ timeoutSeconds:z.number().int().min(1).max(120),
+ maxOutputMiB:z.number().int().min(1).max(8),
+ portForwardMaxSeconds:z.number().int().min(1).max(3600),
+ redactionLiterals:z.array(z.string().min(1).max(500)).max(100),
+ redactionPatterns:z.array(z.string().min(1).max(500)).max(100),
+}).strict();
+export const toolboxDefaults:z.infer<typeof toolboxSettingsSchema>={excludedNamespaces:['kube-*','*gitlab*','*linkerd*'],allowConfigMaps:false,allowClusterScoped:false,allowPortForward:false,timeoutSeconds:30,maxOutputMiB:1,portForwardMaxSeconds:300,redactionLiterals:[],redactionPatterns:[]};
+const configObject=z.object({modelAuth:z.enum(['api_key','chatgpt','claude_cli']).default('api_key'),modelProvider:z.enum(['anthropic','openai']).default('anthropic'),alerting:alertingSchema.default(alertingDefaults),engineer:z.string().trim().min(1).max(80),timezone:z.string().refine(v=>{try{new Intl.DateTimeFormat('en',{timeZone:v});return true;}catch{return false;}},'Unknown timezone'),theme:z.enum(['auto','light','dark']),hoursStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),hoursEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),connections:z.record(z.enum(connectionNames),connectionSchema),toolbox:toolboxSettingsSchema.default(toolboxDefaults),retentionDays:z.number().int().min(1).max(30),maxRuns:z.number().int().min(1).max(4).default(2),autoInvestigate:z.boolean().default(true),notifications:z.object({reviews:z.boolean(),blocked:z.boolean(),reopened:z.boolean(),completion:z.boolean(),privatePreview:z.boolean()}).strict(),onboardingStep:z.number().int().min(0).max(6),onboardingComplete:z.boolean()}).strict();
 /** Settings removed in earlier versions. Stored configurations and imports that still contain them load without them. */
 const removedSettings=['repositoryRoot','repositories'];
-export const configSchema=z.preprocess(value=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.entries(value).filter(([key])=>!removedSettings.includes(key))):value,configObject);
+/** Converts settings from earlier versions: drops removed settings and moves the comma-separated excludedNamespaces string into toolbox.excludedNamespaces. */
+function migrateSettings(value:unknown){
+ if(!value||typeof value!=='object'||Array.isArray(value))return value;
+ const {excludedNamespaces,...rest}=Object.fromEntries(Object.entries(value).filter(([key])=>!removedSettings.includes(key))) as Record<string,unknown>;
+ if(typeof excludedNamespaces==='string'&&rest.toolbox===undefined)rest.toolbox={...toolboxDefaults,excludedNamespaces:excludedNamespaces.split(',').map(v=>v.trim()).filter(Boolean).slice(0,100)};
+ return rest;
+}
+export const configSchema=z.preprocess(migrateSettings,configObject);
 export type Config=z.infer<typeof configSchema>;
-export const defaults:Config={modelAuth:'api_key',modelProvider:'anthropic',alerting:alertingDefaults,engineer:'Support engineer',timezone:'Europe/Paris',theme:'auto',hoursStart:'09:00',hoursEnd:'18:00',connections:Object.fromEntries(connectionNames.map(n=>[n,{endpoint:'',scope:n==='Outline'?'DevOps':n==='Slack'?'support-infra':'',path:'',enabled:false}])) as Config['connections'],excludedNamespaces:'kube-*, *gitlab*, *linkerd*',retentionDays:30,maxRuns:2,autoInvestigate:true,notifications:{reviews:true,blocked:true,reopened:true,completion:false,privatePreview:true},onboardingStep:0,onboardingComplete:false};
+export const defaults:Config={modelAuth:'api_key',modelProvider:'anthropic',alerting:alertingDefaults,engineer:'Support engineer',timezone:'Europe/Paris',theme:'auto',hoursStart:'09:00',hoursEnd:'18:00',connections:Object.fromEntries(connectionNames.map(n=>[n,{endpoint:'',scope:n==='Outline'?'DevOps':n==='Slack'?'support-infra':'',path:'',enabled:false}])) as Config['connections'],toolbox:toolboxDefaults,retentionDays:30,maxRuns:2,autoInvestigate:true,notifications:{reviews:true,blocked:true,reopened:true,completion:false,privatePreview:true},onboardingStep:0,onboardingComplete:false};
 export const stages=['Backlog','In progress','Review','Waiting','Done'] as const;
 export type Status=typeof stages[number];
 export type Step={id:string;title:string;body:string};
@@ -49,3 +71,4 @@ export type HandoffReview={hash:string;source:{id:string;title:string;updated:nu
 export type HandoffResult={detail:LiveDetail;handoff:AlertHandoff;alreadyImported:boolean};
 /** GitLab project returned by /api/gitlab/projects. */
 export type GitLabProject={project:string;name:string;defaultBranch:string|null};
+export type ToolboxSettings=z.infer<typeof toolboxSettingsSchema>;

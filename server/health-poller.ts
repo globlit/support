@@ -56,7 +56,7 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
  if(name==='Toolbox'){
   const binary=process.env.SUPPORT_TOOLBOX_BINARY??'/usr/local/bin/toolbox';
   const pasted=store.vaultStatus().credentials.includes('Toolbox');
-  if(process.platform!=='linux'||!isAbsolute(binary)||(!pasted&&!isAbsolute(c.path)))return {ok:false,detail:'Set the Toolbox executable path where Support runs, and paste the Toolbox configuration or set its path.'};
+  if(process.platform!=='linux'||!isAbsolute(binary)||(!pasted&&!isAbsolute(c.path)))return {ok:false,detail:'Add a kubeconfig and generate the Toolbox configuration in Settings → Connections → Toolbox.'};
   if(!pasted)await access(c.path,constants.R_OK);signal.throwIfAborted();
   return await probeToolboxContexts(config,pasted?toolboxFiles(store):null,signal);
  }

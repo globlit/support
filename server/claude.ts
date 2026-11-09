@@ -3,7 +3,7 @@ import {configuredModelFetch,modelKey} from './model-api.js';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
-import {readToolbox,toolboxFiles,contexts,resources} from './toolbox.js';
+import {readToolbox,toolboxFiles,toolboxContexts,readableResources,startPortForward} from './toolbox.js';
 import {YouTrack} from './youtrack.js';
 import {serviceAuthHeaders} from './service-auth.js';
 import type {AnalysisRun,SourceIssue} from '../src/model.js';
@@ -64,7 +64,11 @@ export class Claude {
   try {
    secrets.push(...this.store.secretValues());
    const available=[planTool()];
-   if(config.connections.Toolbox.enabled&&config.connections.Toolbox.path&&contexts(config).length)available.push(tool('toolbox_get','Read sanitized namespaced Kubernetes resources through Toolbox. No secrets, ConfigMaps, logs, raw URLs, port forwards or writes.',{context:{type:'string',enum:contexts(config)},namespace:str,resource:{type:'string',enum:resources}}));
+   const toolboxCredentials=toolboxFiles(this.store),toolboxContextList=config.connections.Toolbox.enabled&&(toolboxCredentials||config.connections.Toolbox.path)?toolboxContexts(config,toolboxCredentials):[];
+   if(toolboxContextList.length){
+    available.push(tool('toolbox_get',`Read sanitized Kubernetes resources through Toolbox. The Toolbox configuration decides which namespaces are allowed. Cluster-scoped resources take no namespace.${config.toolbox.allowConfigMaps?' ConfigMaps are readable.':''} No secrets, logs, raw URLs or writes.`,{context:{type:'string',enum:toolboxContextList},resource:{type:'string',enum:readableResources(config)},namespace:str},['context','resource']));
+    if(config.toolbox.allowPortForward)available.push(tool('toolbox_port_forward','Open a temporary Toolbox tunnel to a pod, service or deployment. The tunnel listens on 127.0.0.1 inside the Support server only, and you have no tool to send traffic through it. Tunnels can carry writes and unsanitized traffic.',{context:{type:'string',enum:toolboxContextList},namespace:str,target:str,ports:{type:'array',items:str,minItems:1,maxItems:8},durationSeconds:{type:'integer',minimum:1,maximum:config.toolbox.portForwardMaxSeconds}}));
+   }
    if(config.connections.Prometheus.enabled&&config.connections.Prometheus.endpoint)available.push(tool('prometheus_query','Read an instant PromQL query from the configured Prometheus query server. No range queries.',{query:str}));
    if(config.connections.GitLab.enabled&&config.connections.GitLab.endpoint)available.push(tool('gitlab_pipelines','Read the latest ten pipeline statuses of a project. No variables, logs, files or writes.',{project:str}));
    const current=this.store.workSession(issue);
@@ -106,6 +110,8 @@ export class Claude {
      const trace:AnalysisRun['events'][number]={at:new Date().toISOString(),text:use.name,callId:use.id,tool:use.name,input:filteredJSON(use.input).slice(0,8000),status:'running'};run.events.push(trace);persist();let result:unknown;
      if(use.name==='toolbox_get'){
       event('Reading Kubernetes resources through Toolbox');result=await this.toolboxReader(config,use.input,controller.signal,toolboxFiles(this.store));check();
+     }else if(use.name==='toolbox_port_forward'){
+      event('Opening a Toolbox tunnel');result=await startPortForward(config,use.input,toolboxFiles(this.store));check();
      }else if(use.name==='prometheus_query'){
       const {query}=z.object({query:z.string().min(1).max(2000)}).strict().parse(use.input);
       event('Reading Prometheus metrics');const c=config.connections.Prometheus;const u=new URL('api/v1/query',this.base(c.endpoint));u.searchParams.set('query',redact(query));u.searchParams.set('timeout','10s');u.searchParams.set('limit','100');

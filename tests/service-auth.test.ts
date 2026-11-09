@@ -15,7 +15,7 @@ function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'support-service-auth-')),store=new Store(dir);store.unlock('temporary test passphrase',true);
  const s=store.snapshot();
  store.config({...s.config,connections:{...s.config.connections,Alertmanager:{enabled:true,endpoint:'https://alerts.internal',scope:'',path:''},Prometheus:{enabled:true,endpoint:'https://metrics.internal',scope:'',path:''}}},s.configRevision);
- const save=(input:unknown)=>{const v=credentialInput.parse(input);return 'remove' in v?store.removeCredential(v.name):store.credential(v.name,storedCredential(v));};
+ const save=(input:unknown)=>{const v=credentialInput.parse(input);if('remove' in v)return store.removeCredential(v.name);if('toolbox' in v)throw new Error('The server generates Toolbox credentials.');return store.credential(v.name,storedCredential(v));};
  return {store,save,done(){store.close();rmSync(dir,{recursive:true,force:true});}};
 }
 
@@ -72,14 +72,14 @@ test('Alertmanager polling and API health checks send the saved Basic auth heade
 });
 
 const kubeconfig='apiVersion: v1\nkind: Config\nusers:\n- name: dev\n  user:\n    token: kube-secret-token-123\n';
-test('Toolbox configuration requests are validated and only accept the pasted form',()=>{
- assert.ok(credentialInput.parse({name:'Toolbox',toolbox:{config:'{"kubeconfig":"{{kubeconfig}}"}',kubeconfig}}));
+/** Vault value of a configuration pasted before generation existed (format v1). */
+const legacyToolbox=JSON.stringify({v:1,toolboxConfig:'{"kubeconfig":"{{kubeconfig}}"}',kubeconfig});
+test('Toolbox save requests take a kubeconfig and contexts, and refuse custom configurations',()=>{
+ assert.ok(credentialInput.parse({name:'Toolbox',toolbox:{kubeconfig,contexts:['dev','prod']}}));
  assert.throws(()=>credentialInput.parse({name:'Toolbox',value:'/path/toolbox.json'}));
- assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{config:'not json',kubeconfig}}),/not valid JSON/);
- assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{config:'[]',kubeconfig}}),/JSON object/);
- assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{config:'{}',kubeconfig:'  '}}),/Paste the kubeconfig/);
- assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{config:'{"kubeconfig":"/a","clusters":{"kubeConfig":"/b"}}',kubeconfig}}),/Several fields/);
- assert.ok(credentialInput.parse({name:'Toolbox',toolbox:{config:'{"kubeconfig":"/a","other":{"kubeConfig":"{{kubeconfig}}"}}',kubeconfig}}));
+ assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{config:'{"kubeconfig":"{{kubeconfig}}"}',kubeconfig}}));
+ assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{kubeconfig,contexts:[]}}),/Select at least one context/);
+ assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{kubeconfig:'  ',contexts:['dev']}}),/Paste the kubeconfig/);
  assert.ok(credentialInput.parse({name:'Toolbox',remove:true}));assert.ok(credentialInput.parse({name:'Outline',remove:true}));
 });
 
@@ -90,9 +90,9 @@ test('Toolbox configuration points at the pasted kubeconfig by placeholder or by
  assert.deepEqual(kubeconfigSecrets(kubeconfig),['kube-secret-token-123']);
 });
 
-test('pasted Toolbox configuration is saved, redacted and removable',()=>{
+test('a Toolbox configuration pasted before generation existed stays readable, redacted and removable',()=>{
  const f=fixture();try{
-  f.save({name:'Toolbox',toolbox:{config:'{"kubeconfig":"{{kubeconfig}}"}',kubeconfig}});
+  f.store.credential('Toolbox',legacyToolbox);
   assert.equal(toolboxFiles(f.store)?.kubeconfig,kubeconfig);
   assert.ok(f.store.secretValues().includes('kube-secret-token-123'));
   f.save({name:'Toolbox',remove:true});assert.equal(toolboxFiles(f.store),null);
@@ -105,7 +105,7 @@ test('Toolbox runs with private temporary files from the pasted configuration an
  process.env.SUPPORT_TOOLBOX_BINARY=binary;
  try{
   const s=f.store.snapshot();f.store.config({...s.config,connections:{...s.config.connections,Toolbox:{enabled:true,endpoint:'',scope:'dev',path:'/missing/toolbox.json'}}},s.configRevision);
-  f.save({name:'Toolbox',toolbox:{config:'{"kubeconfig":"{{kubeconfig}}"}',kubeconfig}});
+  f.store.credential('Toolbox',legacyToolbox);
   const config=f.store.snapshot().config,input={context:'dev',namespace:'apps',resource:'pods'};
   assert.deepEqual(await readToolbox(config,input,new AbortController().signal,toolboxFiles(f.store)),{items:[]});
   const [cfg,dirMode,cfgMode,kubeMode,...json]=readFileSync(record,'utf8').trim().split('\n');

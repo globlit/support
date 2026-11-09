@@ -2,7 +2,13 @@ import {z} from 'zod';
 
 export const kubeconfigPlaceholder='{{kubeconfig}}';
 const kubeconfigKey=/kube[-_]?config/i;
-const stored=z.object({v:z.literal(1),toolboxConfig:z.string(),kubeconfig:z.string()}).strict();
+/** Context of a generated configuration, with its allowed and excluded namespace counts. */
+const storedContext=z.object({name:z.string(),namespaces:z.number().int(),excluded:z.number().int()}).strict();
+/** Vault value: v1 holds a pasted custom configuration, v2 a configuration generated from the Toolbox settings. */
+const stored=z.union([
+ z.object({v:z.literal(1),toolboxConfig:z.string(),kubeconfig:z.string()}).strict(),
+ z.object({v:z.literal(2),toolboxConfig:z.string(),kubeconfig:z.string(),contexts:z.array(storedContext),settingsHash:z.string(),generatedAt:z.string()}).strict(),
+]);
 export type ToolboxFiles=z.infer<typeof stored>;
 
 type Located={count:number;keyed:number};
@@ -22,19 +28,16 @@ function replace(value:unknown,path:string,byKey:boolean,key=''):unknown{
 const noNul=(v:string)=>!v.includes('\0');
 /** Largest accepted kubeconfig, in bytes: 4 MiB, enough for a merge of many kubeconfig files. */
 export const maxKubeconfigBytes=4*1024*1024;
-/** Request body for a pasted Toolbox configuration. */
+/** Request body that saves a kubeconfig and the contexts to include. Support generates the Toolbox configuration. */
 export const toolboxCredentialSchema=z.object({
- config:z.string().min(2).max(1_048_576).refine(noNul,'The Toolbox configuration must not contain NUL characters.').superRefine((text,ctx)=>{
-  let parsed:unknown;try{parsed=JSON.parse(text);}catch{ctx.addIssue({code:'custom',message:'The Toolbox configuration is not valid JSON.'});return;}
-  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)){ctx.addIssue({code:'custom',message:'The Toolbox configuration must be a JSON object.'});return;}
-  const found=locate(parsed);
-  if(!found.count&&found.keyed>1)ctx.addIssue({code:'custom',message:`Several fields look like a kubeconfig path. Set the right one to "${kubeconfigPlaceholder}".`});
- }),
  kubeconfig:z.string().min(1).max(maxKubeconfigBytes).refine(noNul,'The kubeconfig must not contain NUL characters.').refine(v=>v.trim().length>0,'Paste the kubeconfig.'),
+ contexts:z.array(z.string().trim().min(1).max(253)).min(1,'Select at least one context.').max(100),
 }).strict();
 
-/** Returns the stored Vault value for a pasted Toolbox configuration. */
-export function toolboxCredential(input:unknown){const {config,kubeconfig}=toolboxCredentialSchema.parse(input);return JSON.stringify({v:1,toolboxConfig:config,kubeconfig});}
+/** Returns the Vault value for a generated configuration. */
+export function toolboxStoredValue(setup:{config:string;contexts:{name:string;namespaces:string[];excluded:number}[]},kubeconfig:string,settingsHash:string,now=new Date()){
+ return JSON.stringify({v:2,toolboxConfig:setup.config,kubeconfig,contexts:setup.contexts.map(c=>({name:c.name,namespaces:c.namespaces.length,excluded:c.excluded})),settingsHash,generatedAt:now.toISOString()});
+}
 export function parseToolboxFiles(raw:string):ToolboxFiles{return stored.parse(JSON.parse(raw));}
 
 /** Returns the Toolbox JSON with the kubeconfig path set to kubeconfigPath. */

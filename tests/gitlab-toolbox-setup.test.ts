@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Store} from '../server/store.js';
 import {gitLabProjects,projectPath} from '../server/gitlab.js';
-import {generateToolboxConfig,mergeKubeconfigs,probeToolboxContexts} from '../server/toolbox.js';
+import {mergeKubeconfigs,probeToolboxContexts} from '../server/toolbox.js';
 import {defaults} from '../src/model.js';
 
 function fixture(){const dir=mkdtempSync(join(tmpdir(),'support-gitlab-'));const store=new Store(dir);store.unlock('gitlab-test-passphrase',true);store.credential('GitLab','private-test-value');const s=store.snapshot();store.config({...s.config,connections:{...s.config.connections,GitLab:{enabled:true,endpoint:'https://git.internal',scope:'',path:''}}},s.configRevision);return {store,close(){store.close();rmSync(dir,{recursive:true,force:true})}};}
@@ -26,28 +26,6 @@ test('GitLab project paths need a namespace and no dot-leading segment',()=>{
  for(const value of ['project','../group/project','group/.hidden','group//project','group/project/'])assert.equal(projectPath.safeParse(value).success,false,value);
 });
 
-test('Toolbox configuration generation uses the kubeconfig placeholder and removes its temporary files',{skip:process.platform!=='linux'},async()=>{
- const dir=mkdtempSync(join(tmpdir(),'support-toolbox-fake-')),seen=join(dir,'seen'),script=join(dir,'toolbox'),previous=process.env.SUPPORT_TOOLBOX_BINARY;
- writeFileSync(script,`#!/bin/sh
-while [ $# -gt 0 ]; do case "$1" in --path) out=$2; shift;; --kubeconfig) kc=$2; shift;; esac; shift; done
-echo "$kc" > "${seen}"
-grep -q 'name: dev-ctx' "$kc" || exit 3
-printf '{"kubectl":{"binary":"/usr/local/bin/kubectl","kubeconfig":"%s","contexts":[{"name":"dev-ctx","namespaces":["default"]}]},"redaction":{"literals":[],"patterns":[]}}' "$kc" > "$out"
-`,{mode:0o700});
- process.env.SUPPORT_TOOLBOX_BINARY=script;
- try{
-  const result=await generateToolboxConfig('contexts:\n- name: dev-ctx\n');
-  const config=JSON.parse(result.config);
-  assert.equal(config.kubectl.kubeconfig,'{{kubeconfig}}');assert.deepEqual(result.contexts,['dev-ctx']);assert.deepEqual(config.redaction,{literals:[],patterns:[]});
-  const kubeconfigPath=readFileSync(seen,'utf8').trim();assert.ok(!result.config.includes(kubeconfigPath));assert.equal(existsSync(kubeconfigPath),false);
-  await assert.rejects(generateToolboxConfig('contexts: []\n'),/could not generate/);
-  writeFileSync(script,`#!/bin/sh
-while [ $# -gt 0 ]; do case "$1" in --path) out=$2; shift;; esac; shift; done
-printf '{"kubectl":{"kubeconfig":"/x","context":"only-ctx","contexts":null}}' > "$out"
-`,{mode:0o700});
-  assert.deepEqual((await generateToolboxConfig('contexts:\n- name: only-ctx\n')).contexts,['only-ctx']);
- }finally{if(previous===undefined)delete process.env.SUPPORT_TOOLBOX_BINARY;else process.env.SUPPORT_TOOLBOX_BINARY=previous;rmSync(dir,{recursive:true,force:true});}
-});
 
 const kubectlPath=process.env.SUPPORT_KUBECTL_BINARY??'/usr/local/bin/kubectl';
 const kubeconfig=(cluster:string,user:string,token:string,context:string,extra='')=>`apiVersion: v1
@@ -91,6 +69,6 @@ esac
   assert.deepEqual(await probeToolboxContexts(config('dev'),null,new AbortController().signal),{ok:true,detail:'Toolbox reached the Kubernetes API in dev (Kubernetes v1.34.2).'});
   const down=await probeToolboxContexts(config('dev, down'),null,new AbortController().signal);assert.equal(down.ok,false);assert.match(down.detail,/Context down could not be reached \(tool request failed\)/);
   const refused=await probeToolboxContexts(config('other'),null,new AbortController().signal);assert.equal(refused.ok,false);assert.match(refused.detail,/refused the check for context other: raw path is not permitted/);
-  assert.match((await probeToolboxContexts(config(''),null,new AbortController().signal)).detail,/Allowed context names/);
+  assert.match((await probeToolboxContexts(config(''),null,new AbortController().signal)).detail,/Generate the Toolbox configuration/);
  }finally{if(previous===undefined)delete process.env.SUPPORT_TOOLBOX_BINARY;else process.env.SUPPORT_TOOLBOX_BINARY=previous;rmSync(dir,{recursive:true,force:true});}
 });

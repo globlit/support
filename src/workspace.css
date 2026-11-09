@@ -329,3 +329,58 @@ html[data-tour-layout] .app { position: fixed; top: 0; left: 0; width: var(--tou
  .profile-name { display: none; }
  .profile-menu-panel { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; }
 }
+/* Disclosure sections: one chevron in the muted text color instead of the browser's arrow. It turns when the section opens.
+   Summaries that draw their own chevron (the investigation timeline) keep it. */
+summary { list-style: none; cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+summary:not(:has(.investigation-chevron))::before { content: ''; display: inline-block; width: 13px; height: 13px; margin-right: 6px; vertical-align: -2px; flex-shrink: 0; background: var(--muted); transition: transform .15s; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m6 4 4 4-4 4' fill='none' stroke='black' stroke-width='1.6'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m6 4 4 4-4 4' fill='none' stroke='black' stroke-width='1.6'/%3E%3C/svg%3E") center / contain no-repeat; }
+details[open] > summary::before { transform: rotate(90deg); }
+summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; border-radius: 5px; }
+@media (prefers-reduced-motion: reduce) { summary::before { transition: none; } }
+
+/* Alert details: a card per alert instance. */
+.heading-count { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.alert-instances { display: grid; gap: 10px; margin: 12px 0 20px; }
+.alert-instance { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; }
+.alert-instance[open] { background: var(--sidebar); }
+.alert-instance > summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; border-radius: 10px; font-size: 13px; }
+.alert-instance > summary:hover { background: var(--surface); }
+.alert-instance-title { font-weight: 550; min-width: 0; overflow-wrap: anywhere; }
+.alert-instance > summary time { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.alert-state { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.alert-state.active { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); background: color-mix(in srgb, var(--red) 8%, transparent); }
+.alert-state.unprocessed { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+.alert-instance-body { display: grid; gap: 12px; padding: 2px 14px 14px; min-width: 0; }
+.alert-instance-summary { margin: 0; font-size: 14px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+.alert-runbook { font-size: 12px; justify-self: start; }
+.alert-annotation h4 { margin: 0 0 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.alert-labels { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 10px 0 0; border-top: 1px solid var(--line); }
+.alert-labels li { display: inline-flex; gap: 4px; max-width: 100%; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.alert-labels li span { color: var(--muted); }
+.alert-labels li span::after { content: '='; }
+.alert-labels li.severity-critical, .alert-labels li.severity-high { border-color: color-mix(in srgb, var(--red) 45%, transparent); color: var(--red); }
+.alert-labels li.severity-warning { border-color: color-mix(in srgb, var(--amber) 45%, transparent); color: var(--amber); }
+/* List of entries with an add field ("+") and a remove button per entry. */
+.list-editor { display: grid; gap: 6px; margin: 4px 0 14px; min-width: 0; }
+.list-editor-add { display: flex; gap: 6px; margin-top: 6px; }
+.list-editor-add input { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.list-editor-add button { width: 36px; padding: 0; font-size: 16px; line-height: 1; }
+.list-editor-items { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
+.list-editor-items li { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 11px; max-width: 100%; }
+.list-editor-items code { overflow-wrap: anywhere; }
+.list-editor-items button { border: 0; background: none; color: var(--muted); padding: 2px 6px; min-height: 0; font-size: 14px; line-height: 1; border-radius: 4px; }
+.list-editor-items button:hover { color: var(--text); background: var(--surface); }
+/* Toolbox setup: behaviour switches with help, context checklist, generated preview. */
+.toolbox-behavior { margin-bottom: 16px; }
+.check-with-help { display: flex; align-items: flex-start; gap: 8px; }
+.check-with-help > .check { flex: 1; min-width: 0; }
+.check-with-help > .help-tip { margin-top: 2px; }
+.context-checklist { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 10px 0; display: grid; gap: 4px; max-height: 320px; overflow: auto; }
+.context-checklist legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
+.toolbox-preview, .toolbox-saved { display: grid; gap: 6px; margin: 10px 0; font-size: 12px; }
+.toolbox-preview ul, .toolbox-saved ul { margin: 0; padding-left: 18px; }
+.toolbox-preview pre { max-height: 320px; overflow: auto; white-space: pre; font-size: 11px; }
+.help-examples { display: grid; gap: 4px; margin: 8px 0; }
+.help-examples > div { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 10px; align-items: baseline; }
+.help-examples dt, .help-examples dd { margin: 0; }
+.help-examples dd { color: var(--muted); }

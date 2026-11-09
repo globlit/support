@@ -24,7 +24,6 @@ export function scopeHelp(name:ConnectionName):ReactNode{
   case 'Outline':return <>The collection name shown in Outline's left sidebar, for example <code>DevOps</code>. Case does not matter. You can also paste the collection URL, such as <code>https://outline.example.com/collection/devops-AbC123xyz9</code>, or its ID. <strong>Test</strong> checks that the saved token can read documents in it.</>;
   case 'Slack':return <>Open the channel in Slack, click its name at the top, and copy the <strong>Channel ID</strong> at the bottom of the window. It starts with <code>C</code>. Invite the Support app to this channel.</>;
   case 'Alertmanager':return <>One matcher per line, in Alertmanager syntax, for example <code>severity="critical"</code> or <code>namespace=~"prod-.*"</code>. Each line is sent as an Alertmanager filter, and an alert must match every line. Leave empty to read all alerts.</>;
-  case 'Toolbox':return <>Kubernetes context names that Support may read, separated by commas. They must exist in the Toolbox configuration. Generating the configuration below lists the detected contexts.</>;
   default:return undefined;
  }
 }

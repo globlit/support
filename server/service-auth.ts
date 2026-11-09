@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import type {Store} from './store.js';
 import {connectionNames} from '../src/model.js';
-import {toolboxCredential,toolboxCredentialSchema} from './toolbox-config.js';
+import {toolboxCredentialSchema} from './toolbox-config.js';
 
 export const serviceAuthConnections=['Alertmanager','Prometheus'] as const;
 export type ServiceAuthConnection=typeof serviceAuthConnections[number];
@@ -61,8 +61,7 @@ export const credentialInput=z.union([
  z.object({name:z.enum(removableCredentials),remove:z.literal(true)}).strict(),
 ]);
 /** Returns the value to store for a save request. */
-export function storedCredential(v:Exclude<z.infer<typeof credentialInput>,{remove:true}>){
+export function storedCredential(v:Exclude<z.infer<typeof credentialInput>,{remove:true}|{toolbox:unknown}>){
  if('basic' in v)return basicCredential(v.basic);
- if('toolbox' in v)return toolboxCredential(v.toolbox);
  return isServiceAuthConnection(v.name)?bearerCredential(v.value):v.value;
 }
