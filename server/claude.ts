@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {Store,AppError} from './store.js';
 import {readToolbox,toolboxFiles,toolboxContexts,readableResources,startPortForward} from './toolbox.js';
 import {YouTrack} from './youtrack.js';
+import {OutlineReader,outlineAvailable} from './outline.js';
 import {serviceAuthHeaders} from './service-auth.js';
 import type {AnalysisRun,SourceIssue} from '../src/model.js';
 
@@ -70,6 +71,11 @@ export class Claude {
     if(config.toolbox.allowPortForward)available.push(tool('toolbox_port_forward','Open a temporary Toolbox tunnel to a pod, service or deployment. The tunnel listens on 127.0.0.1 inside the Support server only, and you have no tool to send traffic through it. Tunnels can carry writes and unsanitized traffic.',{context:{type:'string',enum:toolboxContextList},namespace:str,target:str,ports:{type:'array',items:str,minItems:1,maxItems:8},durationSeconds:{type:'integer',minimum:1,maximum:config.toolbox.portForwardMaxSeconds}}));
    }
    if(config.connections.Prometheus.enabled&&config.connections.Prometheus.endpoint)available.push(tool('prometheus_query','Read an instant PromQL query from the configured Prometheus query server. No range queries.',{query:str}));
+   const outline=outlineAvailable(this.store,config)?new OutlineReader(this.store,config,this.fetcher):undefined;
+   if(outline){
+    available.push(tool('outline_search','Search documents in the allowed Outline collection. Returns titles, IDs and short excerpts. Read-only.',{query:str}));
+    available.push(tool('outline_read','Read one document of the allowed Outline collection as Markdown, by the ID that outline_search returned. Read-only.',{id:str}));
+   }
    if(config.connections.GitLab.enabled&&config.connections.GitLab.endpoint)available.push(tool('gitlab_pipelines','Read the latest ten pipeline statuses of a project. No variables, logs, files or writes.',{project:str}));
    const current=this.store.workSession(issue);
    const filteredJSON=(value:unknown)=>JSON.stringify(value,(key,value)=>/password|secret|token|authorization|api[_-]?key|private[_-]?key/i.test(key)?'[redacted]':typeof value==='string'?redact(value):value);
@@ -116,6 +122,10 @@ export class Claude {
       const {query}=z.object({query:z.string().min(1).max(2000)}).strict().parse(use.input);
       event('Reading Prometheus metrics');const c=config.connections.Prometheus;const u=new URL('api/v1/query',this.base(c.endpoint));u.searchParams.set('query',redact(query));u.searchParams.set('timeout','10s');u.searchParams.set('limit','100');
       result=await request(u,serviceAuthHeaders(this.store,'Prometheus'));
+     }else if(use.name==='outline_search'&&outline){
+      event('Searching Outline documents');result=await outline.search(use.input);
+     }else if(use.name==='outline_read'&&outline){
+      event('Reading an Outline document');result=await outline.read(use.input);
      }else if(use.name==='gitlab_pipelines'){
       const {project}=z.object({project:z.string().min(1).max(300).regex(/^[a-zA-Z0-9_\/-]+$/)}).strict().parse(use.input);
       if(project.split('/').some(s=>!s||s==='.'||s==='..'))throw new AppError(400,'Invalid GitLab project.');

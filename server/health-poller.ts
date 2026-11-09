@@ -1,3 +1,5 @@
+import {outlineCollectionRef} from './outline.js';
+export {outlineCollectionRef};
 import {access} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {isAbsolute} from 'node:path';
@@ -17,16 +19,6 @@ class ProbeError extends Error{}
 async function readResponse(response:Response,signal:AbortSignal,limit:number){
  const reader=response.body?.getReader();if(!reader)return '';const chunks:Uint8Array[]=[];let bytes=0;
  try{while(true){signal.throwIfAborted();const next=await reader.read();if(next.done)break;bytes+=next.value.length;if(bytes>limit)throw new ProbeError('Health response exceeded its size limit.');chunks.push(next.value)}return Buffer.concat(chunks).toString('utf8')}finally{void reader.cancel().catch(()=>{});}
-}
-/**
- * Returns the parts of an Outline collection reference: the text to match against names and IDs, and the 10-character
- * URL ID when the reference is a collection URL (`…/collection/devops-AbC123xyz9`), a URL slug, or a bare URL ID.
- */
-export function outlineCollectionRef(value:string){
- const text=value.trim(),path=text.match(/\/collection\/([^/?#]+)/)?.[1];
- const ref=path?decodeURIComponent(path):text;
- const urlId=ref.match(/(?:^|-)([A-Za-z0-9]{10})$/)?.[1];
- return {ref,urlId};
 }
 /**
  * Checks that an Outline token can read the configured collection with `documents.list`. A collection ID is used directly

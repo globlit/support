@@ -2,7 +2,7 @@ import type {ReactNode} from 'react';
 import {ToolResult} from './ToolResult';
 import {Markdown} from './Markdown';
 import type {AnalysisRun} from './model';
-const names:Record<string,string>={prometheus_query:'Query Prometheus',gitlab_pipelines:'Check GitLab pipelines',toolbox_get:'Inspect Kubernetes resources'};
+const names:Record<string,string>={prometheus_query:'Query Prometheus',gitlab_pipelines:'Check GitLab pipelines',toolbox_get:'Inspect Kubernetes resources',outline_search:'Search Outline',outline_read:'Read Outline document',toolbox_port_forward:'Open a Kubernetes tunnel'};
 function pretty(value?:string){if(!value)return 'No result recorded.';try{return JSON.stringify(JSON.parse(value),null,2)}catch{return value}}
 function Mark({state}:{state:string}){return <span className={'investigation-marker '+state} aria-hidden="true">{state==='complete'?<svg viewBox="0 0 16 16"><path d="m4 8 3 3 5-6"/></svg>:state==='failed'?<svg viewBox="0 0 16 16"><path d="m5 5 6 6m0-6-6 6"/></svg>:<span/>}</span>}
 export function InvestigationTimeline({events,run,outcome,outcomeTitle,outcomeDescription}:{events:AnalysisRun['events'];run?:AnalysisRun|null;outcome?:ReactNode;outcomeTitle?:string;outcomeDescription?:string}){

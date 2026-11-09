@@ -38,6 +38,8 @@ Support uses the projects that the saved GitLab token can access. No project lis
 
 ## Outline
 
+When Outline is enabled, investigations get two read-only tools: `outline_search` searches the allowed collection, and `outline_read` reads one of its documents as Markdown (at most 16,000 characters). Documents outside the allowed collection are refused.
+
 Set **Allowed collection** to the collection name shown in Outline's left sidebar, for example `DevOps`. The collection URL (`https://outline.example.com/collection/devops-AbC123xyz9`) or the collection ID also work. With an API key saved, **Test** finds the collection and lists one of its documents. Without a key, it only checks that Outline responds.
 
 If the Outline API key has scopes, it needs:
