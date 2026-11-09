@@ -33,11 +33,14 @@ test('probes never exceed two concurrent services and shutdown aborts pending ch
  const f=fixture(['YouTrack','GitLab','Prometheus']);let calls=0;const signals:AbortSignal[]=[];const p=new HealthPoller(f.store,async(_n,_c,s)=>{calls++;signals.push(s);return new Promise(()=>{})});
  try{const pending=p.tick();await p.tick();assert.equal(calls,2);p.stop();await pending;assert.ok(signals.every(s=>s.aborted));assert.equal(readLogs(f.store).total,0);}finally{p.stop();f.close()}
 });
-test('HTTP probes use bounded GETs, expected responses and refuse redirects without logging bodies',async()=>{
- const f=fixture(['YouTrack','GitLab','Prometheus','Alertmanager','Outline','Slack','Model']);for(const name of ['YouTrack','GitLab','Model'])f.store.credential(name,'private-test-credential');
- const requests:{url:URL;init:RequestInit}[]=[];const probe=serviceProbe(f.store,async(input,init)=>{const url=new URL(String(input));requests.push({url,init:init!});return url.pathname.includes('/users/me')?Response.json({id:'me'}):url.pathname.includes('/projects')?Response.json([]):url.pathname.includes('/models/')?Response.json({id:'model'}):url.pathname.includes('api.test')?Response.json({ok:true}):new Response('OK')});
+test('HTTP probes authenticate against real API paths, refuse redirects and log no bodies',async()=>{
+ const f=fixture(['YouTrack','GitLab','Prometheus','Alertmanager','Outline','Slack','Model']);for(const name of ['YouTrack','GitLab','Model','Slack'])f.store.credential(name,'private-test-credential');
+ const requests:{url:URL;init:RequestInit}[]=[];const probe=serviceProbe(f.store,async(input,init)=>{const url=new URL(String(input));requests.push({url,init:init!});return url.pathname.includes('/users/me')?Response.json({id:'me'}):url.pathname.includes('/projects')?Response.json([]):url.pathname.includes('/models/')?Response.json({id:'model'}):url.pathname.includes('auth.test')?Response.json({ok:true}):url.pathname==='/api/v2/status'?Response.json({versionInfo:{version:'0.28'}}):url.pathname==='/api/v1/status/buildinfo'?Response.json({status:'success'}):new Response('OK')});
  try{for(const name of ['YouTrack','GitLab','Prometheus','Alertmanager','Outline','Slack','Model'] as ConnectionName[]){const c=new AbortController();assert.equal((await probe(name,f.config,c.signal)).ok,true)}
- assert.ok(requests.every(r=>r.init.method==='GET'&&r.init.redirect==='manual'&&r.init.signal));assert.ok(requests.some(r=>r.url.pathname==='/-/ready'));assert.ok(requests.some(r=>r.url.pathname==='/v1/models/model'));assert.equal(readLogs(f.store).total,0);
+ assert.ok(requests.every(r=>r.init.redirect==='manual'&&r.init.signal));
+ for(const [path,method] of [['/api/v2/status','GET'],['/api/v1/status/buildinfo','GET'],['/_health','GET'],['/api/auth.test','POST']])assert.ok(requests.some(r=>r.url.pathname===path&&r.init.method===method),path);
+ assert.equal((requests.find(r=>r.url.pathname==='/api/auth.test')!.init.headers as Record<string,string>).Authorization,'Bearer private-test-credential');
+ assert.ok(requests.filter(r=>r.url.pathname!=='/api/auth.test').every(r=>r.init.method==='GET'));assert.ok(requests.some(r=>r.url.pathname==='/v1/models/model'));assert.equal(readLogs(f.store).total,0);
  const redirect=serviceProbe(f.store,async()=>new Response(null,{status:302,headers:{Location:'https://elsewhere.invalid'}}));assert.equal((await redirect('YouTrack',f.config,new AbortController().signal)).ok,false);
  const fake=serviceProbe(f.store,async()=>new Response('<html>Login</html>'));assert.equal((await fake('YouTrack',f.config,new AbortController().signal)).ok,false);
  }finally{f.close()}
@@ -59,5 +62,14 @@ test('connection tests use unsaved settings with saved credentials and record no
   assert.equal(readLogs(f.store).total,0);assert.equal(state(f.store).label,'Checking');
   const slow=await testConnection('YouTrack',draft,()=>new Promise(()=>{}),20);
   assert.deepEqual(slow,{ok:false,detail:'Timed out after 0.02s.'});
+ }finally{f.close()}
+});
+test('an Outline token is checked with auth.info, and service error codes reach the result',async()=>{
+ const f=fixture(['Outline','Slack']);f.store.credential('Outline','private-outline-token');f.store.credential('Slack','private-slack-token');
+ const requests:{url:URL;init:RequestInit}[]=[];const probe=serviceProbe(f.store,async(input,init)=>{const url=new URL(String(input));requests.push({url,init:init!});return url.pathname==='/api/auth.info'?Response.json({data:{user:{id:'u'}}}):Response.json({ok:false,error:'invalid_auth'});});
+ try{
+  const outline=await probe('Outline',f.config,new AbortController().signal);assert.equal(outline.ok,true);assert.match(outline.detail,/accepts the saved token/);
+  const call=requests.find(r=>r.url.pathname==='/api/auth.info')!;assert.equal(call.init.method,'POST');assert.equal((call.init.headers as Record<string,string>).Authorization,'Bearer private-outline-token');
+  const slack=await probe('Slack',f.config,new AbortController().signal);assert.equal(slack.ok,false);assert.equal(slack.detail,'Service reported: invalid_auth.');
  }finally{f.close()}
 });

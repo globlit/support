@@ -30,24 +30,61 @@ export function toolboxArgs(config:Config,input:unknown,configPath=config.connec
 export function toolboxFiles(store:Store):ToolboxFiles|null{
  return store.vaultStatus().credentials.includes('Toolbox')?parseToolboxFiles(store.readCredential('Toolbox')):null;
 }
-/** Runs one Toolbox read. Pasted files go to a private temporary folder, deleted after the run. */
-export async function readToolbox(config:Config,input:unknown,signal:AbortSignal,files:ToolboxFiles|null=null){
+/**
+ * Prepares the Toolbox configuration for one run. A pasted configuration and its kubeconfig go to a private temporary
+ * folder; otherwise the configured path is used. Call `cleanup` after the run to delete the folder.
+ */
+async function toolboxRunConfig(config:Config,files:ToolboxFiles|null){
+ const env=toolboxEnvironment();
+ if(!files)return {configPath:config.connections.Toolbox.path,env,cleanup:async()=>{}};
+ const dir=await mkdtemp(join(tmpdir(),'support-toolbox-'));
+ const kubeconfig=join(dir,'kubeconfig'),configPath=join(dir,'toolbox.json');
+ try{
+  await writeFile(kubeconfig,files.kubeconfig,{mode:0o600,flag:'wx'});
+  await writeFile(configPath,resolveToolboxConfig(files.toolboxConfig,kubeconfig),{mode:0o600,flag:'wx'});
+ }catch(e){await rm(dir,{recursive:true,force:true});throw e;}
+ env.KUBECONFIG=kubeconfig;
+ return {configPath,env,cleanup:()=>rm(dir,{recursive:true,force:true})};
+}
+function toolboxBinary(){
  if(process.platform!=='linux')throw new AppError(403,'Toolbox execution requires Support to run on Linux.');
  const binary=process.env.SUPPORT_TOOLBOX_BINARY??'/usr/local/bin/toolbox';
  if(!isAbsolute(binary))throw new AppError(400,'SUPPORT_TOOLBOX_BINARY must be an absolute path.');
+ return binary;
+}
+/** Runs one Toolbox read. Pasted files go to a private temporary folder, deleted after the run. */
+export async function readToolbox(config:Config,input:unknown,signal:AbortSignal,files:ToolboxFiles|null=null){
+ const binary=toolboxBinary();
  toolboxArgs(config,input,files?'/pasted':undefined);
- const dir=files?await mkdtemp(join(tmpdir(),'support-toolbox-')):null;
+ let run:Awaited<ReturnType<typeof toolboxRunConfig>>|undefined;
  try{
-  const env=toolboxEnvironment();let configPath=config.connections.Toolbox.path;
-  if(files&&dir){
-   const kubeconfig=join(dir,'kubeconfig');configPath=join(dir,'toolbox.json');
-   await writeFile(kubeconfig,files.kubeconfig,{mode:0o600,flag:'wx'});
-   await writeFile(configPath,resolveToolboxConfig(files.toolboxConfig,kubeconfig),{mode:0o600,flag:'wx'});
-   env.KUBECONFIG=kubeconfig;
-  }
-  const {stdout}=await exec(binary,toolboxArgs(config,input,configPath),{signal,timeout:20000,maxBuffer:512000,encoding:'utf8',shell:false,env});return JSON.parse(stdout);
+  run=await toolboxRunConfig(config,files);
+  const {stdout}=await exec(binary,toolboxArgs(config,input,run.configPath),{signal,timeout:20000,maxBuffer:512000,encoding:'utf8',shell:false,env:run.env});return JSON.parse(stdout);
  }catch{throw new AppError(502,'Toolbox read failed. Check its binary, configuration, context access and response size where Support runs.');}
- finally{if(dir)await rm(dir,{recursive:true,force:true});}
+ finally{await run?.cleanup();}
+}
+/**
+ * Reads the Kubernetes API version from each allowed context, at most 3, with `toolbox kubectl get --raw /version`.
+ * Toolbox reports cluster errors in an `error` field of its JSON output. Returns the reached contexts and their
+ * Kubernetes versions, or the first failure.
+ */
+export async function probeToolboxContexts(config:Config,files:ToolboxFiles|null,signal:AbortSignal,timeoutMs=10000){
+ const binary=toolboxBinary(),allowed=contexts(config).slice(0,3);
+ if(!allowed.length)return {ok:false,detail:'List the contexts Support may read in Allowed context names.'};
+ const run=await toolboxRunConfig(config,files);
+ try{
+  const reached:string[]=[];
+  for(const context of allowed){
+   let stdout:string;
+   try{stdout=(await exec(binary,['--config',run.configPath,'kubectl','get','--raw','/version','--context',context],{signal,timeout:timeoutMs,maxBuffer:65536,encoding:'utf8',shell:false,env:run.env})).stdout;}
+   catch{return {ok:false,detail:`Toolbox could not run for context ${context}. Check its binary and configuration.`};}
+   let value:unknown;try{value=JSON.parse(stdout);}catch{return {ok:false,detail:`Toolbox refused the check for context ${context}: ${stdout.trim().split('\n')[0].slice(0,200)}`};}
+   if(!value||typeof value!=='object'||'error' in value)return {ok:false,detail:`Context ${context} could not be reached (${String((value as {error?:unknown})?.error??'unexpected response').slice(0,200)}). Check the cluster address, VPN and kubeconfig credentials.`};
+   const version=stdout.match(/"gitVersion"\s*:\s*"([^"]+)"/)?.[1];
+   reached.push(version?`${context} (Kubernetes ${version})`:context);
+  }
+  return {ok:true,detail:`Toolbox reached the Kubernetes API in ${reached.join(', ')}.`};
+ }finally{await run.cleanup();}
 }
 
 /**

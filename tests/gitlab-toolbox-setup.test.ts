@@ -5,7 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Store} from '../server/store.js';
 import {gitLabProjects,projectPath} from '../server/gitlab.js';
-import {generateToolboxConfig,mergeKubeconfigs} from '../server/toolbox.js';
+import {generateToolboxConfig,mergeKubeconfigs,probeToolboxContexts} from '../server/toolbox.js';
+import {defaults} from '../src/model.js';
 
 function fixture(){const dir=mkdtempSync(join(tmpdir(),'support-gitlab-'));const store=new Store(dir);store.unlock('gitlab-test-passphrase',true);store.credential('GitLab','private-test-value');const s=store.snapshot();store.config({...s.config,connections:{...s.config.connections,GitLab:{enabled:true,endpoint:'https://git.internal',scope:'',path:''}}},s.configRevision);return {store,close(){store.close();rmSync(dir,{recursive:true,force:true})}};}
 
@@ -71,4 +72,25 @@ test('kubeconfig files merge into one self-contained kubeconfig, and conflicting
  await assert.rejects(mergeKubeconfigs([{name:'a.yaml',content:kubeconfig('dev','reader','tok-dev','dev-ctx')},{name:'b.yaml',content:kubeconfig('prod','reader','tok-prod','prod-ctx')}]),/User "reader" is defined differently in a\.yaml and b\.yaml/);
  await assert.rejects(mergeKubeconfigs([{name:'broken.yaml',content:'not: [valid'}]),e=>/broken\.yaml is not a valid kubeconfig/.test(String(e))&&!/support-kubeconfig-merge-/.test(String(e)));
  await assert.rejects(mergeKubeconfigs([{name:'paths.yaml',content:kubeconfig('dev','reader','tok','dev-ctx',', certificate-authority: /nonexistent/ca.crt')}]),/Embed certificates and keys with the \*-data fields/);
+});
+
+test('the Toolbox probe reads /version from each allowed context and reports the first failure',{skip:process.platform!=='linux'},async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'support-toolbox-probe-')),script=join(dir,'toolbox'),configPath=join(dir,'toolbox.json'),previous=process.env.SUPPORT_TOOLBOX_BINARY;
+ writeFileSync(configPath,'{}');
+ writeFileSync(script,`#!/bin/sh
+while [ $# -gt 0 ]; do case "$1" in --context) ctx=$2; shift;; esac; shift; done
+case "$ctx" in
+ dev) echo '{"major":"1","minor":"34","gitVersion":"v1.34.2"}';;
+ down) echo '{"context":"down","error":"tool request failed","untrusted":true}';;
+ *) echo 'raw path is not permitted';;
+esac
+`,{mode:0o700});
+ process.env.SUPPORT_TOOLBOX_BINARY=script;
+ const config=(scope:string)=>{const c=structuredClone(defaults);c.connections.Toolbox={...c.connections.Toolbox,enabled:true,path:configPath,scope};return c;};
+ try{
+  assert.deepEqual(await probeToolboxContexts(config('dev'),null,new AbortController().signal),{ok:true,detail:'Toolbox reached the Kubernetes API in dev (Kubernetes v1.34.2).'});
+  const down=await probeToolboxContexts(config('dev, down'),null,new AbortController().signal);assert.equal(down.ok,false);assert.match(down.detail,/Context down could not be reached \(tool request failed\)/);
+  const refused=await probeToolboxContexts(config('other'),null,new AbortController().signal);assert.equal(refused.ok,false);assert.match(refused.detail,/refused the check for context other: raw path is not permitted/);
+  assert.match((await probeToolboxContexts(config(''),null,new AbortController().signal)).detail,/Allowed context names/);
+ }finally{if(previous===undefined)delete process.env.SUPPORT_TOOLBOX_BINARY;else process.env.SUPPORT_TOOLBOX_BINARY=previous;rmSync(dir,{recursive:true,force:true});}
 });

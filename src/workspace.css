@@ -296,3 +296,5 @@ html[data-tour-layout] .app { position: fixed; top: 0; left: 0; width: var(--tou
 .session-card label { display: grid; gap: 8px; font-size: 13px; }
 .session-card input { width: 100%; box-sizing: border-box; }
 .session-card form button { justify-self: start; }
+/* Connection health dot next to each name in the Settings connection picker. */
+.connection-picker .health-dot { display: inline-block; margin-left: 6px; vertical-align: middle; }

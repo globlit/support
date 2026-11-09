@@ -1,19 +1,16 @@
 import {access} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {isAbsolute} from 'node:path';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
 import {connectionNames,type Config,type ConnectionName} from '../src/model.js';
 import {logTools} from '../src/diagnostics-model.js';
 import {Store,AppError} from './store.js';
 import {serviceBase} from './gitlab.js';
 import {serviceAuthHeaders} from './service-auth.js';
-import {toolboxFiles} from './toolbox.js';
+import {probeToolboxContexts,toolboxFiles} from './toolbox.js';
 import {modelKey} from './model-api.js';
 import {claudeCliStatus} from './claude-cli.js';
 import {recordDiagnostic} from './diagnostics.js';
 import {healthIntervalMs,healthTimeouts,recordHealthProbe,toolHealth,type HealthResult} from './tool-health.js';
-const exec=promisify(execFile);
 export type HealthProbe=(name:ConnectionName,config:Config,signal:AbortSignal)=>Promise<HealthResult>;
 // Log availability and HTTP status only.
 class ProbeError extends Error{}
@@ -27,22 +24,22 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
   const binary=process.env.SUPPORT_TOOLBOX_BINARY??'/usr/local/bin/toolbox';
   const pasted=store.vaultStatus().credentials.includes('Toolbox');
   if(process.platform!=='linux'||!isAbsolute(binary)||(!pasted&&!isAbsolute(c.path)))return {ok:false,detail:'Set the Toolbox executable path where Support runs, and paste the Toolbox configuration or set its path.'};
-  if(pasted)toolboxFiles(store);else await access(c.path,constants.R_OK);signal.throwIfAborted();
-  await exec(binary,['--help'],{signal,timeout:healthTimeouts.Toolbox,killSignal:'SIGKILL',maxBuffer:65536,shell:false});
-  return {ok:true,detail:'Local executable responds and its configuration is readable. Cluster connectivity is checked during investigations.'};
+  if(!pasted)await access(c.path,constants.R_OK);signal.throwIfAborted();
+  return await probeToolboxContexts(config,pasted?toolboxFiles(store):null,signal);
  }
  if(name==='Model'&&config.modelAuth==='claude_cli'){
   const status=await claudeCliStatus(c.path,undefined,signal);return {ok:status.connected,detail:status.connected?'Local Claude CLI responds and is signed in. No generation or remote model request performed.':'Local Claude CLI is not signed in with a subscription.'};
  }
  const base=serviceBase(c.endpoint),headers:Record<string,string>={Accept:'application/json'};
  const optionalToken=()=>store.vaultStatus().credentials.includes(name)?store.readCredential(name):undefined;
- let path='',format:'json'|'text'='json',check:(v:any)=>boolean=()=>true,detail='';
+ let path='',method:'GET'|'POST'='GET',body:string|undefined,format:'json'|'text'='json',check:(v:any)=>boolean=()=>true,detail='';
  switch(name){
   case 'YouTrack':path='api/users/me?fields=id';headers.Authorization='Bearer '+store.readCredential(name);check=v=>typeof v.id==='string';detail='YouTrack API responds and accepts the saved token.';break;
   case 'GitLab':{path='api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=v=>Array.isArray(v);detail='GitLab project API responds and accepts the saved token.';break;}
-  case 'Alertmanager':case 'Prometheus':path='-/ready';format='text';detail='Readiness endpoint reports ready.';Object.assign(headers,serviceAuthHeaders(store,name));break;
-  case 'Outline':path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline health endpoint responds.';{const token=optionalToken();if(token)headers.Authorization='Bearer '+token}break;
-  case 'Slack':path=base.pathname.replace(/\/$/,'').endsWith('/api')?'api.test':'api/api.test';check=v=>v.ok===true;detail='Slack API responds. This checks availability, not channel permissions.';break;
+  case 'Alertmanager':path='api/v2/status';check=v=>typeof v?.versionInfo==='object';detail='Alertmanager API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
+  case 'Prometheus':path='api/v1/status/buildinfo';check=v=>v?.status==='success';detail='Prometheus API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
+  case 'Outline':{const token=optionalToken();if(token){method='POST';body='{}';headers['Content-Type']='application/json';headers.Authorization='Bearer '+token;path='api/auth.info';check=v=>!!v?.data?.user;detail='Outline API accepts the saved token.';}else{path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline responds. No token saved, so only availability is checked.';}break;}
+  case 'Slack':path=base.pathname.replace(/\/$/,'').endsWith('/api')?'auth.test':'api/auth.test';method='POST';headers.Authorization='Bearer '+store.readCredential(name);check=v=>v?.ok===true;detail='Slack API accepts the saved token. Channel permissions are checked when a request is opened.';break;
   case 'Model':{
    if(config.modelAuth==='chatgpt'&&(config.modelProvider!=='openai'||c.endpoint!=='https://api.openai.com'))return {ok:false,detail:'Restore the OpenAI endpoint for ChatGPT sign-in.'};
    const token=await modelKey(store);signal.throwIfAborted();
@@ -51,10 +48,11 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
    check=config.modelAuth==='chatgpt'?v=>Array.isArray(v.models):v=>typeof v.id==='string';detail='Model catalog responds and accepts authentication. No tokens generated.';break;
   }
  }
- signal.throwIfAborted();const response=await fetcher(new URL(path,base),{method:'GET',headers,redirect:'manual',signal});
+ signal.throwIfAborted();const response=await fetcher(new URL(path,base),{method,headers,body,redirect:'manual',signal});
  if(!response.ok){void response.body?.cancel().catch(()=>{});return {ok:false,code:response.status,detail:response.status===401||response.status===403?'Authentication or access denied.':response.status===429?'Rate limited.':response.status>=300&&response.status<400?'Endpoint redirected; check its saved base URL.':`Endpoint returned HTTP ${response.status}.`};}
  const text=await readResponse(response,signal,name==='Model'?2_000_000:131072);let value:unknown;try{value=format==='json'?JSON.parse(text):text}catch{return {ok:false,code:response.status,detail:'Endpoint returned an unexpected response.'}}
- return {ok:check(value),code:response.status,detail:check(value)?detail:'Endpoint returned an unexpected health response.'};
+ const ok=check(value),reported=(value as {error?:unknown})?.error;
+ return {ok,code:response.status,detail:ok?detail:typeof reported==='string'?`Service reported: ${reported.slice(0,200)}.`:'Endpoint returned an unexpected health response.'};
 };}
 function probeFailure(e:unknown,timeout:boolean,ms:number):HealthResult{
  return {ok:false,detail:timeout?`Timed out after ${ms/1000}s.`:e instanceof ProbeError?e.message:e instanceof AppError&&[400,401,403].includes(e.status)?'Check the saved endpoint, credentials and local tool configuration.':'Connection failed. Check the endpoint, VPN and TLS settings.'};

@@ -2,7 +2,7 @@ import type {Store} from './store.js';
 import {connectionNames,type ConnectionName} from '../src/model.js';
 import type {ToolHealth} from '../src/telemetry-model.js';
 export const healthIntervalMs=60_000;
-export const healthTimeouts:Record<ConnectionName,number>={Alertmanager:3000,Prometheus:5000,YouTrack:8000,GitLab:10000,Outline:8000,Slack:5000,Toolbox:5000,Model:12000};
+export const healthTimeouts:Record<ConnectionName,number>={Alertmanager:3000,Prometheus:5000,YouTrack:8000,GitLab:10000,Outline:8000,Slack:5000,Toolbox:15000,Model:12000};
 export type HealthResult={ok:boolean;detail:string;code?:number};
 type Observation={result:HealthResult;failures:number;at:string;revision:number;epoch:number;durationMs:number};
 const observations=new WeakMap<Store,Map<ConnectionName,Observation>>();

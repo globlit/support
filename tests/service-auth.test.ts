@@ -55,19 +55,19 @@ test('Basic auth secrets are redacted and removal clears the credential',()=>{
  }finally{f.done();}
 });
 
-test('Alertmanager polling and readiness checks send the saved Basic auth header',async()=>{
+test('Alertmanager polling and API health checks send the saved Basic auth header',async()=>{
  const f=fixture();try{
   f.save({name:'Alertmanager',basic:{username:'support',password:'proxy-password-123'}});
   f.save({name:'Prometheus',basic:{username:'metrics',password:'other-password'}});
   const seen:Record<string,string|undefined>={};
-  const fetcher=(async(url,options)=>{const u=new URL(String(url));seen[u.hostname+u.pathname]=(options?.headers as Record<string,string>).Authorization;return u.pathname.endsWith('/alerts')?Response.json([]):new Response('OK');}) as typeof fetch;
+  const fetcher=(async(url,options)=>{const u=new URL(String(url));seen[u.hostname+u.pathname]=(options?.headers as Record<string,string>).Authorization;return u.pathname.endsWith('/alerts')?Response.json([]):u.pathname==='/api/v2/status'?Response.json({versionInfo:{}}):u.pathname==='/api/v1/status/buildinfo'?Response.json({status:'success'}):new Response('OK');}) as typeof fetch;
   await new Alertmanager(f.store,fetcher).poll();
   assert.equal(seen['alerts.internal/api/v2/alerts'],basic('support','proxy-password-123'));
   const probe=serviceProbe(f.store,fetcher),config=f.store.snapshot().config;
   assert.equal((await probe('Alertmanager',config,new AbortController().signal)).ok,true);
   assert.equal((await probe('Prometheus',config,new AbortController().signal)).ok,true);
-  assert.equal(seen['alerts.internal/-/ready'],basic('support','proxy-password-123'));
-  assert.equal(seen['metrics.internal/-/ready'],basic('metrics','other-password'));
+  assert.equal(seen['alerts.internal/api/v2/status'],basic('support','proxy-password-123'));
+  assert.equal(seen['metrics.internal/api/v1/status/buildinfo'],basic('metrics','other-password'));
  }finally{f.done();}
 });
 

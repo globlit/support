@@ -74,4 +74,13 @@ test('browser notifications require a session, deliver test events once per posi
   await c.post('/api/vault',{action:'lock'});assert.equal((await c.get('/api/notifications?after=0')).status,401);
  }finally{await f.done()}
 });
-
+test('a saved connection test makes a network request and its result sets the connection health',{timeout:20000},async()=>{
+ const f=await fixture(),c=f.client(),other=f.client();try{
+  await c.post('/api/vault',{action:'initialize',passphrase});
+  assert.equal((await other.get('/api/health')).status,401);
+  const state=await (await c.get('/api/state')).json();
+  assert.equal((await c.post('/api/config',{config:{...state.config,connections:{...state.config.connections,Outline:{...state.config.connections.Outline,enabled:true,endpoint:'http://127.0.0.1:9'}}},revision:state.configRevision},{},'PUT')).status,200);
+  for(let n=0;n<2;n++){const r=await (await c.post('/api/connection/check',{name:'Outline'})).json();assert.equal(r.liveTest,true);assert.equal(r.checks[0].ok,false);assert.doesNotMatch(JSON.stringify(r),/No network request/);}
+  const health=await (await c.get('/api/health')).json();assert.equal(health.tools.find((t:{name:string})=>t.name==='Outline').state,'red');
+ }finally{await f.done()}
+});
