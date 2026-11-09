@@ -60,10 +60,6 @@ test('tools cannot inherit host agent sockets or service/browser authentication 
  const input={HOME:'/workspace',PATH:'/usr/bin',SSH_AUTH_SOCK:'/host/agent',SSH_CONNECTION:'host',SUPPORT_SESSION_SECRET:'secret',GIT_ASKPASS:'/host/run',NODE_OPTIONS:'--require /host/run',AWS_SECRET_ACCESS_KEY:'secret',DYLD_INSERT_LIBRARIES:'/host/lib'};
  for(const env of [toolboxEnvironment(input),cliEnvironment(input)])for(const key of ['SSH_AUTH_SOCK','SSH_CONNECTION','SUPPORT_SESSION_SECRET','GIT_ASKPASS','NODE_OPTIONS','AWS_SECRET_ACCESS_KEY','DYLD_INSERT_LIBRARIES'])assert.equal(env[key],undefined,key);
 });
-test('native companion requires host-only proof before VM pairing, polling or browser opening',()=>{
- const source=readFileSync('companion/macos/SupportCompanion.swift','utf8');
- assert.match(source,/HMAC<SHA256>/);assert.match(source,/gateway-key-/);assert.match(source,/SecRandomCopyBytes/);assert.match(source,/file.resolvingSymlinksInPath/);assert.match(source,/try await tunnel\(\); NSWorkspace.shared.open/);assert.doesNotMatch(source,/p.executableURL.*ssh/);
-});
 
 test('browser session recovery distinguishes provider token errors and ignores an obsolete session check',async()=>{
  const {api}=await import('../src/api.js'),{refreshSession,sessionLost,csrfToken,sessionEvent}=await import('../src/session.js');

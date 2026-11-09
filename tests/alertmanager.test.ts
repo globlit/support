@@ -102,3 +102,18 @@ test('ticket links are read-only, survive restart and recurrence, and cannot be 
   f.restart();f.remote.body=[];await f.alerts.poll();f.remote.body=[sample()];await f.alerts.poll();assert.equal(f.alerts.queue().cases.length,1);assert.equal(f.alerts.queue().cases[0].ticket?.key,'INFRA-42');
  }finally{f.done();}
 });
+test('network failures name the underlying cause',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'support-alerts-net-'));const store=new Store(dir);store.unlock('temporary test passphrase',true);
+ try{
+  const set=(endpoint:string)=>{const s=store.snapshot();store.config({...s.config,connections:{...s.config.connections,Alertmanager:{enabled:true,endpoint,scope:'',path:''}}},s.configRevision);};
+  set('https://alerts.internal');
+  let failure:unknown=Object.assign(new TypeError('fetch failed'),{cause:{code:'ENOTFOUND'}});let calls=0;
+  const alerts=new Alertmanager(store,(async()=>{calls++;throw failure;}) as typeof fetch);
+  await assert.rejects(alerts.poll(),/Connection interrupted: Host not found \(DNS\)/);assert.match(alerts.queue().error??'',/Host not found/);
+  failure=new DOMException('The operation was aborted due to timeout','TimeoutError');
+  await assert.rejects(alerts.poll(),/No response before the timeout/);
+  failure=Object.assign(new TypeError('fetch failed'),{cause:{code:'SELF_SIGNED_CERT_IN_CHAIN'}});
+  await assert.rejects(alerts.poll(),/NODE_EXTRA_CA_CERTS/);
+  assert.equal(calls,3);
+ }finally{store.close();rmSync(dir,{recursive:true,force:true});}
+});

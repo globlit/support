@@ -18,9 +18,9 @@ export function cliEnvironment(source:NodeJS.ProcessEnv=process.env):NodeJS.Proc
  return {...env,DISABLE_AUTOUPDATER:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1'};
 }
 export const runCli:CliRunner=async(path,args,input,signal)=>{
- if(process.platform!=='linux')throw new AppError(400,'The local Claude connection must run inside the Linux VM.');
+ if(process.platform!=='linux')throw new AppError(400,'The local Claude connection requires Support to run on Linux.');
  if(!isAbsolute(path))throw new AppError(400,'Set the absolute path to the Claude executable in Settings → Model.');
- await access(path,constants.X_OK).catch(()=>{throw new AppError(400,'Claude executable is missing or not executable. Check its VM path in Settings → Model.');});
+ await access(path,constants.X_OK).catch(()=>{throw new AppError(400,'Claude executable is missing or not executable. Check its path in Settings → Model.');});
  if(signal?.aborted)throw new AppError(409,'Claude request cancelled.');
  const cwd=await mkdtemp(join(tmpdir(),'support-claude-'));
  try{return await new Promise((resolve,reject)=>{
@@ -28,7 +28,7 @@ export const runCli:CliRunner=async(path,args,input,signal)=>{
   const chunks:Buffer[]=[];let size=0,failure:Error|undefined;
   const stop=(message:string)=>{failure??=new AppError(502,message);try{if(child.pid)process.kill(-child.pid,'SIGKILL')}catch{child.kill('SIGKILL')}};
   const cancel=()=>stop('Claude request cancelled. No result was applied.');
-  const timer=setTimeout(()=>stop('Claude CLI did not finish within 60 seconds. Check the CLI in the VM before retrying.'),60000);
+  const timer=setTimeout(()=>stop('Claude CLI did not finish within 60 seconds. Check the CLI where Support runs before retrying.'),60000);
   signal?.addEventListener('abort',cancel,{once:true});
   child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>1_000_000)stop('Claude CLI output exceeded its size limit. No result was applied.');else chunks.push(chunk)});
   // Discard stderr.
@@ -55,8 +55,10 @@ export function claudeCliFetch(path:string,runner:CliRunner=runCli,secrets:strin
   const args=[...isolationArgs,'--print','--output-format','json','--no-session-persistence','--tools','','--disallowedTools','mcp__*','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--disable-slash-commands','--permission-mode','dontAsk','--max-turns','3','--model',body.model,'--system-prompt',body.system,'--json-schema',JSON.stringify(schema)];
   const prompt=JSON.stringify({instruction:'Return the next proposed action as structured output. These are descriptions of Support app actions, not CLI tools. Support validates and handles the action. Do not execute anything yourself.',tools:body.tools,messages:body.messages});
   const result=await runner(path,args,prompt,init.signal);
-  let raw:unknown;try{raw=JSON.parse(result.stdout)}catch{throw new AppError(502,'Claude CLI returned no structured result. Check its login and supported flags in the VM. No result was applied.');}
-  const value=z.object({type:z.literal('result'),subtype:z.string(),is_error:z.boolean().optional(),result:z.string().optional(),errors:z.array(z.string()).optional(),structured_output:z.unknown().optional()}).safeParse(raw);
+  let raw:unknown;try{raw=JSON.parse(result.stdout)}catch{throw new AppError(502,'Claude CLI returned no structured result. Check its login and supported flags where Support runs. No result was applied.');}
+  // Some CLI versions print every message as a JSON array. Use the final result message.
+  if(Array.isArray(raw))raw=raw.findLast(m=>(m as {type?:unknown})?.type==='result');
+  const value=z.object({type:z.literal('result'),subtype:z.string(),is_error:z.boolean().nullish(),result:z.string().nullish(),errors:z.array(z.string()).nullish(),structured_output:z.unknown().optional()}).safeParse(raw);
   if(!value.success)throw new AppError(502,'Claude CLI returned an unsupported result. No result was applied.');
   const output=value.data;
   if(result.code!==0||output.is_error||output.subtype!=='success'){

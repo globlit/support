@@ -8,11 +8,9 @@
   },
   "scripts": {
     "dev": "npm run build && npm start",
-    "build": "tsc --noEmit && vite build && node scripts/package-companion.mjs && npm run build:host",
+    "build": "tsc --noEmit && vite build",
     "start": "tsx server/index.ts",
-    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
-    "build:host": "tsc -p tsconfig.host.json && node scripts/package-host.mjs",
-    "build:guest": "tsc -p tsconfig.guest.json && node scripts/package-guest.mjs"
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "dependencies": {
     "jose": "6.2.15",

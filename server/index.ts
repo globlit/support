@@ -1,7 +1,7 @@
 import {deployment} from './deployment.js';
 import {Sessions} from './sessions.js';
 import {withIdentity,workspaceIdentity,assertActiveRequest} from './identity.js';
-import {Companion,companionScope,pairInput,ackInput} from './companion.js';
+import {Notifications,notificationQuery} from './notifications.js';
 import {Slack} from './slack.js';
 import {IncomingReplies} from './incoming-replies.js';
 import {handlingInput,setHandling,ignoreInput,addIgnore,removeIgnore,rules} from './intake.js';
@@ -38,8 +38,8 @@ const health=new HealthPoller(store);
 const healthTimer=setInterval(()=>void health.tick(),1000);healthTimer.unref();
 const youtrack=new YouTrack(store,transport);
 const claude=new Claude(store,youtrack,transport);
-const companion=new Companion(store,()=>aiOverview(store,claude).workflows);
-const companionTimer=setInterval(()=>companion.tick(),5000);companionTimer.unref();
+const notifications=new Notifications(store,()=>aiOverview(store,claude).workflows);
+const notificationTimer=setInterval(()=>notifications.tick(),5000);notificationTimer.unref();
 const intake=new InvestigationQueue(store,youtrack,claude);
 const intakeTimer=setInterval(()=>void intake.tick(),5000);intakeTimer.unref();
 const alerts=new Alertmanager(store,transport);
@@ -59,20 +59,15 @@ function rateLimit(){if(Date.now()-attempts.time>60_000)attempts={time:Date.now(
 async function body(req:IncomingMessage){if(!req.headers['content-type']?.startsWith('application/json'))throw new AppError(415,'JSON required');let size=0;const chunks:Buffer[]=[];for await(const chunk of req){size+=chunk.length;if(size>262144)throw new AppError(413,'Request too large');chunks.push(chunk)}assertActiveRequest();try{return JSON.parse(Buffer.concat(chunks).toString())}catch{throw new AppError(400,'Invalid JSON')}}
 function send(res:ServerResponse,value:unknown,status=200){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value))}
 const actionSchema=z.object({action:z.enum(['revise','sample-revision','approve','changed','note','draft','reopen']),revision:z.number().int(),text:z.string().max(16000).optional(),stepId:z.string().max(100).optional()}).strict();
-async function discover(root:string){const canonical=await realpath(root).catch(()=>{throw new AppError(400,'Folder does not exist on this machine. Use an absolute Ubuntu path inside your VM.');});if(!(await stat(canonical)).isDirectory())throw new AppError(400,'Choose a folder.');const found:{path:string;name:string;environment:'Development';branch:string}[]=[];let visited=0;async function walk(dir:string,depth:number){if(++visited>500||found.length>=100)return;const entries=await readdir(dir,{withFileTypes:true}).catch(()=>[]);if(entries.some(e=>e.name==='.git')){found.push({path:dir,name:dir.split('/').at(-1)!,environment:'Development',branch:'main'});return;}if(depth>=2)return;for(const e of entries){if(e.isDirectory()&&!e.isSymbolicLink()&&!e.name.startsWith('.')&&!['node_modules','vendor'].includes(e.name))await walk(join(dir,e.name),depth+1);}}await walk(canonical,0);return {repositories:found,message:`${found.length} repositories found. Read-only scan; no Git commands executed.`,limited:visited>500};}
+async function discover(root:string){const canonical=await realpath(root).catch(()=>{throw new AppError(400,'Folder does not exist on this machine. Use an absolute path as Support sees it.');});if(!(await stat(canonical)).isDirectory())throw new AppError(400,'Choose a folder.');const found:{path:string;name:string;environment:'Development';branch:string}[]=[];let visited=0;async function walk(dir:string,depth:number){if(++visited>500||found.length>=100)return;const entries=await readdir(dir,{withFileTypes:true}).catch(()=>[]);if(entries.some(e=>e.name==='.git')){found.push({path:dir,name:dir.split('/').at(-1)!,environment:'Development',branch:'main'});return;}if(depth>=2)return;for(const e of entries){if(e.isDirectory()&&!e.isSymbolicLink()&&!e.name.startsWith('.')&&!['node_modules','vendor'].includes(e.name))await walk(join(dir,e.name),depth+1);}}await walk(canonical,0);return {repositories:found,message:`${found.length} repositories found. Read-only scan; no Git commands executed.`,limited:visited>500};}
 const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeout:30000,keepAliveTimeout:5000},async(req,res)=>{res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");try{
  if(req.headers.host!==runtime.host)throw new AppError(403,'Use the configured Support address.');
  if(!['GET','HEAD'].includes(req.method??'')&&req.headers.origin!==origin)throw new AppError(403,'Invalid request origin.');
  const url=new URL(req.url??'/',origin);const path=url.pathname;
  if(path==='/auth/chatgpt/callback'&&req.method==='GET'){let result='success';try{sessions.require(req);await chatGPT(store).callback(url.searchParams);}catch{result='error';}res.writeHead(303,{Location:'/#/auth?result='+result});res.end();return;}
  if(path.startsWith('/api/')){
-  companionScope(path,req.headers.authorization);
   if((req.headers.origin&&req.headers.origin!==origin)||['cross-site','same-site'].includes(String(req.headers['sec-fetch-site']??'')))throw new AppError(403,'Cross-origin API access is not allowed.');
  if(path==='/api/session'&&req.method==='GET')return send(res,sessions.status(req));
- // Pairing-code and notification-token endpoints.
- if(path==='/api/companion/pair'&&req.method==='POST')return send(res,companion.pair(pairInput.parse(await body(req))));
- if(path==='/api/companion/events'&&req.method==='GET')return send(res,companion.poll(req.headers.authorization));
- if(path==='/api/companion/ack'&&req.method==='POST')return send(res,companion.ack(req.headers.authorization,ackInput.parse(await body(req)).ids));
  if(path==='/api/vault'&&req.method==='POST'){
   rateLimit();const v=z.object({action:z.enum(['initialize','unlock','lock']),passphrase:z.string().min(12).max(1024).optional()}).strict().parse(await body(req));
   if(v.action==='lock'){sessions.require(req);store.lock();sessions.clear();sessions.logout(req,res);return send(res,store.vaultStatus());}
@@ -83,11 +78,8 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  const session=sessions.require(req);
  return await withIdentity(session.principal,()=>sessions.valid(session),async()=>{
  if(path==='/api/session/logout'&&req.method==='POST'){sessions.logout(req,res);return send(res,{authenticated:false});}
- if(path==='/api/companion/status'&&req.method==='GET')return send(res,companion.status());
- if(path==='/api/companion/pairing'&&req.method==='POST'){await body(req);return send(res,companion.begin());}
- if(path==='/api/companion/pairing/cancel'&&req.method==='POST'){await body(req);return send(res,companion.cancel());}
- const companionDevice=path.match(/^\/api\/companion\/devices\/([a-f0-9-]{36})\/(revoke|test)$/);
- if(companionDevice&&req.method==='POST'){await body(req);return send(res,companionDevice[2]==='test'?companion.test(companionDevice[1]):companion.revoke(companionDevice[1]));}
+ if(path==='/api/notifications'&&req.method==='GET')return send(res,notifications.list(notificationQuery.parse(Object.fromEntries(url.searchParams)).after));
+ if(path==='/api/notifications/test'&&req.method==='POST'){await body(req);return send(res,notifications.test());}
  if(path==='/api/chatgpt'&&req.method==='GET')return send(res,chatGPT(store).status());
  if(path==='/api/chatgpt/models'&&req.method==='GET')return send(res,{models:await chatGPT(store).models()});
  if(path==='/api/chatgpt/start'&&req.method==='POST'){rateLimit();const v=z.object({account:z.string().max(200).optional()}).strict().parse(await body(req));return send(res,chatGPT(store).begin(origin,v.account));}
@@ -214,4 +206,4 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  const file=path==='/'?resolve('dist/index.html'):resolve('dist','.'+decodeURIComponent(path));const rel=relative(resolve('dist'),file);if(rel.startsWith('..')||isAbsolute(rel))throw new AppError(403,'Invalid path');const contents=await readFile(file).catch(()=>{throw new AppError(404,'Not found. Run npm run build first.');});res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'} as Record<string,string>)[extname(file)]??'application/octet-stream'});res.end(req.method==='HEAD'?undefined:contents);
  }catch(e){if(req.url?.startsWith('/api/')&&!req.url.startsWith('/api/logs'))recordDiagnostic(store,{tool:'App',operation:(req.method??'GET')+' '+req.url.split('?')[0],status:'error',durationMs:0,output:e instanceof AppError?e.message:'Request validation or processing failed.'});if(e instanceof z.ZodError)return send(res,{error:e.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; ')},400);send(res,{error:e instanceof AppError?e.message:'The operation failed. No credentials were logged.',...(e instanceof AppError&&e.code?{code:e.code}:{})},e instanceof AppError?e.status:500);}});
 server.listen(port,runtime.bindHost,()=>{console.log(`Support\nOpen: ${origin}\nDeployment: ${runtime.mode}; browser authentication required. Approved GitLab branches and reviewed draft merge requests available. Cluster writes disabled.`)});
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();clearInterval(companionTimer);clearInterval(slackTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();clearInterval(notificationTimer);clearInterval(slackTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});

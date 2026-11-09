@@ -1,10 +1,11 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
+import {networkReason} from './network-reason.js';
 export const sha=z.string().regex(/^[a-f0-9]{40,64}$/);
 export function serviceBase(endpoint:string){const u=new URL(endpoint.replace(/\/+$/,'')+'/');if(u.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(u.hostname))throw new AppError(400,'Use HTTPS for service connections.');return u;}
 export async function boundedJSON(fetcher:typeof fetch,url:URL,headers:Record<string,string>,body?:unknown,allow404=false){
- let response:Response;try{response=await fetcher(url,{method:body===undefined?'GET':'POST',redirect:'manual',headers:{...headers,Accept:'application/json',...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(45000)});}catch(e){if(e instanceof AppError)throw e;throw new AppError(502,'Connection interrupted. Check remote status before retrying any write.');}
+ let response:Response;try{response=await fetcher(url,{method:body===undefined?'GET':'POST',redirect:'manual',headers:{...headers,Accept:'application/json',...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(45000)});}catch(e){if(e instanceof AppError)throw e;throw new AppError(502,'Connection interrupted: '+networkReason(e)+' Check remote status before retrying any write.');}
  if(allow404&&response.status===404){await response.body?.cancel();return null;}
  if(!response.ok){await response.body?.cancel();throw new AppError(502,`Service returned HTTP ${response.status}. Check access and configuration.`);}
  const chunks:Uint8Array[]=[];let size=0;try{if(!response.body)throw new Error();for await(const c of response.body as unknown as AsyncIterable<Uint8Array>){size+=c.length;if(size>2_000_000)throw new Error();chunks.push(c);}return JSON.parse(Buffer.concat(chunks).toString());}catch{throw new AppError(502,'Invalid or oversized service response. Check remote status before retrying a write.');}

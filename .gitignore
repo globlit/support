@@ -3,11 +3,3 @@ dist/
 .support-data/
 .env*
 *.log
-
-host-dist/
-
-guest-dist/
-__pycache__/
-
-.mac-build/
-release/

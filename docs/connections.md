@@ -32,5 +32,5 @@ Toolbox requires Linux. In **Settings → Connections → Toolbox**, paste the T
 For a pasted configuration:
 
 - Set `kubectl.kubeconfig` to `"{{kubeconfig}}"`. Support replaces it with a temporary kubeconfig path for each read.
-- Set `kubectl.binary` to an absolute kubectl path in the VM, for example `~/.local/bin/kubectl`.
+- Set `kubectl.binary` to an absolute kubectl path where Support runs, for example `~/.local/bin/kubectl`.
 - Embed certificates and keys with the kubeconfig `*-data` fields.

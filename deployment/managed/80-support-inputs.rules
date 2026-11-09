@@ -1,2 +1,0 @@
-# The second, optional block device is an independent host copy, never a shared folder.
-ACTION=="add", SUBSYSTEM=="block", KERNEL=="vdb", TAG+="systemd", ENV{SYSTEMD_WANTS}+="mnt-inputs.mount"

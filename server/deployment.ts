@@ -8,8 +8,8 @@ export function deployment(env:NodeJS.ProcessEnv=process.env):Deployment{
  if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('SUPPORT_PORT must be an integer between 1024 and 65535.');
  const bindHost=env.SUPPORT_BIND_HOST??'127.0.0.1';
  if(!isIP(bindHost)||!['127.0.0.1','::1','0.0.0.0','::'].includes(bindHost))throw new Error('Unsupported SUPPORT_BIND_HOST.');
- if(mode==='local'&&!['127.0.0.1','::1'].includes(bindHost))throw new Error('Local mode must bind to loopback. Container mode requires explicit loopback publishing on the VM.');
- if(mode==='container'&&!env.SUPPORT_PUBLIC_ORIGIN)throw new Error('Container mode requires SUPPORT_PUBLIC_ORIGIN, the Mac loopback URL.');
+ if(mode==='local'&&!['127.0.0.1','::1'].includes(bindHost))throw new Error('Local mode must bind to loopback. Use container mode and publish the port on a host loopback address.');
+ if(mode==='container'&&!env.SUPPORT_PUBLIC_ORIGIN)throw new Error('Container mode requires SUPPORT_PUBLIC_ORIGIN, the host loopback URL.');
  const value=env.SUPPORT_PUBLIC_ORIGIN??`http://${bindHost==='::1'?'[::1]':'127.0.0.1'}:${port}`;
  let url:URL;try{url=new URL(value)}catch{throw new Error('Invalid SUPPORT_PUBLIC_ORIGIN.');}
  if(url.protocol!=='http:'||!['127.0.0.1','[::1]'].includes(url.hostname)||url.username||url.password||url.search||url.hash||url.pathname!=='/'||value.replace(/\/$/,'')!==url.origin)throw new Error('This release supports literal loopback HTTP origins only. Remote/hosted origins remain disabled.');

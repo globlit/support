@@ -12,7 +12,7 @@ test('Vault access errors from every page lead to Vault without depending on the
 });
 test('service credentials route to their connection settings; model API keys and subscription accounts route to Model',()=>{
  for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack'])assert.equal(route(`Save the ${name} credential in the Vault first.`),`#/settings?section=Connections&tool=${name}`);
- for(const message of ['Save the Model credential in the Vault first.','Save the ChatGPT credential in the Vault first.','Continue with ChatGPT in Settings → Model first.','ChatGPT authentication expired or was revoked. Sign in again.','Sign in to Claude Code in the VM with your Claude subscription, then check the connection in Settings → Model.','Save an API key for the selected model provider first.'])assert.equal(route(message),'#/settings?section=Model',message);
+ for(const message of ['Save the Model credential in the Vault first.','Save the ChatGPT credential in the Vault first.','Continue with ChatGPT in Settings → Model first.','ChatGPT authentication expired or was revoked. Sign in again.','Sign in to Claude Code where Support runs, with your Claude subscription, then check the connection in Settings → Model.','Save an API key for the selected model provider first.'])assert.equal(route(message),'#/settings?section=Model',message);
  assert.equal(route('YouTrack rejected the token.','Model'),'#/settings?section=Connections&tool=YouTrack');
  assert.equal(route('Service returned HTTP 401. Check access and configuration.','GitLab'),'#/settings?section=Connections&tool=GitLab');
  assert.equal(route('Connection returned HTTP 403. Check access and endpoint settings.','Model'),'#/logs?step=error&tool=Model');
@@ -20,7 +20,7 @@ test('service credentials route to their connection settings; model API keys and
 test('configuration failures select the actual tool; Toolbox never asks for a service token',()=>{
  for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack','Toolbox'] as ConnectionName[])assert.equal(route(`Configure and enable ${name} in Connections.`),`#/settings?section=Connections&tool=${name}`);
  for(const message of ['Enable Model in Connections and set its API base URL, model ID and vault API key.','Set the absolute path to the Claude executable in Settings → Model.','Could not start Claude CLI. Check its executable path and installation.'])assert.equal(route(message),'#/settings?section=Model');
- assert.equal(route('Toolbox read failed. Check its binary, configuration, context access and response size inside the VM.'),'#/settings?section=Connections&tool=Toolbox');
+ assert.equal(route('Toolbox read failed. Check its binary, configuration, context access and response size where Support runs.'),'#/settings?section=Connections&tool=Toolbox');
  assert.equal(route('Map a repository to its full GitLab project path in Settings first.'),'#/settings?section=Repositories');
 });
 test('usage, outages and generated-request failures do not send users to sign in again',()=>{

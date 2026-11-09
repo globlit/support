@@ -32,7 +32,7 @@ export function toolboxFiles(store:Store):ToolboxFiles|null{
 }
 /** Runs one Toolbox read. Pasted files go to a private temporary folder, deleted after the run. */
 export async function readToolbox(config:Config,input:unknown,signal:AbortSignal,files:ToolboxFiles|null=null){
- if(process.platform!=='linux')throw new AppError(403,'Toolbox execution is restricted to the Linux VM.');
+ if(process.platform!=='linux')throw new AppError(403,'Toolbox execution requires Support to run on Linux.');
  const binary=process.env.SUPPORT_TOOLBOX_BINARY??'/usr/local/bin/toolbox';
  if(!isAbsolute(binary))throw new AppError(400,'SUPPORT_TOOLBOX_BINARY must be an absolute path.');
  toolboxArgs(config,input,files?'/pasted':undefined);
@@ -46,6 +46,6 @@ export async function readToolbox(config:Config,input:unknown,signal:AbortSignal
    env.KUBECONFIG=kubeconfig;
   }
   const {stdout}=await exec(binary,toolboxArgs(config,input,configPath),{signal,timeout:20000,maxBuffer:512000,encoding:'utf8',shell:false,env});return JSON.parse(stdout);
- }catch{throw new AppError(502,'Toolbox read failed. Check its binary, configuration, context access and response size inside the VM.');}
+ }catch{throw new AppError(502,'Toolbox read failed. Check its binary, configuration, context access and response size where Support runs.');}
  finally{if(dir)await rm(dir,{recursive:true,force:true});}
 }

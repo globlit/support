@@ -2,6 +2,7 @@ import {inRunWindow} from '../src/dashboard-links.js';
 import {randomUUID} from 'node:crypto';
 import type {Store} from './store.js';
 import {AppError} from './store.js';
+import {networkReason} from './network-reason.js';
 import type {Diagnostic,LogTool,LogPage} from '../src/diagnostics-model.js';
 const captureLimit=24*1024;
 const sensitive=/^(authorization|proxy-authorization|cookie|set-cookie|private-token|.*password.*|.*token.*|.*secret.*|.*credential.*|api[_-]?key|private[_-]?key|encrypted_content|reasoning|thinking|signature)$/i;
@@ -45,7 +46,7 @@ export function loggedFetch(store:Store,fetcher:typeof fetch=fetch):typeof fetch
   const path=url.pathname;const query=Object.fromEntries([...url.searchParams].map(([k,v])=>[k,sensitive.test(k)?'[redacted]':v]));
   const request=JSON.stringify({method:init?.method??'GET',path,query,...(tool!=='Model'&&typeof init?.body==='string'&&Buffer.byteLength(init.body)<=captureLimit?{body:init.body}:{})});
   let finished=false;const done=(status:Diagnostic['status'],output:string,code?:number,truncated=false)=>{if(finished)return;finished=true;if(store.vaultEpoch===epoch)recordDiagnostic(store,{tool,operation:(init?.method??'GET')+' '+path,status,durationMs:Date.now()-start,code,request,output,truncated},secrets)};
-  let response:Response;try{response=await fetcher(input,init)}catch(e){done('error','Connection interrupted. No automatic retry.');throw e;}
+  let response:Response;try{response=await fetcher(input,init)}catch(e){done('error','Connection interrupted: '+networkReason(e)+' No automatic retry.');throw e;}
   if(tool==='Model'){done(response.ok?'ok':'error','Model transport body omitted. Inspect the conversation for tool results and produced work.',response.status);return response;}
   if(!response.body){done(response.ok?'ok':'error','Empty response',response.status);return response;}
   const reader=response.body.getReader(),chunks:Uint8Array[]=[];let size=0;

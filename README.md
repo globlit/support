@@ -16,17 +16,20 @@ npm start
 
 Open `http://127.0.0.1:4173`, create the Vault passphrase, and add [connections](docs/connections.md). The Vault locks on every restart. Unlock it to resume polling.
 
-To run Support as a service in an Ubuntu virtual machine (VM):
+To run Support in a container:
 
 ```shell
-deployment/systemd/supportctl install
+docker build -t support .
+docker run -d --name support -p 127.0.0.1:4173:4173 -v support-data:/data support
 ```
 
-See the [service guide](docs/service.md). To open Support from the Mac, see the [VM connection guide](docs/existing-vm.md).
+See the [container guide](docs/container.md).
+
+Support shows desktop notifications through the browser. Allow them in **Settings → Notifications**.
 
 ## Configuration
 
-Set these variables before startup. With `supportctl`, set them in `~/.config/support/support.env` and run `supportctl restart`.
+Set these variables before startup. In a container, pass them with `docker run -e`.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -41,8 +44,6 @@ Set these variables before startup. With `supportctl`, set them in `~/.config/su
 ## Reference
 
 - [Connections](docs/connections.md)
-- [systemd service](docs/service.md)
-- [VM connection](docs/existing-vm.md)
-- [Mac companion](companion/macos/README.md)
+- [Container](docs/container.md)
 - [Architecture and development](docs/architecture.md)
 - [Local test services](dev-services/README.md)

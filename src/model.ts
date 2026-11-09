@@ -4,7 +4,7 @@ export const connectionNames = ['YouTrack','GitLab','Toolbox','Outline','Alertma
 export type ConnectionName = typeof connectionNames[number];
 const text=z.string().trim().max(2048);
 const endpoint=text.refine(v=>{if(!v)return true;try{const u=new URL(v);return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password&&!u.search&&!u.hash;}catch{return false;}},'Use an HTTP(S) URL without credentials, query or fragment.');
-const path=text.refine(v=>!v||v.startsWith('/'),'Use an absolute Ubuntu path.');
+const path=text.refine(v=>!v||v.startsWith('/'),'Use an absolute path.');
 export const connectionSchema=z.object({endpoint,scope:text,path,enabled:z.boolean()}).strict();
 export const alertingDefaults={pollSeconds:60,groupBy:'',autoInvestigate:false};
 export const alertingSchema=z.object({pollSeconds:z.number().int().min(15).max(900),groupBy:z.string().max(500).refine(v=>!v.trim()||v.split(',').every(k=>/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k.trim())), 'Use comma-separated label names.'),autoInvestigate:z.boolean()}).strict();
@@ -16,7 +16,7 @@ export type Status=typeof stages[number];
 export type Step={id:string;title:string;body:string};
 export type Plan={version:number;steps:Step[];scope:string;createdAt:string;change:string};
 export type Ticket={id:string;title:string;source:string;severity:string;environment:string;target:string;status:Status;next:string;needsYou:boolean;reopened:boolean;sample:true;revision:number;plans:Plan[];notes:{text:string;stepId?:string;version:number;at:string}[];events:{at:string;title:string;detail:string}[];approval:null|{version:number;configRevision:number;hash:string;actor:string;actorId?:string;workspaceId?:string;at:string};draft:string;updatedAt:string};
-export type Snapshot={config:Config;configRevision:number;tickets:Ticket[];vault:{initialized:boolean;unlocked:boolean;credentials:string[];authSchemes?:Partial<Record<'Alertmanager'|'Prometheus','bearer'|'basic'>>};runtime:{mode:string;platform:string;liveExecution:false;macCompanion:boolean}};
+export type Snapshot={config:Config;configRevision:number;tickets:Ticket[];vault:{initialized:boolean;unlocked:boolean;credentials:string[];authSchemes?:Partial<Record<'Alertmanager'|'Prometheus','bearer'|'basic'>>};runtime:{mode:string;platform:string;liveExecution:false}};
 export type SourceIssue={comments?:{id:string;text:string;updated:number}[];sourceFingerprint?:string;id:string;key:string;title:string;description:string;updated:number;resolved:boolean;status:string;severity:string;assignee:string;project:string;fields:Record<string,string>;url:string;connection:string};
 export type AnalysisRun={kind?:'investigation'|'changes'|'diagnosis';connection?:string;sourceUpdated?:number;sourceFingerprint?:string;model?:string;planVersion?:number;plan?:string;replyDraft?:string;id:string;issueId:string;state:"running"|"ready"|"failed"|"cancelled";events:{at:string;text:string;callId?:string;tool?:string;input?:string;result?:string;conclusion?:string;status?:'running'|'complete'|'failed'}[];startedAt:string;finishedAt?:string;error?:string};
 export type PlanAnnotation={start?:number;end?:number;version:number;quote:string;markdown?:string;kind:'comment'|'recheck'|'remove'};

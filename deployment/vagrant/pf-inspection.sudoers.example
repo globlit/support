@@ -1,4 +1,0 @@
-# Install via visudo only after reviewing this fixed read-only command set.
-# Replace SUPPORT_MAC_USER with the Mac username. No wildcard arguments.
-Cmnd_Alias SUPPORT_PF_READ = /sbin/pfctl -s info, /sbin/pfctl -sr, /sbin/pfctl -a support_vm -sr, /sbin/pfctl -nvf /etc/pf.anchors/support_vm, /sbin/pfctl -v -s Interfaces
-SUPPORT_MAC_USER ALL=(root) NOPASSWD: SUPPORT_PF_READ

@@ -240,21 +240,12 @@
 .investigation-choice>input[type=checkbox]{width:16px;height:16px;min-height:0;flex:0 0 16px;margin:2px 0 0;padding:0;accent-color:var(--green)}
 .investigation-choice>span{min-width:0;line-height:1.6}
 
-/* Mac pairing uses the same Settings rhythm and compact device rows. */
-.companion-settings { display: grid; gap: 18px; margin-bottom: 24px; min-width: 0; }
-.companion-settings .heading { margin: 0; gap: 16px; flex-wrap: wrap; }
-.companion-settings h3, .companion-settings p { margin: 0; }
-.companion-settings .heading p, .companion-device p { margin-top: 5px; }
-.companion-steps { display: grid; gap: 14px; padding-left: 22px; margin: 0; }
-.companion-steps p { color: var(--muted); font-size: 13px; line-height: 1.6; margin-top: 3px; max-width: 70ch; }
-.companion-pair { padding: 16px; border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 12px; }
-.companion-pair input { font-family: ui-monospace, monospace; font-size: 12px; width: 100%; box-sizing: border-box; }
-.companion-device { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
-.companion-device > div:first-child { min-width: 0; overflow-wrap: anywhere; }
-.companion-settings .actions { flex-wrap: wrap; }
-@media(max-width: 700px) { .companion-device { align-items: flex-start; flex-direction: column; } }
-
-.companion-settings a.button { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; font-size: 12px; text-decoration: none; color: var(--text); }
+/* Browser notification settings use the same Settings rhythm. */
+.browser-notifications { display: grid; gap: 18px; margin-bottom: 24px; min-width: 0; }
+.browser-notifications .heading { margin: 0; gap: 16px; flex-wrap: wrap; }
+.browser-notifications h3, .browser-notifications p { margin: 0; }
+.browser-notifications .heading p { margin-top: 5px; }
+.browser-notifications .actions { flex-wrap: wrap; }
 
 .tour-preview { position: relative; }
 .tour-example-label { margin: 0; padding: 12px 32px 0; color: var(--muted); font-size: 11px; letter-spacing: .04em; }

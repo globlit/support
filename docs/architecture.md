@@ -6,10 +6,7 @@ YouTrack is the source of truth for tickets. Support stores plans, approvals, an
 | --- | --- |
 | `src/` | React UI. `src/model.ts` defines the configuration schema. |
 | `server/` | HTTP API, connectors, model loop, and approvals. Entry point: `server/index.ts`. |
-| `host/` | Mac gateway and VM connection checks. |
-| `companion/macos/` | Swift menu-bar app. |
-| `scripts/`, `Build Support.app` | Packaging and the Mac DMG builder. |
-| `deployment/` | `supportctl`, guest image recipes, and Vagrant examples. |
+| `Dockerfile` | Container image. See [Container](container.md). |
 | `dev-services/` | Local test services. |
 | `tests/` | Tests. |
 
@@ -20,10 +17,8 @@ The model uses read-only tools and returns a plan. After approval, separate serv
 | Command | Action |
 | --- | --- |
 | `npm start` | Start the server from sources. |
-| `npm run build` | Type-check and build the UI, companion assets, and host gateway. |
-| `npm test` | Run all tests. Requires `python3`. Ruby is optional. |
-
-Swift build tests run on macOS only.
+| `npm run build` | Type-check and build the UI. |
+| `npm test` | Run all tests. |
 
 Rules:
 

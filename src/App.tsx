@@ -1,4 +1,5 @@
 import {useWorkspace} from './use-workspace';
+import {useBrowserNotifications} from './browser-notifications';
 import {RecoveryState,vaultRecovery} from './RecoveryState';
 import {SlackRequests} from './SlackRequests';
 import {ErrorNotice} from './ErrorNotice';
@@ -19,7 +20,6 @@ import {AIOverview} from './AIOverview';
 import {Alerts} from './Alerts';
 import {YouTrackTickets} from './YouTrackTickets';
 export default function App(){
- useEffect(()=>{if(new URLSearchParams(location.hash.slice(1)).has('pair'))history.replaceState(null,'',location.pathname+location.search)},[]);
  const [route,setRoute]=useState(()=>parseRoute(location.hash));const page=route.page;const setPage=(page:string)=>navigate({page:page as AppPage});
  const alertTarget=route.page==='alerts'?route.issue:undefined;const youtrackTarget=route.page==='youtrack'&&route.issue?{id:route.issue,connection:route.connection??''}:undefined;
  const setAlertTarget=(issue?:string)=>navigate({page:'alerts',issue});const setYoutrackTarget=(target?:{id:string;connection:string})=>navigate({page:'youtrack',issue:target?.id,connection:target?.connection});
@@ -27,6 +27,7 @@ export default function App(){
  const [tourScene,setTourScene]=useState<TourScene|null>(null);
  const [tour,setTour]=useState<'welcome'|'guide'|null>(()=>parseRoute(location.hash).page!=='auth'&&shouldOfferTour()?'welcome':null);
  const {data,setData,reload,loadError}=useWorkspace();
+ useBrowserNotifications(!!data?.vault.unlocked);
  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
  useEffect(()=>{if(data?.vault.unlocked)resumeAfterVaultUnlock();else if(data){setError('');setMessage('');}},[data?.vault.unlocked,route.page,route.section]);
  useEffect(()=>{document.documentElement.dataset.theme=data?.config.theme??'auto'},[data?.config.theme]);

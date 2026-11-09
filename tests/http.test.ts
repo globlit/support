@@ -29,7 +29,7 @@ test('local shell needs no startup token, but every workspace API requires a bro
  const f=await fixture(),c=f.client();try{
   assert.equal((await fetch(f.origin+'/')).status,200);
   const status=await c.get('/api/session');assert.equal(status.status,200);assert.equal(status.headers.get('set-cookie'),null);assert.deepEqual(await status.json(),{authenticated:false,initialized:false});
-  for(const path of ['/api/state','/api/logs','/api/dashboard','/api/config/export','/api/ai/activity','/api/companion/status'])assert.equal((await c.get(path)).status,401,path);
+  for(const path of ['/api/state','/api/logs','/api/dashboard','/api/config/export','/api/ai/activity','/api/notifications'])assert.equal((await c.get(path)).status,401,path);
   assert.equal((await c.post('/api/chatgpt/start',{})).status,401);
   assert.equal((await c.post('/api/vault',{action:'initialize',passphrase},{Origin:'https://attacker.test'})).status,403);
   for(const headers of [{Origin:'https://attacker.test'},{'Sec-Fetch-Site':'cross-site'},{'Sec-Fetch-Site':'same-site'}] as Record<string,string>[])assert.equal((await c.get('/api/session',headers)).status,403);
@@ -61,36 +61,17 @@ test('offline takeover records the authenticated identity; editing the engineer 
   await other.post('/api/vault',{action:'lock'});assert.equal((await c.get('/api/state')).status,401);assert.equal((await other.get('/api/state')).status,401);
  }finally{await f.done()}
 });
-test('notification credentials remain separate from browser sessions and keep polling while locked',{timeout:15000},async()=>{
- const f=await fixture(),c=f.client(),native=f.client();try{
-  await c.post('/api/vault',{action:'initialize',passphrase});const pair=await (await c.post('/api/companion/pairing',{})).json();
-  const result=await (await native.post('/api/companion/pair',{code:pair.code,name:'Mac'})).json();const headers={Authorization:'Bearer '+result.token};assert.ok(result.token);
-  assert.equal((await native.post('/api/companion/pair',{code:pair.code,name:'Other Mac'})).status,401);
-  for(const path of ['/api/state','/api/session'])assert.equal((await native.get(path,headers)).status,403);
-  assert.equal((await native.post('/api/companion/devices/'+result.id+'/test',{},headers)).status,403);
-  await c.post('/api/companion/devices/'+result.id+'/test',{});const events=await (await native.get('/api/companion/events',headers)).json();assert.equal(events.events.length,1);
-  assert.equal((await native.post('/api/companion/ack',{ids:[events.events[0].id]},headers)).status,200);
-  await c.post('/api/vault',{action:'lock'});assert.deepEqual(await (await native.get('/api/companion/events',headers)).json(),{paused:true,events:[]});
-  assert.equal((await native.post('/api/vault',{action:'unlock',passphrase},headers)).status,403);
-  await c.post('/api/vault',{action:'unlock',passphrase});await c.post('/api/companion/devices/'+result.id+'/revoke',{});assert.equal((await native.get('/api/companion/events',headers)).status,401);
+test('browser notifications require a session, deliver test events once per position and stop when locked',{timeout:15000},async()=>{
+ const f=await fixture(),c=f.client(),other=f.client();try{
+  await c.post('/api/vault',{action:'initialize',passphrase});
+  for(const path of ['/api/notifications','/api/notifications?after=0'])assert.equal((await other.get(path)).status,401,path);
+  assert.equal((await other.post('/api/notifications/test',{})).status,401);
+  const base=await (await c.get('/api/notifications')).json();assert.deepEqual(base.events,[]);
+  assert.equal((await c.post('/api/notifications/test',{})).status,200);assert.equal((await c.post('/api/notifications/test',{})).status,429);
+  const page=await (await c.get('/api/notifications?after='+base.seq)).json();assert.equal(page.events.length,1);assert.equal(page.events[0].title,'Support notifications work');
+  assert.equal((await (await c.get('/api/notifications?after='+page.seq)).json()).events.length,0);
+  assert.equal((await c.get('/api/notifications?after=x')).status,400);
+  await c.post('/api/vault',{action:'lock'});assert.equal((await c.get('/api/notifications?after=0')).status,401);
  }finally{await f.done()}
 });
 
-test('host gateway preserves real Vault sessions, CSRF and trusted approval identity',{timeout:15000},async()=>{
- const {createGateway}=await import('../host/gateway.js'),{createHash,randomBytes}=await import('node:crypto'),fs=await import('node:fs/promises');
- const issue={connection:'gateway-fixture',id:'offline',key:'LAB-1',updated:1,sourceFingerprint:'gateway',title:'',description:'',resolved:false,status:'Open',severity:'High',assignee:'',project:'LAB',fields:{},url:''};let revision=0;
- const f=await fixture(store=>{store.unlock(passphrase,true);revision=store.workSession(issue).revision;}),dir=mkdtempSync(join(tmpdir(),'support-gateway-real-')),socket=join(dir,'upstream.sock'),publicDir=join(dir,'public');
- const bridge=(await import('node:http')).createServer((req,res)=>{const upstream=request(f.origin+(req.url??'/'),{method:req.method,headers:req.headers},response=>{res.writeHead(response.statusCode!,response.headers);response.pipe(res);});upstream.on('error',()=>{res.writeHead(502);res.end();});req.pipe(upstream);});
- let gateway:Awaited<ReturnType<typeof createGateway>>|undefined;
- try{
-  await fs.mkdir(publicDir);const html='<html><head></head><body>Host UI</body></html>';await fs.writeFile(join(publicDir,'index.html'),html);await fs.writeFile(join(publicDir,'manifest.json'),JSON.stringify({'/index.html':createHash('sha256').update(html).digest('hex')}));
-  await new Promise<void>(r=>bridge.listen(socket,r));const port=await freePort(),origin=`http://127.0.0.1:${port}`;gateway=await createGateway({port,guestPort:Number(new URL(f.origin).port),socketPath:socket,publicDirectory:publicDir,proofKey:randomBytes(32),healthy:()=>true});await new Promise<void>(r=>gateway!.listen(port,'127.0.0.1',r));const c=client(origin);
-  assert.equal((await c.get('/api/state')).status,401);assert.equal((await c.post('/api/vault',{action:'unlock',passphrase})).status,200);
-  const state=await (await c.get('/api/state')).json();assert.equal(state.vault.unlocked,true);
-  const data={connection:issue.connection,revision,sourceUpdated:1,mode:'human',reason:'Host gateway integration fixture'};
-  assert.equal((await c.post('/api/youtrack/issues/offline/handling',data,{'X-Support-CSRF':''})).status,403);
-  const taken=await c.post('/api/youtrack/issues/offline/handling',data);assert.equal(taken.status,200);const session=(await taken.json()).session;assert.equal(session.handling.actorId,state.runtime.principal.id);
-  assert.equal((await c.post('/api/session/logout',{})).status,200);assert.equal((await c.get('/api/state')).status,401);
-  assert.equal((await c.post('/api/vault',{action:'unlock',passphrase})).status,200);assert.equal((await c.post('/api/vault',{action:'lock'})).status,200);assert.equal((await c.get('/api/state')).status,401);
- }finally{gateway?.closeAllConnections();if(gateway?.listening)await new Promise<void>(r=>gateway!.close(()=>r()));bridge.closeAllConnections();await new Promise<void>(r=>bridge.close(()=>r()));await f.done();rmSync(dir,{recursive:true,force:true});}
-});
