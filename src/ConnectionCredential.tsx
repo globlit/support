@@ -88,7 +88,7 @@ function ToolboxEditor(props:EditorProps){
  const generate=()=>void step('Generating',async()=>{const result=await api<Generated>('/toolbox/generate','POST',{kubeconfig,contexts:selected,settings:toolboxSettings});setPreview({key,result});});
  const toggle=(name:string)=>setSelected(s=>s.includes(name)?s.filter(n=>n!==name):[...s,name]);
  return <div className="credential-editor toolbox-editor">
-  <Field label="kubeconfig" help={credentialHelp('Toolbox')} hint={'Paste a kubeconfig, or load one or more files: several files are merged into one. '+(saved?replaceHint:newHint)}><textarea className="code-input" rows={8} value={kubeconfig} spellCheck={false} autoComplete="off" onChange={e=>{setKubeconfig(e.target.value);setAvailable([]);setSelected([]);setPreview(null);}}/></Field>
+  <Field label="kubeconfig" help={credentialHelp('Toolbox')} hint={'Paste a kubeconfig, or load files to merge them. '+(saved?replaceHint:newHint)}><textarea className="code-input" rows={8} value={kubeconfig} spellCheck={false} autoComplete="off" onChange={e=>{setKubeconfig(e.target.value);setAvailable([]);setSelected([]);setPreview(null);}}/></Field>
   <input ref={fileInput} type="file" multiple hidden onChange={e=>{load(e.target.files);e.target.value='';}}/>
   <div className="actions"><button type="button" disabled={!!working} onClick={()=>fileInput.current?.click()}>{working==='Loading'?'Loading…':'Load kubeconfig files…'}</button><button type="button" disabled={!!working||!kubeconfig.trim()} onClick={detect}>{working==='Detecting'?'Detecting…':'Detect contexts'}</button></div>
   {available.length>0&&<fieldset className="context-checklist"><legend>Contexts to include <span className="small muted">{selected.length} of {available.length}</span></legend>

@@ -18,3 +18,13 @@ test('every connection with a credential explains how to create it',()=>{
  for(const name of connectionNames.filter(n=>!['Model','Toolbox'].includes(n)))assert.ok(endpointHelp(name),name);
  for(const name of ['YouTrack','Outline','Slack','Alertmanager'] as const)assert.ok(scopeHelp(name),name);
 });
+
+test('help texts are short and describe only the field',()=>{
+ const text=(node:unknown)=>renderToStaticMarkup(createElement('div',null,node as never)).replace(/<[^>]+>/g,'');
+ for(const name of connectionNames)for(const help of [endpointHelp(name),scopeHelp(name),credentialHelp(name)]){
+  if(!help)continue;
+  const t=text(help);
+  assert.ok(t.length<=260,`${name}: ${t.length} characters: ${t}`);
+  assert.doesNotMatch(t,/\bTest\b/,name);
+ }
+});

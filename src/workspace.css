@@ -384,3 +384,7 @@ summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; bo
 .help-examples > div { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 10px; align-items: baseline; }
 .help-examples dt, .help-examples dd { margin: 0; }
 .help-examples dd { color: var(--muted); }
+.number-field { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.number-field input { width: 90px; margin: 0; text-align: center; font-variant-numeric: tabular-nums; }
+.number-field button { width: 36px; padding: 0; font-size: 16px; line-height: 1; flex-shrink: 0; }
+.key-help-tip { display: flex; align-items: center; gap: 6px; }
