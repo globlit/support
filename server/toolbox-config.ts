@@ -20,15 +20,17 @@ function replace(value:unknown,path:string,byKey:boolean,key=''):unknown{
 }
 
 const noNul=(v:string)=>!v.includes('\0');
+/** Largest accepted kubeconfig, in bytes: 4 MiB, enough for a merge of many kubeconfig files. */
+export const maxKubeconfigBytes=4*1024*1024;
 /** Request body for a pasted Toolbox configuration. */
 export const toolboxCredentialSchema=z.object({
- config:z.string().min(2).max(65536).refine(noNul,'The Toolbox configuration must not contain NUL characters.').superRefine((text,ctx)=>{
+ config:z.string().min(2).max(1_048_576).refine(noNul,'The Toolbox configuration must not contain NUL characters.').superRefine((text,ctx)=>{
   let parsed:unknown;try{parsed=JSON.parse(text);}catch{ctx.addIssue({code:'custom',message:'The Toolbox configuration is not valid JSON.'});return;}
   if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)){ctx.addIssue({code:'custom',message:'The Toolbox configuration must be a JSON object.'});return;}
   const found=locate(parsed);
   if(!found.count&&found.keyed>1)ctx.addIssue({code:'custom',message:`Several fields look like a kubeconfig path. Set the right one to "${kubeconfigPlaceholder}".`});
  }),
- kubeconfig:z.string().min(1).max(262144).refine(noNul,'The kubeconfig must not contain NUL characters.').refine(v=>v.trim().length>0,'Paste the kubeconfig.'),
+ kubeconfig:z.string().min(1).max(maxKubeconfigBytes).refine(noNul,'The kubeconfig must not contain NUL characters.').refine(v=>v.trim().length>0,'Paste the kubeconfig.'),
 }).strict();
 
 /** Returns the stored Vault value for a pasted Toolbox configuration. */

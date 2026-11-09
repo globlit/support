@@ -84,3 +84,11 @@ test('a saved connection test makes a network request and its result sets the co
   const health=await (await c.get('/api/health')).json();assert.equal(health.tools.find((t:{name:string})=>t.name==='Outline').state,'red');
  }finally{await f.done()}
 });
+test('kubeconfig merging accepts more than 20 files',{timeout:20000},async()=>{
+ const f=await fixture(),c=f.client();try{
+  await c.post('/api/vault',{action:'initialize',passphrase});
+  const files=Array.from({length:25},(_,n)=>({name:`cluster-${n}.yaml`,content:'not: [valid'}));
+  const r=await c.post('/api/toolbox/kubeconfig/merge',{files});const text=await r.text();
+  assert.doesNotMatch(text,/Too big/);assert.equal(r.status,process.platform==='linux'?400:403);
+ }finally{await f.done()}
+});

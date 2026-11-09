@@ -7,7 +7,7 @@ Unlock the Vault, then add credentials in **Settings → Connections → `<conne
 | YouTrack | API token |
 | GitLab | Personal or project access token |
 | Slack | Slack token |
-| Outline | Optional bearer token. Health check only. |
+| Outline | Optional API key. **Test** reads the allowed collection with it. |
 | Alertmanager, Prometheus | None, Basic auth, or bearer token |
 | Toolbox | Toolbox JSON and kubeconfig, or a configuration path |
 
@@ -22,6 +22,10 @@ Support uses the projects that the saved GitLab token can access. No project lis
 - Give the token access only to the projects that Support may change. A project or group access token limits that access in GitLab.
 - The token needs the `api` scope to create branches and draft merge requests. `read_api` is enough for investigations only.
 - When you prepare changes, choose the project. The target branch defaults to the project's default branch.
+
+## Outline
+
+Set **Allowed collection** to the collection name shown in Outline's left sidebar, for example `DevOps`. The collection URL (`https://outline.example.com/collection/devops-AbC123xyz9`) or the collection ID also work. With an API key saved, **Test** finds the collection and lists one of its documents. Without a key, it only checks that Outline responds.
 
 ## Model
 

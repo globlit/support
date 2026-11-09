@@ -235,7 +235,6 @@
 /* Source intake uses the same quiet timeline and reading column as ticket work. */
 .source-trail{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:16px 0;color:var(--muted);font-size:12px;overflow-wrap:anywhere}.source-trail .text-button{font-size:12px;max-width:420px;text-align:left;white-space:normal}.source-origin{font-weight:600;letter-spacing:.025em}.source-origin.alert{color:#dba861}.source-origin.slack{color:#aa94da}.intake-decision{padding-bottom:24px;margin-bottom:24px;border-bottom:1px solid var(--border)}.intake-decision .heading{align-items:flex-start;gap:20px}.intake-decision h2{font-size:19px}.intake-decision .small{max-width:620px;line-height:1.65}.intake-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:18px}.intake-options button{text-align:left;padding:16px;display:flex;flex-direction:column;gap:6px;white-space:normal}.intake-options small{font-weight:400;color:var(--muted)}.intake-editor{display:grid;gap:14px;padding:20px 0}.scope-values{display:flex;flex-wrap:wrap;gap:12px;max-height:180px;overflow:auto}.handling-history{margin-top:18px}.handling-history ol{list-style:none;padding:0;max-height:240px;overflow:auto}.handling-history li{padding:12px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}.handling-history small{display:block;color:var(--muted);margin-top:4px}.handling-history p{margin-bottom:0}.ignore-rules{min-width:0;padding:24px}.rule-list{display:grid;gap:12px}.rule-list article{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;border-bottom:1px solid var(--border);padding:16px 0;overflow-wrap:anywhere}.rule-list article>div{min-width:0;max-height:240px;overflow:auto}.rule-list small{color:var(--muted)}.case-content fieldset{border:0;padding:0;margin:0;min-width:0}.case-content fieldset:disabled{opacity:.65}@media(max-width:700px){.rule-list article{flex-direction:column}.intake-options{grid-template-columns:1fr}.intake-decision .heading{flex-direction:column}}
 
-.workspace-footer{justify-content:flex-end}
 .settings-form .investigation-choice{align-items:flex-start;gap:12px}
 .investigation-choice>input[type=checkbox]{width:16px;height:16px;min-height:0;flex:0 0 16px;margin:2px 0 0;padding:0;accent-color:var(--green)}
 .investigation-choice>span{min-width:0;line-height:1.6}
@@ -298,3 +297,35 @@ html[data-tour-layout] .app { position: fixed; top: 0; left: 0; width: var(--tou
 .session-card form button { justify-self: start; }
 /* Connection health dot next to each name in the Settings connection picker. */
 .connection-picker .health-dot { display: inline-block; margin-left: 6px; vertical-align: middle; }
+/* Settings save bar: the status text wraps in its own space, and the buttons stay together on the right. */
+.save-bar > .save-status { flex: 1 1 240px; min-width: 0; }
+.save-bar > .save-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.save-actions > button[aria-busy="true"] { cursor: progress; }
+/* "?" help button next to a field, and its explanation panel. */
+.field-with-help { position: relative; min-width: 0; }
+.field-with-help > .help-tip { position: absolute; top: 0; right: 0; }
+.help-tip { position: relative; display: inline-flex; }
+.help-tip-button { width: 18px; height: 18px; min-height: 0; padding: 0; border-radius: 50%; font-size: 11px; line-height: 1; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; }
+.help-tip-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: min(340px, 80vw); padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: 0 5px 20px #0002; color: var(--text); font-size: 12px; font-weight: 400; line-height: 1.55; text-align: left; white-space: normal; }
+.help-tip-panel code { font-size: 11px; overflow-wrap: anywhere; }
+.help-tip-panel ul { margin: 6px 0; padding-left: 18px; }
+.help-tip-panel li + li { margin-top: 4px; }
+/* Profile button at the bottom of the sidebar, and its menu, which opens upward. */
+.profile-menu { position: relative; }
+.profile-button { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: none; padding: 6px; border-radius: 8px; color: var(--text); text-align: left; min-width: 0; }
+.profile-button:hover, .profile-button[aria-expanded="true"] { background: var(--surface); }
+.profile-avatar { width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--text); color: var(--bg); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.profile-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.profile-menu-panel { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; width: 220px; display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); box-shadow: 0 8px 28px #0003; }
+.profile-menu-header { display: grid; gap: 2px; padding: 2px 4px 6px; border-bottom: 1px solid var(--line); min-width: 0; }
+.profile-menu-header strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-menu-header small { color: var(--muted); font-size: 11px; }
+.profile-menu-panel .themes { max-width: none; }
+.profile-menu-item { border: 0; background: none; color: var(--text); text-align: left; padding: 8px 6px; border-radius: 6px; font-size: 12px; }
+.profile-menu-item:hover:not(:disabled) { background: var(--surface); }
+/* On narrow screens the sidebar becomes a top bar with the profile at the top right, so the menu opens downward. */
+@media (max-width: 800px) {
+ .profile-button { width: auto; }
+ .profile-name { display: none; }
+ .profile-menu-panel { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; }
+}

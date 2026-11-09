@@ -3,6 +3,7 @@ import {z} from 'zod';
 import {Store,AppError} from './store.js';
 import type {AIWorkflow} from '../src/ai-model.js';
 import {routeHash} from '../src/navigation.js';
+import {workflowStep} from '../src/workflow-step.js';
 
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const reviewStages=new Set(['Request review','Plan approval','Diff approval','Fix approval','Summary approval','Closure approval','Diagnosis review','Ticket approval','Reply approval','Intake decision','Direct reply']);
@@ -48,10 +49,11 @@ export class Notifications {
    const signature=hash(JSON.stringify([w.state,w.stage,w.latestRun,w.updatedAt,w.disposition]));
    if(prior?.signature!==signature&&hadBaseline&&!w.disposition){
     const kind:Kind|undefined=w.stage==='Ticket reopened'||(prior?.state==='completed'&&!['completed','stopped'].includes(w.state))?'reopened':w.state==='blocked'?'blocked':w.state==='completed'?'completion':w.state==='waiting'&&reviewStages.has(w.stage)?'reviews':undefined;
-    if(kind&&prefs[kind]){
+    // Alerts waiting for a handling decision never notify. Handled alerts notify like YouTrack tickets.
+    if(kind&&prefs[kind]&&!(w.source==='alert'&&w.stage==='Intake decision')){
      // Keep only well-formed ticket keys. Keys and titles reach the browser only when previews are allowed.
      const key=/^(?:[A-Z][A-Z0-9_]{0,15}-\d{1,10}|ALERT-[a-f0-9]{8}|SLACK-[a-f0-9]{8})$/.test(w.key)?w.key:undefined;
-     const route=routeHash({page:w.source==='alert'?'alerts':w.source==='slack'?'slack':'youtrack',issue:w.issueId,connection:w.connection});
+     const route=routeHash({page:w.source==='alert'?'alerts':w.source==='slack'?'slack':'youtrack',issue:w.issueId,connection:w.connection,step:workflowStep(w.stage)});
      const title=w.title?shortTitle(w.title):undefined;
      h.events.push({id:randomUUID(),seq:++h.seq,at:now,kind,workflow:w.id,signature,key,title,stage:w.stage,source:w.source==='alert'?'alert':w.source==='slack'?'slack':'youtrack',route});
     }

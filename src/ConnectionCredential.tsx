@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {api} from './api';
 import {Field} from './Field';
+import {credentialHelp} from './field-help';
 import {Select} from './Select';
 import {openVaultSettings} from './navigation';
 import type {ConnectionName,Snapshot} from './model';
@@ -50,7 +51,7 @@ function Actions({props,body,ready,onClose,remove}:{props:EditorProps;body:unkno
 
 function TokenEditor(props:EditorProps){
  const {name,saved,onClose}=props,[token,setToken]=useState('');
- return <div className="credential-editor"><Field label={`${name} ${name==='Outline'?'bearer token':'API token'}`} hint={saved?replaceHint:newHint}><input type="password" value={token} autoComplete="off" onChange={e=>setToken(e.target.value)}/></Field>
+ return <div className="credential-editor"><Field label={`${name} ${name==='Outline'?'API key':'API token'}`} hint={saved?replaceHint:newHint} help={credentialHelp(name)}><input type="password" value={token} autoComplete="off" onChange={e=>setToken(e.target.value)}/></Field>
   <Actions props={props} body={{name,value:token}} ready={!!token} onClose={onClose} remove={name==='Outline'&&saved?{label:'Remove token',body:{name,remove:true}}:undefined}/></div>;
 }
 
@@ -60,7 +61,7 @@ function ServiceAuthEditor(props:EditorProps&{name:ServiceAuthName}){
  const ready=mode==='none'?saved:mode==='bearer'?!!token:!!username&&!!password&&!usernameError;
  const body=mode==='none'?{name,remove:true}:mode==='bearer'?{name,value:token}:{name,basic:{username,password}};
  return <div className="credential-editor">
-  <label>Authentication<Select value={mode} onChange={e=>setMode(e.target.value as typeof mode)}><option value="none">None</option><option value="basic">Basic auth (username and password)</option><option value="bearer">Bearer token</option></Select></label>
+  <Field label="Authentication" help={credentialHelp(name)}><Select value={mode} onChange={e=>setMode(e.target.value as typeof mode)}><option value="none">None</option><option value="basic">Basic auth (username and password)</option><option value="bearer">Bearer token</option></Select></Field>
   {mode==='basic'&&<><Field label="Username" hint="Sent with the password in the Authorization header, as required by nginx auth_basic or an Envoy basic auth filter."><input value={username} autoComplete="username" spellCheck={false} onChange={e=>setUsername(e.target.value)}/></Field>{usernameError&&<p className="small error">{usernameError}</p>}<Field label="Password" hint={saved?replaceHint:newHint}><input type="password" value={password} autoComplete="current-password" onChange={e=>setPassword(e.target.value)}/></Field></>}
   {mode==='bearer'&&<Field label={`${name} bearer token`} hint={saved?replaceHint:newHint}><input type="password" value={token} autoComplete="off" onChange={e=>setToken(e.target.value)}/></Field>}
   {mode==='none'&&<p className="small muted">{saved?'Removes the saved credential. Requests are sent without an Authorization header.':'Requests are sent without an Authorization header.'}</p>}
@@ -88,7 +89,7 @@ function ToolboxEditor(props:EditorProps){
   finally{setGenerating(false);}
  }
  return <div className="credential-editor">
-  <Field label="kubeconfig" hint={'Paste a kubeconfig, or load one or more kubeconfig files: several files are merged into one. Embed certificates with the *-data fields. Files referenced by path are not available. '+(saved?replaceHint:newHint)}><textarea className="code-input" rows={8} value={kubeconfig} spellCheck={false} autoComplete="off" onChange={e=>setKubeconfig(e.target.value)}/></Field>
+  <Field label="kubeconfig" help={credentialHelp('Toolbox')} hint={'Paste a kubeconfig, or load one or more kubeconfig files: several files are merged into one. Embed certificates with the *-data fields. Files referenced by path are not available. '+(saved?replaceHint:newHint)}><textarea className="code-input" rows={8} value={kubeconfig} spellCheck={false} autoComplete="off" onChange={e=>setKubeconfig(e.target.value)}/></Field>
   <input ref={fileInput} type="file" multiple hidden onChange={e=>{void load(e.target.files);e.target.value='';}}/>
   <div className="actions"><button type="button" disabled={merging} onClick={()=>fileInput.current?.click()}>{merging?'Loading…':'Load kubeconfig files…'}</button><button type="button" disabled={generating||!kubeconfig.trim()} onClick={()=>void generate()}>{generating?'Generating…':'Generate configuration from kubeconfig'}</button></div>
   {merged&&<p className="small muted" role="status">{merged}</p>}{mergeError&&<p className="small error" role="alert">{mergeError}</p>}

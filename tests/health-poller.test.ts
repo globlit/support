@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Store} from '../server/store.js';
 import {defaults,type ConnectionName} from '../src/model.js';
-import {HealthPoller,serviceProbe,testConnection} from '../server/health-poller.js';
+import {HealthPoller,outlineCollectionRef,serviceProbe,testConnection} from '../server/health-poller.js';
 import {toolHealth,healthTimeouts,type HealthResult} from '../server/tool-health.js';
 import {loggedFetch,readLogs} from '../server/diagnostics.js';
 function fixture(names:ConnectionName[]=['YouTrack']){const dir=mkdtempSync(join(tmpdir(),'support-health-')),store=new Store(dir);store.unlock('an isolated health passphrase',true);const config=structuredClone(defaults);for(const name of names){config.connections[name].enabled=true;config.connections[name].endpoint='https://'+name.toLowerCase()+'.internal';config.connections[name].scope='model';}store.config(config,1);return {store,config,close(){store.close();rmSync(dir,{recursive:true,force:true})}}}
@@ -64,12 +64,31 @@ test('connection tests use unsaved settings with saved credentials and record no
   assert.deepEqual(slow,{ok:false,detail:'Timed out after 0.02s.'});
  }finally{f.close()}
 });
-test('an Outline token is checked with auth.info, and service error codes reach the result',async()=>{
+test('an Outline token is checked by reading the configured collection, and service error codes reach the result',async()=>{
  const f=fixture(['Outline','Slack']);f.store.credential('Outline','private-outline-token');f.store.credential('Slack','private-slack-token');
- const requests:{url:URL;init:RequestInit}[]=[];const probe=serviceProbe(f.store,async(input,init)=>{const url=new URL(String(input));requests.push({url,init:init!});return url.pathname==='/api/auth.info'?Response.json({data:{user:{id:'u'}}}):Response.json({ok:false,error:'invalid_auth'});});
+ const requests:{path:string;body:any;init:RequestInit}[]=[];let documents:unknown[]=[{id:'d1'}],status=200;
+ const probe=serviceProbe(f.store,async(input,init)=>{const url=new URL(String(input));requests.push({path:url.pathname,body:init?.body?JSON.parse(String(init.body)):null,init:init!});if(status!==200)return new Response('',{status});
+  if(url.pathname==='/api/collections.list')return Response.json({data:[{id:'c1',urlId:'AbC123xyz9',name:'Model'},{id:'c2',urlId:'ZzZ987wvu1',name:'Other'}]});
+  if(url.pathname==='/api/documents.list')return Response.json({data:documents});
+  if(url.pathname==='/api/auth.info')return Response.json({data:{user:{id:'u'}}});
+  return Response.json({ok:false,error:'invalid_auth'});});
+ const withScope=(scope:string)=>({...f.config,connections:{...f.config.connections,Outline:{...f.config.connections.Outline,scope}}});
+ const run=(scope:string)=>probe('Outline',withScope(scope),new AbortController().signal);
  try{
-  const outline=await probe('Outline',f.config,new AbortController().signal);assert.equal(outline.ok,true);assert.match(outline.detail,/accepts the saved token/);
-  const call=requests.find(r=>r.url.pathname==='/api/auth.info')!;assert.equal(call.init.method,'POST');assert.equal((call.init.headers as Record<string,string>).Authorization,'Bearer private-outline-token');
+  const named=await run('model');assert.equal(named.ok,true);assert.match(named.detail,/can read documents in the Outline collection "Model"/);
+  const list=requests.find(r=>r.path==='/api/documents.list')!;assert.deepEqual(list.body,{collectionId:'c1',limit:1});assert.equal(list.init.method,'POST');assert.equal((list.init.headers as Record<string,string>).Authorization,'Bearer private-outline-token');
+  assert.equal((await run('https://outline.internal/collection/other-ZzZ987wvu1')).detail,'The saved token can read documents in the Outline collection "Other".');
+  documents=[];assert.match((await run('c2')).detail,/has no documents yet/);
+  const missing=await run('Missing');assert.equal(missing.ok,false);assert.match(missing.detail,/cannot see an Outline collection matching "Missing"/);
+  requests.length=0;assert.match((await run('')).detail,/No collection is set/);assert.equal(requests[0].path,'/api/auth.info');
+  status=401;const refused=await testConnection('Outline',withScope('model'),probe);assert.equal(refused.ok,false);assert.equal(refused.detail,'Outline refused the saved token.');status=200;
   const slack=await probe('Slack',f.config,new AbortController().signal);assert.equal(slack.ok,false);assert.equal(slack.detail,'Service reported: invalid_auth.');
  }finally{f.close()}
+});
+
+test('Outline collection references accept a name, an ID, a URL slug or a collection URL',()=>{
+ assert.deepEqual(outlineCollectionRef(' DevOps '),{ref:'DevOps',urlId:undefined});
+ assert.deepEqual(outlineCollectionRef('devops-AbC123xyz9'),{ref:'devops-AbC123xyz9',urlId:'AbC123xyz9'});
+ assert.deepEqual(outlineCollectionRef('https://outline.example.com/collection/dev-ops-AbC123xyz9/recent'),{ref:'dev-ops-AbC123xyz9',urlId:'AbC123xyz9'});
+ assert.equal(outlineCollectionRef('AbC123xyz9').urlId,'AbC123xyz9');
 });

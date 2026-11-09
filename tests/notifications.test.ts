@@ -13,7 +13,7 @@ function reader(n:Notifications){let seq=n.list().seq;return ()=>{const page=n.l
 const history=(store:Store)=>JSON.parse(store.decrypt(store.get<string>('notifications.history')!,store.key!));
 test('workflow transitions create private notifications once; each browser reads them from its own position',()=>{const f=fixture(),c=f.notifications;try{
  c.capture();const a=reader(c),b=reader(c);assert.equal(a().events.length,0);
- f.change({state:'waiting',stage:'Plan approval'});c.capture();c.capture();const first=a();assert.equal(first.events.length,1);const e=first.events[0];assert.equal(e.title,'Plan ready for approval');assert.equal(e.body,'YouTrack ticket · Open Support to review the next step.');assert.equal(e.route,'#/youtrack?issue=1&connection=yt');assert.doesNotMatch(JSON.stringify(first),/SECRET|LAB-1|Scale payments/);
+ f.change({state:'waiting',stage:'Plan approval'});c.capture();c.capture();const first=a();assert.equal(first.events.length,1);const e=first.events[0];assert.equal(e.title,'Plan ready for approval');assert.equal(e.body,'YouTrack ticket · Open Support to review the next step.');assert.equal(e.route,'#/youtrack?issue=1&connection=yt&step=plan');assert.doesNotMatch(JSON.stringify(first),/SECRET|LAB-1|Scale payments/);
  assert.equal(a().events.length,0);assert.equal(b().events[0].id,e.id);
  assert.doesNotMatch(f.store.get<string>('notifications.history')!,/LAB-1|Plan approval|yt:1/);
  const restored=new Notifications(f.store,()=>[]);assert.equal(restored.list(0).events[0].id,e.id);
@@ -72,4 +72,14 @@ test('blocked work names the stopped stage, and long or multi-line titles are sh
  assert.ok(reference.startsWith('LAB-1 · Line one line two x'));assert.ok(reference.endsWith('…'));assert.equal(reference.length,'LAB-1 · '.length+100);
  assert.equal(detail,'YouTrack ticket · Open Support to check what is blocking progress.');
  f.change({state:'waiting',stage:'Intake decision',source:'slack',key:'SLACK-0123abcd'});c.capture();const slack=r().events[0];assert.equal(slack.title,'New request needs a decision');assert.match(slack.body,/^SLACK-0123abcd · .*\nSlack request · /);
+}finally{f.close()}});
+test('alerts waiting for a handling decision never notify, and handled alerts notify like tickets',()=>{const f=fixture(),c=f.notifications;try{
+ f.change({source:'alert',key:'ALERT-0123abcd',state:'running',stage:'Investigation'});c.capture();const r=reader(c);
+ f.change({state:'waiting',stage:'Intake decision'});c.capture();assert.equal(r().events.length,0);
+ f.change({state:'waiting',stage:'Plan approval'});c.capture();const e=r().events;assert.equal(e.length,1);assert.equal(e[0].title,'Plan ready for approval');assert.match(e[0].body,/^Alert · /);
+ f.change({source:'slack',key:'SLACK-0123abcd',state:'waiting',stage:'Intake decision'});c.capture();assert.equal(r().events[0].title,'New request needs a decision');
+}finally{f.close()}});
+test('a notification about a failed investigation opens the investigation step',()=>{const f=fixture(),c=f.notifications;try{
+ c.capture();const r=reader(c);f.change({state:'blocked',stage:'Investigation'});c.capture();
+ assert.equal(r().events[0].route,'#/youtrack?issue=1&connection=yt&step=investigation');
 }finally{f.close()}});

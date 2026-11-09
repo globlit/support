@@ -8,9 +8,16 @@ export const handlingInput=z.object({connection:z.string().max(200).optional(),r
 export const ignoreInput=z.object({revision:z.number().int().positive(),sourceUpdated:z.number(),reason:z.string().trim().min(1).max(2000),durationMinutes:z.number().int().min(1).max(43200).optional(),labels:z.record(z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/),z.array(z.string().min(1).max(1000)).min(1).max(100)).refine(v=>Object.keys(v).length<=10)}).strict();
 export function handling(store:Store,issue:Pick<SourceIssue,'connection'|'id'>):Handling{
  const saved=store.get<Handling>('handling:'+issue.connection+':'+issue.id);if(saved)return saved;
- const w=store.getWorkSession(issue.connection,issue.id);
- const mode:HandlingMode=sourceKind(issue.connection)==='youtrack'||!!w?.plans.length?'investigate':'pending';
- return {mode,reason:'',revision:0,at:'',actor:'',history:[]};
+ const w=store.getWorkSession(issue.connection,issue.id),kind=sourceKind(issue.connection);
+ const base={reason:'',revision:0,at:'',actor:'',history:[]};
+ if(kind==='youtrack'||w?.plans.length)return {...base,mode:'investigate'};
+ if(kind==='alert'){
+  // Alerts without a decision follow Settings → Alertmanager → Default handling. The raw setting avoids a full config parse per alert.
+  const choice=store.get<{alerting?:{defaultHandling?:string}}>('config')?.alerting?.defaultHandling;
+  if(choice==='ticket'||choice==='investigate')return {...base,mode:choice};
+  return {...base,mode:'pending',defaultIgnored:true};
+ }
+ return {...base,mode:'pending'};
 }
 export function assertHandling(store:Store,issue:Pick<SourceIssue,'connection'|'id'>,allowed:HandlingMode[]=['investigate']){
  const h=handling(store,issue);if(!allowed.includes(h.mode))throw new AppError(409,`This request is ${h.mode==='human'?'being handled by an engineer':h.mode==='refused'?'refused':h.mode==='done'?'resolved locally':'waiting for an intake decision'}. Return it to the agent before continuing.`);

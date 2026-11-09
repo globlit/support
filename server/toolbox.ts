@@ -150,7 +150,7 @@ export async function mergeKubeconfigs(files:KubeconfigFile[]){
   }
   if(conflicts.length)throw new AppError(400,conflicts.slice(0,3).join(' ')+(conflicts.length>3?` ${conflicts.length-3} more conflicts.`:'')+' Rename the entries in one file, then load the files again.');
   let merged:string;
-  try{merged=(await exec(binary,['config','view','--flatten'],{timeout:20000,maxBuffer:2_000_000,encoding:'utf8',shell:false,env:{...toolboxEnvironment(),KUBECONFIG:paths.join(':')}})).stdout;}
+  try{merged=(await exec(binary,['config','view','--flatten'],{timeout:60000,maxBuffer:16_000_000,encoding:'utf8',shell:false,env:{...toolboxEnvironment(),KUBECONFIG:paths.join(':')}})).stdout;}
   catch(e){throw new AppError(400,`The kubeconfig files could not be merged: ${kubectlError(e,paths,names)}. Embed certificates and keys with the *-data fields instead of file paths.`);}
   const contexts=[...seen.keys()].filter(k=>k.startsWith('Context\u0000')).map(k=>k.slice('Context\u0000'.length));
   return {kubeconfig:merged,contexts};

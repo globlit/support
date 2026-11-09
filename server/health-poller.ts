@@ -18,6 +18,39 @@ async function readResponse(response:Response,signal:AbortSignal,limit:number){
  const reader=response.body?.getReader();if(!reader)return '';const chunks:Uint8Array[]=[];let bytes=0;
  try{while(true){signal.throwIfAborted();const next=await reader.read();if(next.done)break;bytes+=next.value.length;if(bytes>limit)throw new ProbeError('Health response exceeded its size limit.');chunks.push(next.value)}return Buffer.concat(chunks).toString('utf8')}finally{void reader.cancel().catch(()=>{});}
 }
+/**
+ * Returns the parts of an Outline collection reference: the text to match against names and IDs, and the 10-character
+ * URL ID when the reference is a collection URL (`…/collection/devops-AbC123xyz9`), a URL slug, or a bare URL ID.
+ */
+export function outlineCollectionRef(value:string){
+ const text=value.trim(),path=text.match(/\/collection\/([^/?#]+)/)?.[1];
+ const ref=path?decodeURIComponent(path):text;
+ const urlId=ref.match(/(?:^|-)([A-Za-z0-9]{10})$/)?.[1];
+ return {ref,urlId};
+}
+/**
+ * Checks that an Outline token can read the configured collection: finds it with `collections.list`, then lists one
+ * document with `documents.list`. Without a configured collection, checks the token with `auth.info` only.
+ */
+async function probeOutline(base:URL,token:string,collection:string,fetcher:typeof fetch,signal:AbortSignal):Promise<HealthResult>{
+ const call=async(path:string,body:unknown)=>{
+  const response=await fetcher(new URL(path,base),{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body),redirect:'manual',signal});
+  if(!response.ok){void response.body?.cancel().catch(()=>{});throw new ProbeError(response.status===401||response.status===403?'Outline refused the saved token.':`Outline returned HTTP ${response.status} for ${path}.`);}
+  try{return JSON.parse(await readResponse(response,signal,2_000_000))}catch(e){if(e instanceof ProbeError)throw e;throw new ProbeError('Outline returned an unexpected response.');}
+ };
+ if(!collection.trim()){const v=await call('api/auth.info',{});return v?.data?.user?{ok:true,detail:'Outline API accepts the saved token. No collection is set, so no document was read.'}:{ok:false,detail:'Outline returned an unexpected response.'};}
+ const {ref,urlId}=outlineCollectionRef(collection);
+ let found:{id:string;name:string}|undefined;
+ for(let offset=0;offset<1000&&!found;offset+=100){
+  const page=await call('api/collections.list',{limit:100,offset});const items:{id:string;urlId?:string;name:string}[]=Array.isArray(page?.data)?page.data:[];
+  found=items.find(c=>c.id===ref||(!!urlId&&c.urlId===urlId)||c.name.toLowerCase()===ref.toLowerCase());
+  if(items.length<100)break;
+ }
+ if(!found)return {ok:false,detail:`The saved token cannot see an Outline collection matching "${ref.slice(0,100)}". Use the name shown in Outline's sidebar, or paste the collection URL.`};
+ const documents=await call('api/documents.list',{collectionId:found.id,limit:1});
+ if(!Array.isArray(documents?.data))return {ok:false,detail:'Outline returned an unexpected document list.'};
+ return {ok:true,detail:documents.data.length?`The saved token can read documents in the Outline collection "${found.name}".`:`The saved token can open the Outline collection "${found.name}". It has no documents yet.`};
+}
 export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe{return async(name,config,signal)=>{
  const c=config.connections[name];signal.throwIfAborted();
  if(name==='Toolbox'){
@@ -32,13 +65,14 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
  }
  const base=serviceBase(c.endpoint),headers:Record<string,string>={Accept:'application/json'};
  const optionalToken=()=>store.vaultStatus().credentials.includes(name)?store.readCredential(name):undefined;
+ if(name==='Outline'&&store.vaultStatus().credentials.includes('Outline'))return await probeOutline(base,store.readCredential('Outline'),c.scope,fetcher,signal);
  let path='',method:'GET'|'POST'='GET',body:string|undefined,format:'json'|'text'='json',check:(v:any)=>boolean=()=>true,detail='';
  switch(name){
   case 'YouTrack':path='api/users/me?fields=id';headers.Authorization='Bearer '+store.readCredential(name);check=v=>typeof v.id==='string';detail='YouTrack API responds and accepts the saved token.';break;
   case 'GitLab':{path='api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=v=>Array.isArray(v);detail='GitLab project API responds and accepts the saved token.';break;}
   case 'Alertmanager':path='api/v2/status';check=v=>typeof v?.versionInfo==='object';detail='Alertmanager API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Prometheus':path='api/v1/status/buildinfo';check=v=>v?.status==='success';detail='Prometheus API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
-  case 'Outline':{const token=optionalToken();if(token){method='POST';body='{}';headers['Content-Type']='application/json';headers.Authorization='Bearer '+token;path='api/auth.info';check=v=>!!v?.data?.user;detail='Outline API accepts the saved token.';}else{path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline responds. No token saved, so only availability is checked.';}break;}
+  case 'Outline':path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline responds. No token saved, so only availability is checked.';break;
   case 'Slack':path=base.pathname.replace(/\/$/,'').endsWith('/api')?'auth.test':'api/auth.test';method='POST';headers.Authorization='Bearer '+store.readCredential(name);check=v=>v?.ok===true;detail='Slack API accepts the saved token. Channel permissions are checked when a request is opened.';break;
   case 'Model':{
    if(config.modelAuth==='chatgpt'&&(config.modelProvider!=='openai'||c.endpoint!=='https://api.openai.com'))return {ok:false,detail:'Restore the OpenAI endpoint for ChatGPT sign-in.'};

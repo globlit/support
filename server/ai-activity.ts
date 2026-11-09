@@ -82,7 +82,8 @@ export function aiOverview(store:Store,claude:Claude,now=Date.now()):AIOverview{
   const ownership=handling(store,{connection:g.connection,id:g.issueId});
   if(['human','refused','done'].includes(ownership.mode))status={state:ownership.mode==='done'?'completed':'stopped',stage:handlingLabel(ownership.mode),reason:ownership.reason||'Agent handling is paused until an engineer returns this request.'};
   else if(isIgnored(store,{connection:g.connection,id:g.issueId}))status={state:'stopped',stage:'Ignored',reason:'An active ignore rule prevents agent work.'};
-  else if(ownership.mode==='pending')status={state:'waiting',stage:'Intake decision',reason:'Create a ticket, investigate here, or ignore this request.'};
+  else if(ownership.mode==='pending'&&ownership.defaultIgnored)status={state:'stopped',stage:'Not handled',reason:'New alerts are ignored by default. Choose how to handle this alert to start work.'};
+   else if(ownership.mode==='pending')status={state:'waiting',stage:'Intake decision',reason:'Create a ticket, investigate here, or ignore this request.'};
   else if(ownership.mode==='reply')status={state:'waiting',stage:'Direct reply',reason:'Prepare and approve an answer to the Slack thread.'};
   const reply=store.get<{state:string}>('incomingReply:'+g.connection+':'+g.issueId);
   if(!['human','refused','done'].includes(ownership.mode)&&!isIgnored(store,{connection:g.connection,id:g.issueId})&&reply)status=reply.state==='pending'?{state:'blocked',stage:'Confirm reply',reason:'Check the pending reply; no message is retried automatically.'}:reply.state==='sent'?{state:'completed',stage:source==='alert'?'Resolution recorded':'Reply sent',reason:'Approved response recorded. New work requires another review.'}:{state:'waiting',stage:'Reply approval',reason:'Review the exact response before sending.'};
