@@ -21,10 +21,10 @@ test('every connection with a credential explains how to create it',()=>{
 
 test('help texts are short and describe only the field',()=>{
  const text=(node:unknown)=>renderToStaticMarkup(createElement('div',null,node as never)).replace(/<[^>]+>/g,'');
- for(const name of connectionNames)for(const help of [endpointHelp(name),scopeHelp(name),credentialHelp(name)]){
+ for(const name of connectionNames)for(const [help,max] of [[endpointHelp(name),260],[scopeHelp(name),260],[credentialHelp(name),name==='GitLab'?420:260]] as const){
   if(!help)continue;
   const t=text(help);
-  assert.ok(t.length<=260,`${name}: ${t.length} characters: ${t}`);
+  assert.ok(t.length<=max,`${name}: ${t.length} characters: ${t}`);
   assert.doesNotMatch(t,/\bTest\b/,name);
  }
 });

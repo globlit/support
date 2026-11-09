@@ -388,3 +388,4 @@ summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; bo
 .number-field input { width: 90px; margin: 0; text-align: center; font-variant-numeric: tabular-nums; }
 .number-field button { width: 36px; padding: 0; font-size: 16px; line-height: 1; flex-shrink: 0; }
 .key-help-tip { display: flex; align-items: center; gap: 6px; }
+.ignore-rules { margin-top: 28px; }

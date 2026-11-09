@@ -19,13 +19,35 @@ Use Basic auth when a proxy such as nginx `auth_basic` protects Alertmanager or 
 
 Support uses the projects that the saved GitLab token can access. No project list is configured in Support.
 
-- Give the token access only to the projects that Support may change. A project or group access token limits that access in GitLab.
-- The token needs the `api` scope to create branches and draft merge requests. `read_api` is enough for investigations only.
+- Give the token access only to the projects that Support may change.
+- Prefer a [fine-grained personal access token](https://docs.gitlab.com/auth/tokens/fine_grained_access_tokens/) (GitLab 18.10 beta, generally available in 19.2), with these permissions:
+
+| Resource | Permission | Used for |
+| --- | --- | --- |
+| Project | Read | Listing the projects the token can access. |
+| Pipeline | Read | Pipeline status and pipeline jobs. |
+| Job | Read | Job logs of failed jobs. |
+| Repository | Read | Reading files and comparing commits. |
+| Merge request | Read, Create | Finding and opening draft merge requests. |
+| Branch | Read, Create | Checking and creating the Support branch. |
+| Commit | Create | Committing prepared changes. |
+
+  Investigations only need the first four rows. Permission names come from the [REST permission reference](https://docs.gitlab.com/auth/tokens/fine_grained_access_tokens_rest/).
+- With a legacy token, use the `api` scope to create branches and draft merge requests. `read_api` is enough for investigations only.
 - When you prepare changes, choose the project. The target branch defaults to the project's default branch.
 
 ## Outline
 
 Set **Allowed collection** to the collection name shown in Outline's left sidebar, for example `DevOps`. The collection URL (`https://outline.example.com/collection/devops-AbC123xyz9`) or the collection ID also work. With an API key saved, **Test** finds the collection and lists one of its documents. Without a key, it only checks that Outline responds.
+
+If the Outline API key has scopes, it needs:
+
+| Scope | Used for |
+| --- | --- |
+| `documents:read` | Listing and reading documents (`documents.list`, `documents.info`, `documents.search`). |
+| `collections:read` | Finding the collection by name or URL (`collections.list`). Not needed when **Allowed collection** is the collection ID (UUID). |
+
+Outline matches each scope against the API method namespace, so `documents:read` does not allow `collections.list` ([source](https://github.com/outline/outline/blob/main/shared/helpers/AuthenticationHelper.ts)).
 
 ## Model
 

@@ -29,20 +29,23 @@ export function outlineCollectionRef(value:string){
  return {ref,urlId};
 }
 /**
- * Checks that an Outline token can read the configured collection: finds it with `collections.list`, then lists one
- * document with `documents.list`. Without a configured collection, checks the token with `auth.info` only.
+ * Checks that an Outline token can read the configured collection with `documents.list`. A collection ID is used directly
+ * and needs the `documents:read` scope only. A name or URL is resolved with `collections.list`, which needs `collections:read`.
+ * Without a configured collection, lists one document of any collection.
  */
 async function probeOutline(base:URL,token:string,collection:string,fetcher:typeof fetch,signal:AbortSignal):Promise<HealthResult>{
  const call=async(path:string,body:unknown)=>{
   const response=await fetcher(new URL(path,base),{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body),redirect:'manual',signal});
-  if(!response.ok){void response.body?.cancel().catch(()=>{});throw new ProbeError(response.status===401||response.status===403?'Outline refused the saved token.':`Outline returned HTTP ${response.status} for ${path}.`);}
+  if(!response.ok){void response.body?.cancel().catch(()=>{});const method=path.replace(/^api\//,''),scope=method.split('.')[0]+':read';throw new ProbeError(response.status===401?'Outline rejected the saved token: it is invalid, expired or revoked.':response.status===403?`The token's scopes do not allow ${method}. Add ${scope} to the Outline API key.`:`Outline returned HTTP ${response.status} for ${path}.`);}
   try{return JSON.parse(await readResponse(response,signal,2_000_000))}catch(e){if(e instanceof ProbeError)throw e;throw new ProbeError('Outline returned an unexpected response.');}
  };
- if(!collection.trim()){const v=await call('api/auth.info',{});return v?.data?.user?{ok:true,detail:'Outline API accepts the saved token. No collection is set, so no document was read.'}:{ok:false,detail:'Outline returned an unexpected response.'};}
+ if(!collection.trim()){const v=await call('api/documents.list',{limit:1});return Array.isArray(v?.data)?{ok:true,detail:'Outline API accepts the saved token. No collection is set.'}:{ok:false,detail:'Outline returned an unexpected response.'};}
  const {ref,urlId}=outlineCollectionRef(collection);
- let found:{id:string;name:string}|undefined;
+ let found:{id:string;name:string}|undefined=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref)?{id:ref,name:ref}:undefined;
  for(let offset=0;offset<1000&&!found;offset+=100){
-  const page=await call('api/collections.list',{limit:100,offset});const items:{id:string;urlId?:string;name:string}[]=Array.isArray(page?.data)?page.data:[];
+  let page;
+  try{page=await call('api/collections.list',{limit:100,offset});}
+  catch(e){if(e instanceof ProbeError&&e.message.startsWith("The token's scopes"))return {ok:false,detail:'The token cannot list collections. Add collections:read to the Outline API key, or set the collection ID instead of its name.'};throw e;}const items:{id:string;urlId?:string;name:string}[]=Array.isArray(page?.data)?page.data:[];
   found=items.find(c=>c.id===ref||(!!urlId&&c.urlId===urlId)||c.name.toLowerCase()===ref.toLowerCase());
   if(items.length<100)break;
  }

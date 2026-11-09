@@ -70,7 +70,6 @@ test('an Outline token is checked by reading the configured collection, and serv
  const probe=serviceProbe(f.store,async(input,init)=>{const url=new URL(String(input));requests.push({path:url.pathname,body:init?.body?JSON.parse(String(init.body)):null,init:init!});if(status!==200)return new Response('',{status});
   if(url.pathname==='/api/collections.list')return Response.json({data:[{id:'c1',urlId:'AbC123xyz9',name:'Model'},{id:'c2',urlId:'ZzZ987wvu1',name:'Other'}]});
   if(url.pathname==='/api/documents.list')return Response.json({data:documents});
-  if(url.pathname==='/api/auth.info')return Response.json({data:{user:{id:'u'}}});
   return Response.json({ok:false,error:'invalid_auth'});});
  const withScope=(scope:string)=>({...f.config,connections:{...f.config.connections,Outline:{...f.config.connections.Outline,scope}}});
  const run=(scope:string)=>probe('Outline',withScope(scope),new AbortController().signal);
@@ -80,8 +79,11 @@ test('an Outline token is checked by reading the configured collection, and serv
   assert.equal((await run('https://outline.internal/collection/other-ZzZ987wvu1')).detail,'The saved token can read documents in the Outline collection "Other".');
   documents=[];assert.match((await run('c2')).detail,/has no documents yet/);
   const missing=await run('Missing');assert.equal(missing.ok,false);assert.match(missing.detail,/cannot see an Outline collection matching "Missing"/);
-  requests.length=0;assert.match((await run('')).detail,/No collection is set/);assert.equal(requests[0].path,'/api/auth.info');
-  status=401;const refused=await testConnection('Outline',withScope('model'),probe);assert.equal(refused.ok,false);assert.equal(refused.detail,'Outline refused the saved token.');status=200;
+  requests.length=0;assert.match((await run('')).detail,/No collection is set/);assert.deepEqual(requests.map(r=>r.path),['/api/documents.list']);
+  requests.length=0;const uuid='3f1c2b7a-9d4e-4a10-b2c3-0123456789ab';assert.equal((await run(uuid)).ok,true);assert.deepEqual(requests.map(r=>[r.path,r.body.collectionId]),[['/api/documents.list',uuid]]);
+  status=401;const refused=await testConnection('Outline',withScope('model'),probe);assert.equal(refused.ok,false);assert.equal(refused.detail,'Outline rejected the saved token: it is invalid, expired or revoked.');
+  status=403;const scoped=await run('model');assert.equal(scoped.ok,false);assert.match(scoped.detail,/Add collections:read to the Outline API key, or set the collection ID/);
+  const noDocs=await testConnection('Outline',withScope(uuid),probe);assert.equal(noDocs.ok,false);assert.equal(noDocs.detail,"The token's scopes do not allow documents.list. Add documents:read to the Outline API key.");status=200;
   const slack=await probe('Slack',f.config,new AbortController().signal);assert.equal(slack.ok,false);assert.equal(slack.detail,'Service reported: invalid_auth.');
  }finally{f.close()}
 });
