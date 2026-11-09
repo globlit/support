@@ -49,16 +49,15 @@ The **Claude subscription** model option runs the Claude Code CLI in the contain
 
 The login is stored in `/home/node/.claude` in the container. Mount a volume there to keep it when the container is recreated: `-v support-claude:/home/node/.claude`.
 
-## Repositories and Toolbox files
+## Toolbox configuration file
 
-Mount host folders that Support needs to read, and enter their container paths in Settings:
+A pasted or generated Toolbox configuration in **Settings → Connections → Toolbox** needs no mount. To use a configuration file instead, mount its folder and enter its container path in **Toolbox JSON configuration path**:
 
-| Setting | Example mount | Path in Settings |
-| --- | --- | --- |
-| Repository folder | `-v ~/src:/workspace:ro` | `/workspace` |
-| Toolbox configuration path | `-v ~/.config/toolbox:/config/toolbox:ro` | `/config/toolbox/config.json` |
+| Example mount | Path in Settings |
+| --- | --- |
+| `-v ~/.config/toolbox:/config/toolbox:ro` | `/config/toolbox/config.json` |
 
-A pasted Toolbox configuration in **Settings → Connections → Toolbox** needs no mount.
+Support reads and changes code through the GitLab API only. It needs no repository mount.
 
 ## Notifications
 

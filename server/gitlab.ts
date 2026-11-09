@@ -10,12 +10,29 @@ export async function boundedJSON(fetcher:typeof fetch,url:URL,headers:Record<st
  if(!response.ok){await response.body?.cancel();throw new AppError(502,`Service returned HTTP ${response.status}. Check access and configuration.`);}
  const chunks:Uint8Array[]=[];let size=0;try{if(!response.body)throw new Error();for await(const c of response.body as unknown as AsyncIterable<Uint8Array>){size+=c.length;if(size>2_000_000)throw new Error();chunks.push(c);}return JSON.parse(Buffer.concat(chunks).toString());}catch{throw new AppError(502,'Invalid or oversized service response. Check remote status before retrying a write.');}
 }
+const projectSummary=z.object({path_with_namespace:z.string(),name:z.string(),default_branch:z.string().nullable().optional()});
+/** GitLab project path, display name and default branch. */
+export type GitLabProject={project:string;name:string;defaultBranch:string|null};
+/** Full project path such as `group/subgroup/project`. Segments cannot start with a dot. */
+export const projectPath=z.string().min(3).max(300).regex(/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*(?:\/[a-zA-Z0-9_-][a-zA-Z0-9_.-]*)+$/,'Use the full GitLab project path, for example group/project.');
+/** Lists up to 100 non-archived projects the saved GitLab token can access, most recently active first. `search` matches project names and paths. */
+export async function gitLabProjects(store:Store,fetcher:typeof fetch=fetch,search=''):Promise<GitLabProject[]>{
+ const c=store.snapshot().config.connections.GitLab;
+ if(!c.enabled||!c.endpoint)throw new AppError(400,'Enable GitLab in Connections.');
+ const u=new URL('api/v4/projects',serviceBase(c.endpoint));
+ for(const [key,value] of Object.entries({membership:'true',simple:'true',archived:'false',order_by:'last_activity_at',per_page:'100'}))u.searchParams.set(key,value);
+ if(search){u.searchParams.set('search',search);u.searchParams.set('search_namespaces','true');}
+ const projects=z.array(projectSummary).max(100).parse(await boundedJSON(fetcher,u,{'PRIVATE-TOKEN':store.readCredential('GitLab')}));
+ return projects.map(p=>({project:p.path_with_namespace,name:p.name,defaultBranch:p.default_branch??null}));
+}
 export class GitLab {
  base:URL;private token:string;private epoch:number;private revision:number;
  constructor(private store:Store,readonly project:string,private fetcher:typeof fetch=fetch){const s=store.snapshot();const c=s.config.connections.GitLab;if(!c.enabled||!c.endpoint)throw new AppError(400,'Enable GitLab in Connections.');this.base=serviceBase(c.endpoint);this.token=store.readCredential('GitLab');this.epoch=store.credentialEpoch;this.revision=s.configRevision;}
  check(){if(this.epoch!==this.store.credentialEpoch||this.revision!==this.store.snapshot().configRevision||!this.store.key)throw new AppError(409,'Settings or credentials changed. Review again.');}
  async request(path:string,params:Record<string,string>={},body?:unknown,allow404=false){this.check();const u=new URL('api/v4/projects/'+encodeURIComponent(this.project)+'/'+path,this.base);for(const[k,v]of Object.entries(params))u.searchParams.set(k,v);const result=await boundedJSON(this.fetcher,u,{'PRIVATE-TOKEN':this.token},body,allow404);this.check();return result;}
  async trace(job:number){this.check();const u=new URL('api/v4/projects/'+encodeURIComponent(this.project)+'/jobs/'+job+'/trace',this.base);let r:Response;try{r=await this.fetcher(u,{method:'GET',redirect:'manual',headers:{'PRIVATE-TOKEN':this.token},signal:AbortSignal.timeout(15000)});}catch{throw new AppError(502,'Job log could not be read.');}if(!r.ok){await r.body?.cancel();throw new AppError(502,'Job log is unavailable.');}let size=0;const chunks:Uint8Array[]=[];if(!r.body)throw new AppError(502,'Empty job log response.');for await(const b of r.body as unknown as AsyncIterable<Uint8Array>){size+=b.length;if(size>256000)throw new AppError(502,'Job log exceeds 256 KB. Inspect it in GitLab.');chunks.push(b);}this.check();return Buffer.concat(chunks).toString('utf8');}
+ /** Returns the project path and default branch, or null when the saved token cannot access the project. */
+ async info(){this.check();const u=new URL('api/v4/projects/'+encodeURIComponent(this.project),this.base);const data=await boundedJSON(this.fetcher,u,{'PRIVATE-TOKEN':this.token},undefined,true);this.check();return data===null?null:projectSummary.parse(data);}
  async lastCommit(path:string,ref:string){return z.object({last_commit_id:sha}).parse(await this.request('repository/files/'+encodeURIComponent(path),{ref})).last_commit_id;}
  async branch(name:string){const data=await this.request('repository/branches/'+encodeURIComponent(name),{},undefined,true);return data===null?null:z.object({commit:z.object({id:sha,parent_ids:z.array(sha),message:z.string()})}).parse(data).commit;}
  async file(path:string,ref:string){const data=await this.request('repository/files/'+encodeURIComponent(path),{ref},undefined,true);if(data===null)return null;const f=z.object({encoding:z.literal('base64'),content:z.string(),size:z.number().max(32000),blob_id:sha}).parse(data);const bytes=Buffer.from(f.content,'base64');const text=bytes.toString('utf8');const blob=createHash(f.blob_id.length===64?'sha256':'sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');if(blob!==f.blob_id||bytes.length!==f.size||!Buffer.from(text).equals(bytes)||text.includes('\0'))throw new AppError(400,'Only UTF-8 text files up to 32 KB are supported.');return text;}

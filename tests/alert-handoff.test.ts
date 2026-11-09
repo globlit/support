@@ -14,7 +14,7 @@ import {Claude} from '../server/claude.js';
 async function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'support-handoff-'));let store=new Store(dir);store.unlock('temporary test passphrase',true);
  for(const name of ['YouTrack','GitLab','Model'])store.credential(name,'fixture-key-'+name);
- const s=store.snapshot();store.config({...s.config,repositories:[{name:'Flux',path:'/workspace/flux',project:'infra/flux',environment:'Development',branch:'main'}],connections:{...s.config.connections,Alertmanager:{endpoint:'https://am.internal',scope:'',path:'',enabled:true},YouTrack:{endpoint:'https://yt.internal',scope:'project: INFRA',path:'',enabled:true},GitLab:{endpoint:'https://git.internal',scope:'',path:'',enabled:true},Model:{endpoint:'https://model.internal',scope:'fixture-model',path:'',enabled:true}}},s.configRevision);
+ const s=store.snapshot();store.config({...s.config,connections:{...s.config.connections,Alertmanager:{endpoint:'https://am.internal',scope:'',path:'',enabled:true},YouTrack:{endpoint:'https://yt.internal',scope:'project: INFRA',path:'',enabled:true},GitLab:{endpoint:'https://git.internal',scope:'',path:'',enabled:true},Model:{endpoint:'https://model.internal',scope:'fixture-model',path:'',enabled:true}}},s.configRevision);
  const remote={updated:1000,resolved:false,present:true,summary:'Restart detected',gitReads:0,ytHook:undefined as undefined|(()=>void)};
  const fetcher=(async(url,opts)=>{assert.equal(opts?.method,'GET');const u=new URL(String(url));
   if(u.hostname==='am.internal')return Response.json(remote.present?[{fingerprint:'abc',labels:{alertname:'Payments restarts',cluster:'dev',severity:'warning'},annotations:{summary:remote.summary},startsAt:'2026-11-07T10:00:00Z',status:{state:'active'}}]:[]);
@@ -51,10 +51,10 @@ test('new ticket sessions receive the draft, and repeated requests across restar
 });
 test('GitLab preparation stays blocked until the current YouTrack plan receives fresh approval',async()=>{
  const f=await fixture();try{const preview=await f.handoff.preview(f.id),carried=await f.handoff.carry(f.id,preview.hash),changes=new Changes(f.store,f.yt,f.fetcher);
-  const input={repositoryPath:'/workspace/flux',paths:['deploy.yaml'],revision:carried.detail.session.revision,sourceUpdated:carried.detail.issue.updated};
+  const input={project:'infra/flux',paths:['deploy.yaml'],revision:carried.detail.session.revision,sourceUpdated:carried.detail.issue.updated};
   await assert.rejects(changes.prepare('2-42',input),/Approve the current plan/);assert.equal(f.remote.gitReads,0);
   const approved=await f.yt.action('2-42',{action:'approve',revision:input.revision,sourceUpdated:input.sourceUpdated});
-  await assert.rejects(changes.prepare('2-42',{...input,revision:approved.session.revision}),/target branch does not exist/);assert.equal(f.remote.gitReads,1);
+  await assert.rejects(changes.prepare('2-42',{...input,revision:approved.session.revision}),/cannot access it/);assert.equal(f.remote.gitReads,1);
  }finally{f.done();}
 });
 for(const changed of ['alert','source-note','source-plan','ticket','target-note','settings','vault','resolved','revision'] as const)test(`stale ${changed} handoff cannot append a plan`,async()=>{

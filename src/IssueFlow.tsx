@@ -2,6 +2,22 @@ import {sourceKind,handlingLabel,requestOrigin} from './intake-model';
 import {latestChange,replyStatus} from './reply-state';
 import type {AnalysisRun,ChangeSet,LiveDetail} from './model';
 export type ReviewStage='request'|'ticket'|'investigation'|'plan'|'implementation'|'message';
+/**
+ * Returns the step a ticket is at: the latest step with recorded work.
+ * Alerts and Slack requests stay on the request step until a handling decision exists.
+ * Pass the loaded change sets: without them, the result stops at the implementation step.
+ */
+export function currentStage(detail:LiveDetail,changes:ChangeSet[],running=false):ReviewStage{
+ const s=detail.session,c=latestChange(changes),mode=s.handling?.mode;
+ if(mode==='reply')return 'message';
+ if(sourceKind(detail.issue.connection)!=='youtrack'){if(!mode||mode==='pending')return 'request';if(mode==='ticket')return 'ticket';}
+ if(mode==='human'||mode==='refused')return 'request';
+ if(s.replyState||c?.resolution||c?.tracking?.state==='merged')return 'message';
+ if(c||s.approval)return 'implementation';
+ if(s.plans.length)return 'plan';
+ if(running||s.analysis||s.alertHandoffs?.some(h=>h.analysis))return 'investigation';
+ return 'request';
+}
 export function IssueFlow({detail,changes,loaded,error,running,selected,onSelect,disabled,latestRun}:{latestRun?:AnalysisRun|null;detail:LiveDetail;changes:ChangeSet[];loaded:boolean;error:string;running:boolean;selected:ReviewStage;onSelect:(s:ReviewStage)=>void;disabled:boolean}){
  const s=detail.session,origin=requestOrigin(s),c=latestChange(changes),incoming='alert' in detail?(detail as import('./model').AlertDetail).alert:undefined;const ignored=!!incoming?.ignored&&(sourceKind(detail.issue.connection)==='slack'||incoming.ignored>=incoming.members.length);
  const recorded=!!s.analysis||!!s.alertHandoffs?.some(h=>h.analysis);

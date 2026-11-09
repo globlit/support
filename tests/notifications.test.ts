@@ -6,14 +6,14 @@ import {join} from 'node:path';
 import {Store} from '../server/store.js';
 import {Notifications,notificationQuery} from '../server/notifications.js';
 import type {AIWorkflow} from '../src/ai-model.js';
-const workflow:AIWorkflow={id:'yt:1',connection:'yt',issueId:'1',source:'youtrack',title:'SECRET TITLE',key:'LAB-1',state:'running',stage:'Investigation',reason:'SECRET REASON',updatedAt:'2026-11-08T10:00:00Z',runCount:1,repeating:false,quiet:false};
+const workflow:AIWorkflow={id:'yt:1',connection:'yt',issueId:'1',source:'youtrack',title:'Scale payments deployment',key:'LAB-1',state:'running',stage:'Investigation',reason:'SECRET REASON',updatedAt:'2026-11-08T10:00:00Z',runCount:1,repeating:false,quiet:false};
 function fixture(){const dir=mkdtempSync(join(tmpdir(),'support-notifications-')),store=new Store(dir);let now=Date.now(),workflows=[{...workflow}];store.unlock('notification test passphrase',true);const notifications=new Notifications(store,()=>workflows,()=>now);return {store,notifications,advance:(n=1000)=>now+=n,change:(patch:Partial<AIWorkflow>)=>{workflows=[{...workflows[0],...patch,updatedAt:new Date(now+=1000).toISOString()}]},clear:()=>workflows=[],close:()=>{store.close();rmSync(dir,{recursive:true,force:true})}}}
 /** Returns a function that reads the next page the way one browser does. */
 function reader(n:Notifications){let seq=n.list().seq;return ()=>{const page=n.list(seq);seq=page.seq;return page;};}
 const history=(store:Store)=>JSON.parse(store.decrypt(store.get<string>('notifications.history')!,store.key!));
 test('workflow transitions create private notifications once; each browser reads them from its own position',()=>{const f=fixture(),c=f.notifications;try{
  c.capture();const a=reader(c),b=reader(c);assert.equal(a().events.length,0);
- f.change({state:'waiting',stage:'Plan approval'});c.capture();c.capture();const first=a();assert.equal(first.events.length,1);const e=first.events[0];assert.match(e.title,/Review/);assert.equal(e.route,'#/youtrack?issue=1&connection=yt');assert.doesNotMatch(JSON.stringify(first),/SECRET/);
+ f.change({state:'waiting',stage:'Plan approval'});c.capture();c.capture();const first=a();assert.equal(first.events.length,1);const e=first.events[0];assert.equal(e.title,'Plan ready for approval');assert.equal(e.body,'YouTrack ticket · Open Support to review the next step.');assert.equal(e.route,'#/youtrack?issue=1&connection=yt');assert.doesNotMatch(JSON.stringify(first),/SECRET|LAB-1|Scale payments/);
  assert.equal(a().events.length,0);assert.equal(b().events[0].id,e.id);
  assert.doesNotMatch(f.store.get<string>('notifications.history')!,/LAB-1|Plan approval|yt:1/);
  const restored=new Notifications(f.store,()=>[]);assert.equal(restored.list(0).events[0].id,e.id);
@@ -36,7 +36,7 @@ test('preferences suppress disabled kinds and reveal only constrained references
  c.capture();const r=reader(c);f.change({state:'blocked',stage:'Investigation'});c.capture();
  let s=f.store.snapshot();f.store.config({...s.config,notifications:{...s.config.notifications,blocked:false}},s.configRevision);c.capture();assert.equal(r().events.length,0);
  s=f.store.snapshot();f.store.config({...s.config,notifications:{...s.config.notifications,blocked:true,privatePreview:false}},s.configRevision);assert.equal(r().events.length,0);
- f.change({state:'waiting',stage:'Plan approval'});c.capture();assert.match(r().events[0].body,/LAB-1/);
+ f.change({state:'waiting',stage:'Plan approval'});c.capture();assert.equal(r().events[0].body,'LAB-1 · Scale payments deployment\nYouTrack ticket · Open Support to review the next step.');
  f.change({key:'credential=SECRET',stage:'Diff approval'});c.capture();assert.doesNotMatch(JSON.stringify(r()),/SECRET/);
 }finally{f.close()}});
 test('reopened and completion preferences use workflow state, not model run completion',()=>{const f=fixture(),c=f.notifications;try{
@@ -64,4 +64,12 @@ test('capture errors pause delivery without exposing the error and recover on th
 test('a locked Vault rejects reads and tests without losing history',()=>{const f=fixture(),c=f.notifications;try{
  c.test();f.store.lock();assert.throws(()=>c.list(0),/Unlock/);assert.throws(()=>c.test(),/Unlock/);c.tick();
  f.store.unlock('notification test passphrase');assert.equal(c.list(0).events.length,1);
+}finally{f.close()}});
+test('blocked work names the stopped stage, and long or multi-line titles are shortened',()=>{const f=fixture(),c=f.notifications;try{
+ c.capture();const r=reader(c);const s=f.store.snapshot();f.store.config({...s.config,notifications:{...s.config.notifications,privatePreview:false}},s.configRevision);
+ f.change({state:'blocked',stage:'Pipeline failed',title:'Line one\n\tline two '+'x'.repeat(200)});c.capture();const e=r().events[0];
+ assert.equal(e.title,'Work stopped at Pipeline failed');const [reference,detail]=e.body.split('\n');
+ assert.ok(reference.startsWith('LAB-1 · Line one line two x'));assert.ok(reference.endsWith('…'));assert.equal(reference.length,'LAB-1 · '.length+100);
+ assert.equal(detail,'YouTrack ticket · Open Support to check what is blocking progress.');
+ f.change({state:'waiting',stage:'Intake decision',source:'slack',key:'SLACK-0123abcd'});c.capture();const slack=r().events[0];assert.equal(slack.title,'New request needs a decision');assert.match(slack.body,/^SLACK-0123abcd · .*\nSlack request · /);
 }finally{f.close()}});

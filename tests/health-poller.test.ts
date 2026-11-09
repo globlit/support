@@ -44,9 +44,9 @@ test('HTTP probes use bounded GETs, expected responses and refuse redirects with
 });
 
 test('model catalogs may exceed 128 KB; repo-scoped GitLab checks avoid instance metadata permissions',async()=>{
- const f=fixture(['Model','GitLab']);f.store.credential('Model','private-test-key');f.store.credential('GitLab','private-git-key');f.config.repositories=[{path:'/workspace/demo',name:'demo',project:'group/demo',branch:'main',environment:'Development'}];
- const urls:string[]=[];const probe=serviceProbe(f.store,async(input)=>{const url=String(input);urls.push(url);return url.includes('repository/branches')?Response.json({commit:{id:'a'.repeat(40)}}):Response.json({id:'model',metadata:'x'.repeat(180000)})});
- try{assert.equal((await probe('Model',f.config,new AbortController().signal)).ok,true);assert.equal((await probe('GitLab',f.config,new AbortController().signal)).ok,true);assert.ok(urls.some(u=>u.endsWith('/api/v4/projects/group%2Fdemo/repository/branches/main')));assert.ok(urls.every(u=>!u.endsWith('/version')));}finally{f.close()}
+ const f=fixture(['Model','GitLab']);f.store.credential('Model','private-test-key');f.store.credential('GitLab','private-git-key');
+ const urls:string[]=[];const probe=serviceProbe(f.store,async(input)=>{const url=String(input);urls.push(url);return url.includes('/api/v4/projects')?Response.json([{id:1}]):Response.json({id:'model',metadata:'x'.repeat(180000)})});
+ try{assert.equal((await probe('Model',f.config,new AbortController().signal)).ok,true);assert.equal((await probe('GitLab',f.config,new AbortController().signal)).ok,true);assert.ok(urls.some(u=>u.endsWith('/api/v4/projects?membership=true&simple=true&per_page=1')));assert.ok(urls.every(u=>!u.endsWith('/version')));}finally{f.close()}
 });
 test('connection tests use unsaved settings with saved credentials and record no health state or logs',async()=>{
  const f=fixture(['YouTrack']);f.store.credential('YouTrack','private-test-credential');

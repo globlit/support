@@ -1,7 +1,7 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {isAbsolute,join} from 'node:path';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {z} from 'zod';
 import type {Config} from '../src/model.js';
@@ -48,4 +48,74 @@ export async function readToolbox(config:Config,input:unknown,signal:AbortSignal
   const {stdout}=await exec(binary,toolboxArgs(config,input,configPath),{signal,timeout:20000,maxBuffer:512000,encoding:'utf8',shell:false,env});return JSON.parse(stdout);
  }catch{throw new AppError(502,'Toolbox read failed. Check its binary, configuration, context access and response size where Support runs.');}
  finally{if(dir)await rm(dir,{recursive:true,force:true});}
+}
+
+/**
+ * Generates a Toolbox configuration for a pasted kubeconfig with `toolbox config generate --detect-contexts`.
+ * Returns the configuration JSON with the kubeconfig path set to the {{kubeconfig}} placeholder, and the detected context names.
+ * Each detected context allows only the `default` namespace. The kubeconfig is written to a private temporary folder, deleted after the run.
+ */
+export async function generateToolboxConfig(kubeconfig:string){
+ if(process.platform!=='linux')throw new AppError(403,'Toolbox execution requires Support to run on Linux.');
+ const binary=process.env.SUPPORT_TOOLBOX_BINARY??'/usr/local/bin/toolbox';
+ if(!isAbsolute(binary))throw new AppError(400,'SUPPORT_TOOLBOX_BINARY must be an absolute path.');
+ const dir=await mkdtemp(join(tmpdir(),'support-toolbox-generate-'));
+ try{
+  const kubeconfigPath=join(dir,'kubeconfig'),configPath=join(dir,'toolbox.json');
+  await writeFile(kubeconfigPath,kubeconfig,{mode:0o600,flag:'wx'});
+  try{await exec(binary,['config','generate','--path',configPath,'--detect-contexts','--kubeconfig',kubeconfigPath],{timeout:20000,maxBuffer:512000,encoding:'utf8',shell:false,env:toolboxEnvironment()});}
+  catch{throw new AppError(400,'Toolbox could not generate a configuration. Check that the kubeconfig is valid YAML and defines at least one context.');}
+  const generated=z.object({kubectl:z.object({kubeconfig:z.string(),context:z.string().nullish(),contexts:z.array(z.object({name:z.string()}).passthrough()).nullish()}).passthrough()}).passthrough().parse(JSON.parse(await readFile(configPath,'utf8')));
+  generated.kubectl.kubeconfig='{{kubeconfig}}';
+  // Toolbox writes a single detected context to `context` and several to `contexts`.
+  const contexts=generated.kubectl.contexts?.length?generated.kubectl.contexts.map(c=>c.name):generated.kubectl.context?[generated.kubectl.context]:[];
+  return {config:JSON.stringify(generated,null,2),contexts};
+ }finally{await rm(dir,{recursive:true,force:true});}
+}
+
+export type KubeconfigFile={name:string;content:string};
+type Entry={name:string;[key:string]:unknown};
+const kubeconfigView=z.object({clusters:z.array(z.object({name:z.string()}).passthrough()).nullish(),users:z.array(z.object({name:z.string()}).passthrough()).nullish(),contexts:z.array(z.object({name:z.string()}).passthrough()).nullish()}).passthrough();
+/** Returns the first line of a kubectl error, with temporary file paths replaced by the uploaded file names. */
+function kubectlError(error:unknown,paths:string[],names:string[]){
+ let line=String((error as {stderr?:string})?.stderr??'').split('\n').find(l=>l.trim())??'kubectl failed.';
+ paths.forEach((path,i)=>{line=line.split(path).join(names[i]);});
+ return line.replace(/^error: /,'').slice(0,300);
+}
+
+/**
+ * Merges kubeconfig files into one self-contained kubeconfig with `kubectl config view --flatten`.
+ * The current context comes from the first file that sets one. A cluster, user or context name may appear in several
+ * files only with identical content: kubectl keeps only the first entry for a name, so a differing duplicate would make
+ * a context use the wrong credentials. Files are written to a private temporary folder, deleted after the merge.
+ * Returns the merged kubeconfig YAML and its context names.
+ */
+export async function mergeKubeconfigs(files:KubeconfigFile[]){
+ if(process.platform!=='linux')throw new AppError(403,'Merging kubeconfig files requires Support to run on Linux.');
+ const binary=process.env.SUPPORT_KUBECTL_BINARY??'/usr/local/bin/kubectl';
+ if(!isAbsolute(binary))throw new AppError(400,'SUPPORT_KUBECTL_BINARY must be an absolute path.');
+ const dir=await mkdtemp(join(tmpdir(),'support-kubeconfig-merge-'));
+ const names=files.map(f=>f.name),paths=files.map((_,i)=>join(dir,'kubeconfig-'+i));
+ try{
+  const seen=new Map<string,{file:string;entry:string}>(),conflicts:string[]=[];
+  for(const [i,file] of files.entries()){
+   await writeFile(paths[i],file.content,{mode:0o600,flag:'wx'});
+   let view:z.infer<typeof kubeconfigView>;
+   try{const {stdout}=await exec(binary,['config','view','--kubeconfig',paths[i],'--raw','-o','json'],{timeout:20000,maxBuffer:2_000_000,encoding:'utf8',shell:false,env:{...toolboxEnvironment(),KUBECONFIG:''}});view=kubeconfigView.parse(JSON.parse(stdout));}
+   catch(e){throw new AppError(400,`${file.name} is not a valid kubeconfig: ${kubectlError(e,paths,names)}`);}
+   for(const [kind,label] of [['clusters','Cluster'],['users','User'],['contexts','Context']] as const){
+    for(const entry of (view[kind]??[]) as Entry[]){
+     const key=label+'\u0000'+entry.name,value=JSON.stringify(entry),prior=seen.get(key);
+     if(!prior)seen.set(key,{file:file.name,entry:value});
+     else if(prior.entry!==value)conflicts.push(`${label} "${entry.name}" is defined differently in ${prior.file} and ${file.name}.`);
+    }
+   }
+  }
+  if(conflicts.length)throw new AppError(400,conflicts.slice(0,3).join(' ')+(conflicts.length>3?` ${conflicts.length-3} more conflicts.`:'')+' Rename the entries in one file, then load the files again.');
+  let merged:string;
+  try{merged=(await exec(binary,['config','view','--flatten'],{timeout:20000,maxBuffer:2_000_000,encoding:'utf8',shell:false,env:{...toolboxEnvironment(),KUBECONFIG:paths.join(':')}})).stdout;}
+  catch(e){throw new AppError(400,`The kubeconfig files could not be merged: ${kubectlError(e,paths,names)}. Embed certificates and keys with the *-data fields instead of file paths.`);}
+  const contexts=[...seen.keys()].filter(k=>k.startsWith('Context\u0000')).map(k=>k.slice('Context\u0000'.length));
+  return {kubeconfig:merged,contexts};
+ }finally{await rm(dir,{recursive:true,force:true});}
 }

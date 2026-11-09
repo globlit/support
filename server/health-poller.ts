@@ -39,7 +39,7 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
  let path='',format:'json'|'text'='json',check:(v:any)=>boolean=()=>true,detail='';
  switch(name){
   case 'YouTrack':path='api/users/me?fields=id';headers.Authorization='Bearer '+store.readCredential(name);check=v=>typeof v.id==='string';detail='YouTrack API responds and accepts the saved token.';break;
-  case 'GitLab':{const repo=config.repositories.find(r=>r.project);path=repo?'api/v4/projects/'+encodeURIComponent(repo.project!)+'/repository/branches/'+encodeURIComponent(repo.branch):'api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=repo?v=>typeof v.commit?.id==='string':v=>Array.isArray(v);detail=repo?'GitLab responds and the configured repository branch is readable.':'GitLab project API responds and accepts the saved token.';break;}
+  case 'GitLab':{path='api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=v=>Array.isArray(v);detail='GitLab project API responds and accepts the saved token.';break;}
   case 'Alertmanager':case 'Prometheus':path='-/ready';format='text';detail='Readiness endpoint reports ready.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Outline':path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline health endpoint responds.';{const token=optionalToken();if(token)headers.Authorization='Bearer '+token}break;
   case 'Slack':path=base.pathname.replace(/\/$/,'').endsWith('/api')?'api.test':'api/api.test';check=v=>v.ok===true;detail='Slack API responds. This checks availability, not channel permissions.';break;

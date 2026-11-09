@@ -1,24 +1,24 @@
 import {claudeCliStatus} from './claude-cli.js';
 import {chatGPT} from './chatgpt.js';
 import {z} from 'zod';
-import {GitLab,serviceBase,boundedJSON} from './gitlab.js';
+import {GitLab,serviceBase,boundedJSON,gitLabProjects} from './gitlab.js';
 import {modelKey} from './model-api.js';
 import {Store,AppError} from './store.js';
 
 export async function checkGitLabConnection(store:Store,fetcher:typeof fetch=fetch){
  const config=store.snapshot().config;
  if(!config.connections.GitLab.enabled)throw new AppError(400,'Enable GitLab in Connections first.');
- const repositories=config.repositories.filter(r=>r.project);
- if(!repositories.length)throw new AppError(400,'Map a repository to its full GitLab project path in Settings first.');
- const checks=[];
- for(const repo of repositories.slice(0,10)){
-  const git=new GitLab(store,repo.project!,fetcher);
-  const branch=await git.branch(repo.branch);
-  if(!branch)throw new AppError(400,`Target branch ${repo.branch} was not found in ${repo.project}.`);
-  const pipelines=z.array(z.object({id:z.number(),status:z.string()})).parse(await git.request('pipelines',{ref:repo.branch,per_page:'1'}));
-  checks.push({label:repo.project!+' read access',ok:true,detail:`Read branch ${repo.branch} (${branch.id.slice(0,8)}) and pipelines. Latest: ${pipelines[0]?.status??'none'}. No writes performed; write permissions are not tested.`});
+ const projects=await gitLabProjects(store,fetcher);
+ if(!projects.length)throw new AppError(400,'The saved GitLab token cannot access any project. Give the token access to the projects Support may change.');
+ const checks=[{label:'Project access',ok:true,detail:`The token can access ${projects.length>=100?'at least 100 projects':projects.length===1?'1 project':projects.length+' projects'}. Support can prepare changes in each of them.`}];
+ const first=projects[0];
+ if(first.defaultBranch){
+  const git=new GitLab(store,first.project,fetcher);
+  const branch=await git.branch(first.defaultBranch);
+  if(!branch)throw new AppError(400,`Default branch ${first.defaultBranch} was not found in ${first.project}.`);
+  const pipelines=z.array(z.object({id:z.number(),status:z.string()})).parse(await git.request('pipelines',{ref:first.defaultBranch,per_page:'1'}));
+  checks.push({label:first.project+' read access',ok:true,detail:`Read branch ${first.defaultBranch} (${branch.id.slice(0,8)}) and pipelines. Latest: ${pipelines[0]?.status??'none'}. No writes performed; write permissions are not tested.`});
  }
- if(repositories.length>10)checks.push({label:'Additional repositories',ok:false,detail:'Only the first ten repository mappings were checked.'});
  return {checks,liveTest:true};
 }
 

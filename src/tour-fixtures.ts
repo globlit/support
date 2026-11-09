@@ -15,7 +15,6 @@ export function createTourFixture(scene:TourScene){
  const snapshot:Snapshot={config:structuredClone(defaults),configRevision:1,tickets:[],vault:{initialized:true,unlocked:true,credentials:['YouTrack','GitLab']},runtime:{mode:'Tour example',platform:'linux',liveExecution:false}};
  snapshot.config.connections.YouTrack={enabled:true,endpoint:'https://youtrack.example.invalid',scope:'project: EXAMPLE',path:''};snapshot.config.connections.Model.enabled=true;
  snapshot.config.connections.Alertmanager={enabled:true,endpoint:'https://alerts.example.invalid',scope:'',path:''};snapshot.config.connections.Slack={enabled:true,endpoint:'https://slack.com/api',scope:'support-infra',path:''};
- snapshot.config.repositories=[{path:'/workspace/repos/service-demo',project:'platform/service-demo',name:'service-demo',environment:'Development',branch:'main'}];
  const detail:LiveDetail={issue:structuredClone(source),session:{connection:source.connection,issueId:source.id,sourceKey:source.key,sourceUpdated:updated,sourceFingerprint:source.sourceFingerprint,revision:1,updatedAt:later,plans:[],notes:[],draft:'',approval:null}};
  const prepared=!['queue','list','board','request','ownership','investigate','alert-intake','slack-intake','ignore'].includes(scene);
  if(prepared){detail.session.plans=[{version:1,text:plan,at}];detail.session.analysis={model:run.model!,events:run.events};}
@@ -50,6 +49,7 @@ export function createTourFixture(scene:TourScene){
   '/youtrack/issues?offset=0':{issues:[source],hasMore:false,offset:0,loadedAt:later,query:'project: EXAMPLE'},
   [sourcePath+'/'+detail.issue.id]:alert??detail,
   [sourcePath+'/'+detail.issue.id+'/changes']:changes,
+  '/gitlab/projects':{projects:[{project:'platform/service-demo',name:'service-demo',defaultBranch:'main'}]},
   [sourcePath+'/'+detail.issue.id+'/investigations']:activeRun?[activeRun]:[],
   '/analysis/tour-run':activeRun,
   '/alerts':{cases:alert?[{...alert.alert,session:detail.session}]:[],enabled:true,paused:false,pollSeconds:60,lastSuccess:later,polling:false},

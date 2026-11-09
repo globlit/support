@@ -26,7 +26,7 @@ export function errorRecovery(message:string,context?:ConnectionName):RecoveryAc
  const tool=named??context;
  if(tool&&/connections\.[A-Za-z]+\.|modelAuth|modelProvider/.test(m))return connection(tool);
  if(/Slack: (?:invalid_auth|token_revoked|not_authed|missing_scope)|HTTP (?:401|403)\b|unauthorized|invalid.*token|authentication failed/i.test(m)&&tool)return tool==='Model'?model():tool==='Toolbox'?connection(tool):credentials(tool);
- if(/map a repository|mapped.*repository|repository (?:root|folder)|repositories.*settings|repository.*(?:not configured|mapping)/i.test(m))return {label:'Open repository settings',route:{page:'settings',section:'Repositories'}};
+
  if(tool&&/(?:configure|enable|endpoint|base URL|instance URL|HTTPS|could not be reached|connection refused|configuration|context is not enabled|executable path|binary|connection.*unavailable)/i.test(m))return connection(tool);
  if(tool==='Model'&&/returned (?:an? )?(?:unsupported|invalid)|unknown tool call|truncated|no structured result|no result was applied|could not complete/i.test(m))return logs('Model');
  return null;
