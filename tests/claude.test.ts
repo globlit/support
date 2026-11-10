@@ -87,3 +87,15 @@ test('the agent runs sandbox commands and new read tools, and the kill switch bl
   setAgentHalted(f.store,false);
  }finally{if(previous===undefined)delete process.env.SUPPORT_SANDBOX_URL;else process.env.SUPPORT_SANDBOX_URL=previous;f.done()}
 });
+test('stopped runs record why they stopped, and the result log lists the facts',async()=>{
+ const f=fixture();try{
+  const {readLogs}=await import('../server/diagnostics.js');
+  const hang=(async(url:RequestInfo|URL,opts?:RequestInit)=>new Promise<Response>((_,reject)=>opts?.signal?.addEventListener('abort',()=>reject(opts.signal!.reason)))) as typeof fetch;
+  for(const [stop,reason] of [[(c:Claude,id:string)=>c.cancel(id),'Stopped by the engineer (Stop run).'],[(c:Claude)=>c.cancelAll(),'Stopped by the kill switch (Stop all).'],[(c:Claude)=>c.cancelSource(f.store.snapshot().config.connections.YouTrack.endpoint&&(c as unknown as {runs:Map<string,{connection:string}>}).runs.values().next().value!.connection,'2-42'),'Stopped: the handling of this request changed.']] as const){
+   const c=new Claude(f.store,f.yt,hang);const d=await f.yt.work('2-42');const run=await c.start('2-42',{revision:d.session.revision,sourceUpdated:1000});
+   (stop as (c:Claude,id:string)=>unknown)(c,run.id);const done=await wait(c,run.id);assert.equal(done.state,'cancelled');assert.equal(done.error,reason);
+  }
+  const log=readLogs(f.store,{tool:'Agent'}).entries[0];assert.equal(log.status,'cancelled');assert.match(log.operation,/^Investigation stopped: INFRA-42$/);
+  assert.match(log.output,/^Stopped: the handling of this request changed\.\nTicket: INFRA-42 · Diagnose workload\nModel: test-model\nTool calls: 0\nDuration: \d+ s$/);
+ }finally{f.done()}
+});

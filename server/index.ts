@@ -1,3 +1,4 @@
+import {AgentQueue} from './agent-queue.js';
 import {agentFeed,agentHalted,setAgentHalted,type FeedEntry} from './agent-feed.js';
 import {killAllSandbox,sandboxHealth} from './sandbox.js';
 import {deployment} from './deployment.js';
@@ -47,16 +48,18 @@ const health=new HealthPoller(store);
 const healthTimer=setInterval(()=>void health.tick(),1000);healthTimer.unref();
 const youtrack=new YouTrack(store,transport);
 const claude=new Claude(store,youtrack,transport);
+const agentQueue=new AgentQueue(store,id=>claude.isActive(id));
+claude.onRun({started:r=>agentQueue.started(r),finished:(id,state,error)=>agentQueue.finished(id,state,error)});
 /** Kill switch, running investigations and sandbox status, as shown in the agent console. */
-const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands}});
+const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands},queue:agentQueue.counts(),parallelReview:store.snapshot().config.parallelReview});
 const notifications=new Notifications(store,()=>aiOverview(store,claude).workflows);
 const notificationTimer=setInterval(()=>notifications.tick(),5000);notificationTimer.unref();
-const intake=new InvestigationQueue(store,youtrack,claude);
+const intake=new InvestigationQueue(store,youtrack,agentQueue);
 const intakeTimer=setInterval(()=>void intake.tick(),5000);intakeTimer.unref();
 const alerts=new Alertmanager(store,transport);
 const alertTickets=new AlertTickets(store,alerts,youtrack);
 const handoffs=new AlertHandoffs(store,alerts,youtrack);
-const alertTimer=setInterval(()=>void alerts.tick(claude),5000);alertTimer.unref();
+const alertTimer=setInterval(()=>void alerts.tick(claude,agentQueue),5000);alertTimer.unref();
 const slack=new Slack(store,transport);
 const slackTickets=new AlertTickets(store,slack,youtrack,slack);
 const resolveSource=(id:string,connection?:string)=>id.startsWith('alert:')?alerts.issue(id.slice(6)):id.startsWith('slack:')?slack.issue(id.slice(6)):connection?.startsWith('alertmanager:')?alerts.issue(id):connection?.startsWith('slack:')?slack.issue(id):youtrack.issue(id);
@@ -64,7 +67,11 @@ const changes=new Changes(store,youtrack,transport,resolveSource);
 const pipelines=new Pipelines(store,youtrack,transport,resolveSource);
 const resolutions=new Resolutions(store,youtrack,transport,resolveSource);
 const replies=new IncomingReplies(store,resolveSource,slack,resolutions,transport);
-const slackTimer=setInterval(()=>void slack.tick(claude),5000);slackTimer.unref();
+const slackTimer=setInterval(()=>void slack.tick(agentQueue),5000);slackTimer.unref();
+agentQueue.register('youtrack',{load:id=>youtrack.work(id),start:(id,expected)=>claude.start(id,expected)});
+agentQueue.register('alert',{load:id=>alerts.work(id),start:(id,expected)=>alerts.analyze(id,expected,claude),onStartError:(id,error)=>alerts.recordStartFailure(id,error)});
+agentQueue.register('slack',{load:id=>slack.work(id),start:(id,expected)=>claude.start(id,expected,slack)});
+const queueTimer=setInterval(()=>void agentQueue.tick(),5000);queueTimer.unref();
 let attempts:{time:number;count:number}={time:Date.now(),count:0};
 function rateLimit(){if(Date.now()-attempts.time>60_000)attempts={time:Date.now(),count:0};if(++attempts.count>20)throw new AppError(429,'Too many attempts. Try again in a minute.');}
 /** Reads a JSON request body of at most `limit` bytes. Kubeconfig requests use a larger limit. */
@@ -105,8 +112,11 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  }
  const agentRunStop=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/stop$/);
  if(agentRunStop&&req.method==='POST'){await body(req);claude.cancel(agentRunStop[1]);return send(res,await agentState());}
- if(path==='/api/agent/halt'&&req.method==='POST'){await body(req);setAgentHalted(store,true);claude.cancelAll();stopTunnels();await killAllSandbox();return send(res,await agentState());}
- if(path==='/api/agent/resume'&&req.method==='POST'){await body(req);setAgentHalted(store,false);return send(res,await agentState());}
+ if(path==='/api/agent/halt'&&req.method==='POST'){await body(req);setAgentHalted(store,true);const stopped=claude.cancelAll();stopTunnels();await killAllSandbox();recordDiagnostic(store,{tool:'Agent',operation:'Agent stopped (Stop all)',status:'cancelled',durationMs:0,output:`Runs stopped: ${stopped}\nCommands and tunnels stopped. New runs blocked until resume.`});return send(res,await agentState());}
+ if(path==='/api/agent/queue'&&req.method==='GET')return send(res,{entries:agentQueue.view(),counts:agentQueue.counts()});
+ const queueAction=path.match(/^\/api\/agent\/queue\/(retry|discard)$/);
+ if(queueAction&&req.method==='POST'){const {scope}=z.object({scope:z.string().min(3).max(400)}).strict().parse(await body(req));if(queueAction[1]==='retry')agentQueue.retry(scope);else agentQueue.discard(scope);return send(res,{entries:agentQueue.view(),counts:agentQueue.counts()});}
+ if(path==='/api/agent/resume'&&req.method==='POST'){await body(req);setAgentHalted(store,false);recordDiagnostic(store,{tool:'Agent',operation:'Agent resumed',status:'ok',durationMs:0,output:'New runs allowed.'});return send(res,await agentState());}
  if(path==='/api/chatgpt'&&req.method==='GET')return send(res,chatGPT(store).status());
  if(path==='/api/chatgpt/models'&&req.method==='GET')return send(res,{models:await chatGPT(store).models()});
  if(path==='/api/chatgpt/start'&&req.method==='POST'){rateLimit();const v=z.object({account:z.string().max(200).optional()}).strict().parse(await body(req));return send(res,chatGPT(store).begin(origin,v.account));}
@@ -247,4 +257,4 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  const file=path==='/'?resolve('dist/index.html'):resolve('dist','.'+decodeURIComponent(path));const rel=relative(resolve('dist'),file);if(rel.startsWith('..')||isAbsolute(rel))throw new AppError(403,'Invalid path');const contents=await readFile(file).catch(()=>{throw new AppError(404,'Not found. Run npm run build first.');});res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'} as Record<string,string>)[extname(file)]??'application/octet-stream'});res.end(req.method==='HEAD'?undefined:contents);
  }catch(e){if(req.url?.startsWith('/api/')&&!req.url.startsWith('/api/logs'))recordDiagnostic(store,{tool:'App',operation:(req.method??'GET')+' '+req.url.split('?')[0],status:'error',durationMs:0,output:e instanceof AppError?e.message:'Request validation or processing failed.'});if(e instanceof z.ZodError)return send(res,{error:e.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; ')},400);send(res,{error:e instanceof AppError?e.message:'The operation failed. No credentials were logged.',...(e instanceof AppError&&e.code?{code:e.code}:{})},e instanceof AppError?e.status:500);}});
 server.listen(port,runtime.bindHost,()=>{console.log(`Support\nOpen: ${origin}\nDeployment: ${runtime.mode}; browser authentication required. Approved GitLab branches and reviewed draft merge requests available. Cluster writes disabled.`)});
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();stopTunnels();void killAllSandbox();clearInterval(notificationTimer);clearInterval(slackTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();stopTunnels();void killAllSandbox();clearInterval(notificationTimer);clearInterval(slackTimer);clearInterval(queueTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});

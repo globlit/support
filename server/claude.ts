@@ -14,6 +14,8 @@ import {sourcePage} from '../src/intake-model.js';
 import {serviceAuthHeaders} from './service-auth.js';
 import type {AnalysisRun,SourceIssue} from '../src/model.js';
 
+/** Abort reason recorded as the run error, so that logs and the console show why a run stopped. */
+const stopReason=(message:string)=>new AppError(409,message);
 const maxTurns=25,maxToolCalls=40,runTimeoutMs=20*60_000;
 const inputSchema=z.object({plan:z.string().trim().min(1).max(16000),replyDraft:z.string().max(16000),findings:z.array(z.object({callId:z.string(),summary:z.string().max(4000)}).strict()).max(maxToolCalls).optional()}).strict();
 const blockSchema=z.discriminatedUnion('type',[
@@ -30,10 +32,15 @@ export class Claude {
  constructor(private store:Store,private youtrack:YouTrack,private fetcher:typeof fetch=fetch,private toolboxReader=readToolbox){}
  status(id:string){const run=this.runs.get(id)??this.store.investigation(id);if(Date.parse(run.startedAt)<Date.now()-this.store.snapshot().config.retentionDays*86400000){this.runs.delete(id);this.store.pruneInvestigations();throw new AppError(404,'Investigation expired.');}if(run.state==='running'&&!this.active.has(id)&&this.store.activeRunId!==id){run.state='failed';run.error='Investigation interrupted. Start a fresh run.';for(const e of run.events)if(e.status==='running')e.status='failed';this.store.saveInvestigation(run);}return structuredClone(this.store.key?run:{...run,events:[],plan:undefined,replyDraft:undefined})}
  async history(id:string){const issue=await this.youtrack.issue(id);return this.store.investigations(issue.connection,id).filter(r=>!r.kind||r.kind==='investigation').map(r=>{const v=this.status(r.id);return {...v,events:[],plan:undefined,replyDraft:undefined}});}
- cancelSource(connection:string,id:string){for(const run of this.runs.values())if(run.connection===connection&&run.issueId===id&&run.state==='running')this.active.get(run.id)?.abort();}
- cancel(id:string){this.status(id);this.active.get(id)?.abort();return this.status(id)}
+ cancelSource(connection:string,id:string){for(const run of this.runs.values())if(run.connection===connection&&run.issueId===id&&run.state==='running')this.active.get(run.id)?.abort(stopReason('Stopped: the handling of this request changed.'));}
+ private runListeners:{started(r:{runId:string;connection:string;id:string;title:string;fingerprint?:string}):void;finished(runId:string,state:'ready'|'failed'|'cancelled',error?:string):void}[]=[];
+ /** Calls `listener` when an investigation starts and when it ends. */
+ onRun(listener:Claude['runListeners'][number]){this.runListeners.push(listener);}
+ /** True while the run is in progress in this process. */
+ isActive(runId:string){return this.active.has(runId);}
+ cancel(id:string){this.status(id);this.active.get(id)?.abort(stopReason('Stopped by the engineer (Stop run).'));return this.status(id)}
  /** Aborts every running investigation. Returns how many were running. */
- cancelAll(){for(const c of this.active.values())c.abort();return this.active.size;}
+ cancelAll(){for(const c of this.active.values())c.abort(stopReason('Stopped by the kill switch (Stop all).'));return this.active.size;}
  private base(endpoint:string){const u=new URL(endpoint.replace(/\/+$/,'')+'/');if(u.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(u.hostname))throw new AppError(400,'Use HTTPS for model and tool connections.');return u}
  async start(id:string,expected:{revision:number;sourceUpdated:number},source:Pick<YouTrack,'work'|'issue'>=this.youtrack){
   assertAgentRunning(this.store);
@@ -51,7 +58,8 @@ export class Claude {
    const key=await modelKey(this.store);check();
    const detail=await source.work(id);assertAgentWork(this.store,detail.issue);check();
    if(detail.issue.resolved||detail.issue.updated!==expected.sourceUpdated||detail.session.revision!==expected.revision)throw new AppError(409,'The ticket or work session changed. Refresh before analyzing.');
-   Object.assign(run,{connection:detail.issue.connection,sourceUpdated:detail.issue.updated,sourceFingerprint:detail.issue.sourceFingerprint,model:model.scope});this.runs.set(run.id,run);this.store.saveInvestigation(run);
+   Object.assign(run,{connection:detail.issue.connection,sourceUpdated:detail.issue.updated,sourceFingerprint:detail.issue.sourceFingerprint,model:model.scope,title:`${detail.issue.key} · ${detail.issue.title}`});this.runs.set(run.id,run);this.store.saveInvestigation(run);
+   for(const l of this.runListeners)l.started({runId:run.id,connection:detail.issue.connection,id,title:`${detail.issue.key} · ${detail.issue.title}`,fingerprint:detail.issue.sourceFingerprint??String(detail.issue.updated)});
    this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(detail.issue.connection+':'+id,detail.issue.sourceFingerprint??String(detail.issue.updated),new Date().toISOString());
    // Tool traces are encrypted in the Vault.
    while(this.runs.size>50)this.runs.delete(this.runs.keys().next().value!);
@@ -61,7 +69,7 @@ export class Claude {
  }
  private async execute(run:AnalysisRun,issue:SourceIssue,sessionRevision:number,base:URL,key:string,model:string,config:ReturnType<Store['snapshot']>['config'],controller:AbortController,check:()=>void,source:Pick<YouTrack,'work'|'issue'>){
   const modelTransport=configuredModelFetch(this.store,this.fetcher);
-  const timeout=setTimeout(()=>controller.abort(),runTimeoutMs);
+  const timeout=setTimeout(()=>controller.abort(stopReason(`Stopped after the ${runTimeoutMs/60000}-minute run limit.`)),runTimeoutMs);
   agentFeed.start({runId:run.id,title:`${issue.key??issue.id} · ${issue.title}`.slice(0,160),route:{page:sourcePage(issue.connection),issue:issue.id},startedAt:run.startedAt});
   const persist=()=>this.store.saveInvestigation(run);const event=(text:string)=>{run.events.push({at:new Date().toISOString(),text});persist();agentFeed.publish(run.id,'step',text);};
   const secrets:string[]=[];
@@ -164,6 +172,6 @@ export class Claude {
     messages.push({role:'user',content:results});
    }
    throw new AppError(409,'Analysis reached its turn limit. No plan saved.');
-  }catch(e){run.state=controller.signal.aborted?'cancelled':'failed';run.error=e instanceof AppError?e.message:'Analysis failed. Check model and tool configuration; no plan was saved.';event(run.error);}finally{clearTimeout(timeout);run.finishedAt=new Date().toISOString();void cleanupSandboxRun(run.id,this.fetcher);agentFeed.end(run.id,run.state==='ready'?'Plan ready for review':run.state==='cancelled'?'Stopped':`Failed: ${run.error??'unknown error'}`);for(const e of run.events)if(e.status==='running'){e.status='failed';e.conclusion='No result recorded. See the run failure.';}persist();}
+  }catch(e){run.state=controller.signal.aborted?'cancelled':'failed';run.error=controller.signal.aborted&&controller.signal.reason instanceof AppError?controller.signal.reason.message:e instanceof AppError?e.message:'Analysis failed. Check model and tool configuration; no plan was saved.';event(run.error);}finally{clearTimeout(timeout);run.finishedAt=new Date().toISOString();void cleanupSandboxRun(run.id,this.fetcher);if(run.state==='ready'||run.state==='failed'||run.state==='cancelled')for(const l of this.runListeners)l.finished(run.id,run.state,run.error);agentFeed.end(run.id,run.state==='ready'?'Plan ready for review':run.state==='cancelled'?run.error??'Stopped':`Failed: ${run.error??'unknown error'}`);for(const e of run.events)if(e.status==='running'){e.status='failed';e.conclusion='No result recorded. See the run failure.';}persist();}
  }
 }

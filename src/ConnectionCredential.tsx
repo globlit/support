@@ -5,6 +5,7 @@ import {credentialHelp} from './field-help';
 import {Select} from './Select';
 import {openVaultSettings} from './navigation';
 import type {ConnectionName,Snapshot,ToolboxSettings} from './model';
+import {useFeedback} from './Toasts';
 
 type Props={name:ConnectionName;data:Snapshot;run:(f:()=>Promise<void>)=>Promise<void>;reload:()=>Promise<Snapshot>;busy:boolean;dirty:boolean;pending:boolean;setPending:(name:ConnectionName,body:unknown)=>void;toolboxSettings?:ToolboxSettings;settingsDirty?:boolean};
 type ServiceAuthName='Alertmanager'|'Prometheus';
@@ -74,10 +75,10 @@ type Generated={config:string;contexts:{name:string;namespaces:string[];excluded
 function ToolboxEditor(props:EditorProps){
  const {saved,onClose,toolboxSettings,settingsDirty}=props,fileInput=useRef<HTMLInputElement>(null);
  const [kubeconfig,setKubeconfig]=useState(''),[available,setAvailable]=useState<string[]>([]),[selected,setSelected]=useState<string[]>([]);
- const [preview,setPreview]=useState<{key:string;result:Generated}|null>(null),[working,setWorking]=useState(''),[status,setStatus]=useState(''),[error,setError]=useState('');
+ const [preview,setPreview]=useState<{key:string;result:Generated}|null>(null),[working,setWorking]=useState(''),[status,setStatus]=useState(''),feedback=useFeedback();
  // The preview is valid only for the kubeconfig, contexts and settings it was generated from.
  const key=JSON.stringify([kubeconfig,[...selected].sort(),toolboxSettings]),ready=!!preview&&preview.key===key;
- async function step(label:string,work:()=>Promise<void>){setWorking(label);setError('');setStatus('');try{await work();}catch(e){setError(e instanceof Error?e.message:`${label} failed.`);}finally{setWorking('');}}
+ async function step(label:string,work:()=>Promise<void>){setWorking(label);setStatus('');try{await work();}catch(e){feedback.error(e instanceof Error?e.message:`${label} failed.`);}finally{setWorking('');}}
  const load=(list:FileList|null)=>{if(list?.length)void step('Loading',async()=>{
   const files=await Promise.all([...list].map(async f=>({name:f.name,content:await f.text()})));
   const r=await api<{kubeconfig:string;contexts:string[]}>('/toolbox/kubeconfig/merge','POST',{files});
@@ -97,7 +98,7 @@ function ToolboxEditor(props:EditorProps){
   </fieldset>}
   {available.length>0&&<div className="actions"><button type="button" disabled={!!working||!selected.length||!toolboxSettings} onClick={generate}>{working==='Generating'?'Generating…':'Generate configuration'}</button></div>}
   {working&&<p className="small muted" role="status">{working==='Generating'?'Listing the namespaces of each context and validating the configuration…':`${working}…`}</p>}
-  {status&&<p className="small muted" role="status">{status}</p>}{error&&<p className="small error" role="alert">{error}</p>}
+  {status&&<p className="small muted" role="status">{status}</p>}
   {preview&&<div className="toolbox-preview">{!ready&&<p className="small amber">The kubeconfig, contexts or behaviour changed. Generate again.</p>}
    <ul>{preview.result.contexts.map(c=><li key={c.name}><code>{c.name}</code> · {c.namespaces.length} namespaces allowed{c.excluded?`, ${c.excluded} excluded`:''}</li>)}</ul>
    <details><summary>Show the generated configuration</summary><pre className="code-input">{preview.result.config}</pre></details></div>}
@@ -109,10 +110,10 @@ function ToolboxEditor(props:EditorProps){
 type ToolboxStatus={source:'none'|'path'|'custom'}|{source:'generated';contexts:{name:string;namespaces:number;excluded:number}[];generatedAt:string;stale:boolean};
 /** Shows the saved Toolbox configuration: its contexts, and whether it still matches the saved behaviour. */
 function ToolboxSaved({data,settingsDirty,reload}:{data:Snapshot;settingsDirty?:boolean;reload:()=>Promise<Snapshot>}){
- const [status,setStatus]=useState<ToolboxStatus|null>(null),[working,setWorking]=useState(false),[error,setError]=useState('');
+ const [status,setStatus]=useState<ToolboxStatus|null>(null),[working,setWorking]=useState(false),[error,setError]=useState(''),feedback=useFeedback();
  const load=()=>{if(data.vault.unlocked)void api<ToolboxStatus>('/toolbox/status').then(setStatus).catch(e=>setError(e instanceof Error?e.message:'Status unavailable.'));};
  useEffect(load,[data.vault.unlocked,data.configRevision,data.vault.credentials.join(',')]);
- async function apply(){setWorking(true);setError('');try{await api('/toolbox/regenerate','POST',{});await reload();load();}catch(e){setError(e instanceof Error?e.message:'Generation failed.');}finally{setWorking(false);}}
+ async function apply(){setWorking(true);try{await api('/toolbox/regenerate','POST',{});await reload();load();feedback.success('Toolbox configuration regenerated.');}catch(e){feedback.error(e)}finally{setWorking(false);}}
  if(!status)return error?<p className="small error">{error}</p>:null;
  if(status.source==='custom')return <p className="small amber">A configuration pasted before generation existed is in use. Replace the kubeconfig below to apply the behaviour above.</p>;
  if(status.source==='path')return <p className="small amber">A configuration file set by path is in use. Add a kubeconfig below to generate a configuration from the behaviour above.</p>;

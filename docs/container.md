@@ -1,64 +1,27 @@
 # Container
 
-Run Support in a Linux container. The `Dockerfile` at the repository root builds an image with Support, kubectl, Toolbox and the Claude Code CLI. The image runs as user `node` (uid 1000).
-
-## Build
+The `Dockerfile` builds an image with Support, kubectl, Toolbox and the Claude Code CLI. The image runs as user `node` (uid 1000).
 
 ```shell
 docker build -t support .
+docker run -d --name support -p 127.0.0.1:4173:4173 -v support-data:/data support
 ```
 
-## Run
+Open `http://127.0.0.1:4173` and create the Vault passphrase. The Vault locks at every restart.
 
-```shell
-docker run -d --name support \
-  -p 127.0.0.1:4173:4173 \
-  -v support-data:/data \
-  support
-```
+- Publish the port on `127.0.0.1` only.
+- To use another host port, set both values: `-p 127.0.0.1:8080:4173 -e SUPPORT_PUBLIC_ORIGIN=http://127.0.0.1:8080`.
+- Back up the `support-data` volume. It contains the database, the Vault and the logs.
 
-Open `http://127.0.0.1:4173`, create the Vault passphrase, and add [connections](connections.md). The Vault locks on every restart. Unlock it to resume polling.
+## Claude Code login
 
-- Publish the port on `127.0.0.1` only. Support accepts browser requests only when the `Host` header matches `SUPPORT_PUBLIC_ORIGIN`.
-- The `support-data` volume contains the database, the Vault and the logs. Back it up.
-- To publish another host port, change both values: `-p 127.0.0.1:8080:4173 -e SUPPORT_PUBLIC_ORIGIN=http://127.0.0.1:8080`.
+To use the Claude Code CLI as the model:
 
-## Image settings
+1. Run `docker exec -it support claude auth login`.
+2. In **Settings → Model**, set the executable path to `/home/node/.local/bin/claude`.
 
-The image sets these variables. See [Configuration](../README.md#configuration) for all variables.
+Mount `/home/node/.claude` to keep the login when the container is recreated.
 
-| Variable | Value |
-| --- | --- |
-| `SUPPORT_DEPLOYMENT` | `container` |
-| `SUPPORT_BIND_HOST` | `0.0.0.0` |
-| `SUPPORT_PORT` | `4173` |
-| `SUPPORT_PUBLIC_ORIGIN` | `http://127.0.0.1:4173` |
-| `SUPPORT_DATA_DIR` | `/data` |
-| `SUPPORT_TOOLBOX_BINARY` | `/usr/local/bin/toolbox` |
+## Command sandbox
 
-## Claude subscription sign-in
-
-The **Claude subscription** model option runs the Claude Code CLI in the container. It needs a CLI login:
-
-1. Sign in:
-   ```shell
-   docker exec -it support claude auth login
-   ```
-2. In **Settings → Model**, set the Claude executable path to `/home/node/.local/bin/claude`.
-3. Click **Test Model**.
-
-The login is stored in `/home/node/.claude` in the container. Mount a volume there to keep it when the container is recreated: `-v support-claude:/home/node/.claude`.
-
-## Toolbox configuration file
-
-A pasted or generated Toolbox configuration in **Settings → Connections → Toolbox** needs no mount. To use a configuration file instead, mount its folder and enter its container path in **Toolbox JSON configuration path**:
-
-| Example mount | Path in Settings |
-| --- | --- |
-| `-v ~/.config/toolbox:/config/toolbox:ro` | `/config/toolbox/config.json` |
-
-Support reads and changes code through the GitLab API only. It needs no repository mount.
-
-## Notifications
-
-Support shows desktop notifications through the browser. Open **Settings → Notifications**, click **Allow notifications**, then **Send test notification**. Notifications appear while a Support tab is open in that browser, including a background tab.
+Set `SUPPORT_SANDBOX_URL` to let the agent run shell commands in a separate sandbox service. Set `SUPPORT_RELAY_BIND` to an address of Support that the sandbox can reach, so that sandbox commands can use port-forward tunnels. The claude-jail compose file sets both.

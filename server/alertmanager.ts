@@ -6,6 +6,7 @@ import {boundedJSON,serviceBase} from './gitlab.js';
 import {serviceAuthHeaders} from './service-auth.js';
 import {localAction,YouTrack} from './youtrack.js';
 import type {Claude} from './claude.js';
+import type {AgentQueue} from './agent-queue.js';
 import type {AlertCase,AlertMember,AlertQueue,SourceIssue,AlertDetail} from '../src/model.js';
 
 const labels=z.record(z.string().max(200),z.string().max(16000)).refine(v=>Object.keys(v).length<=100);
@@ -132,6 +133,8 @@ export class Alertmanager {
   return await this.work(id);
   }finally{release();}
  }
+ /** Records a failed automatic start on the alert case, as shown in the alert's investigation step. */
+ recordStartFailure(id:string,error:unknown){const c=this.store.alert(id);c.autoAttempt=c.episodes;this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(c.connection+':'+c.id,this.source(c).sourceFingerprint??String(c.updated),new Date().toISOString());c.run={id:'',issueId:c.id,state:'failed',startedAt:new Date().toISOString(),events:[],error:error instanceof AppError?error.message:'Investigation could not start.'};this.store.saveAlert(c);}
  async analyze(id:string,expected:{revision:number;sourceUpdated:number},claude:Claude){
   assertHandling(this.store,{connection:this.store.alert(id).connection,id});const run=await claude.start(id,expected,this);
   const c=this.store.alert(id);c.autoAttempt=c.episodes;c.run=run;this.store.saveAlert(c);return run;
@@ -147,21 +150,16 @@ export class Alertmanager {
    enabled:s.config.connections.Alertmanager.enabled,paused:!s.vault.unlocked,pollSeconds:s.config.alerting.pollSeconds,
    lastSuccess:this.pollConnection===connection?this.lastSuccess:undefined,error:this.error,polling:!!this.pending};
  }
- async tick(claude:Claude){
+ async tick(claude:Claude,queue:AgentQueue){
   if(this.ticking)return;this.ticking=true;
   try{
    const s=this.store.snapshot();if(!s.config.connections.Alertmanager.enabled||!s.vault.unlocked)return;
    this.syncRuns(claude);
    if(Date.now()-this.lastAttempt>=s.config.alerting.pollSeconds*1000||this.attemptRevision!==s.configRevision||this.attemptEpoch!==this.store.credentialEpoch)await this.poll();
    if(!s.config.alerting.autoInvestigate||this.error)return;
-   const next=this.queue().cases.find(c=>c.active&&!c.ticket&&!c.suppressed&&handling(this.store,{connection:c.connection,id:c.id}).mode==='investigate'&&!isIgnored(this.store,{connection:c.connection,id:c.id})&&!c.session.pendingRevision&&!c.session.approval&&this.store.db.prepare('SELECT fingerprint FROM investigation_attempts WHERE scope=?').get(c.connection+':'+c.id)?.fingerprint!==(this.source(c).sourceFingerprint??String(c.updated)));
-   if(!next)return;
-   try{await this.analyze(next.id,{revision:next.session.revision,sourceUpdated:next.updated},claude);}
-   catch(e){
-    // Retry busy work later.
-    if(e instanceof AppError&&e.status===409)return;
-    const c=this.store.alert(next.id);c.autoAttempt=c.episodes;this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(c.connection+':'+c.id,this.source(c).sourceFingerprint??String(c.updated),new Date().toISOString());
-    c.run={id:'',issueId:c.id,state:'failed',startedAt:new Date().toISOString(),events:[],error:e instanceof AppError?e.message:'Investigation could not start.'};this.store.saveAlert(c);
+   for(const c of this.queue().cases){
+    if(!c.active||c.ticket){queue.close(c.connection,c.id);continue;}
+    if(c.active&&!c.ticket&&!c.suppressed&&handling(this.store,{connection:c.connection,id:c.id}).mode==='investigate'&&!isIgnored(this.store,{connection:c.connection,id:c.id})&&!c.session.pendingRevision&&!c.session.approval&&this.store.db.prepare('SELECT fingerprint FROM investigation_attempts WHERE scope=?').get(c.connection+':'+c.id)?.fingerprint!==(this.source(c).sourceFingerprint??String(c.updated)))queue.offer({connection:c.connection,id:c.id,title:c.title,fingerprint:this.source(c).sourceFingerprint??String(c.updated)});
    }
   }catch{/* poll stores the safe error for the UI; next scheduled poll retries */}finally{this.ticking=false;}
  }

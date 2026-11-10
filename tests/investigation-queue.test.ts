@@ -7,6 +7,7 @@ import {Store} from '../server/store.js';
 import {YouTrack} from '../server/youtrack.js';
 import {Claude} from '../server/claude.js';
 import {InvestigationQueue} from '../server/investigation-queue.js';
+import {wireQueue} from './queue-fixture.js';
 function setup(){
  const dir=mkdtempSync(join(tmpdir(),'support-intake-'));const store=new Store(dir);store.unlock('fixture passphrase',true);store.credential('YouTrack','fixture');store.credential('Model','fixture');
  const config=store.snapshot();store.config({...config.config,connections:{...config.config.connections,YouTrack:{endpoint:'https://yt.test',enabled:true,scope:'project: LAB',path:''},Model:{endpoint:'https://model.test',scope:'fixture',enabled:true,path:''}}},config.configRevision);
@@ -16,7 +17,7 @@ function setup(){
 }
 async function settle(agent:Claude,store:Store){for(let i=0;i<200;i++){const rows=store.db.prepare('SELECT id FROM investigations').all();if(rows.length&&rows.every(r=>agent.status(String(r.id)).state!=='running'))return;await new Promise(r=>setTimeout(r,5))}throw new Error('run did not finish')}
 test('automatic intake runs once per source version, catches edited descriptions, preserves reviews, and never approves',async()=>{
- const f=setup();let calls=0;const agent=new Claude(f.store,f.yt,(async()=>{calls++;return Response.json({stop_reason:'tool_use',content:[{type:'tool_use',id:'p',name:'prepare_plan',input:{plan:'Check the runbook',replyDraft:''}}]})}) as typeof fetch);const queue=new InvestigationQueue(f.store,f.yt,agent);
+ const f=setup();let calls=0;const agent=new Claude(f.store,f.yt,(async()=>{calls++;return Response.json({stop_reason:'tool_use',content:[{type:'tool_use',id:'p',name:'prepare_plan',input:{plan:'Check the runbook',replyDraft:''}}]})}) as typeof fetch);const q=wireQueue(f.store,agent,{youtrack:{load:id=>f.yt.work(id),start:(id,e)=>agent.start(id,e)}}),intake=new InvestigationQueue(f.store,f.yt,q);const queue={tick:async(t:number)=>{await intake.tick(t);await q.tick();}};
  try{
   await queue.tick(100000);await settle(agent,f.store);assert.equal(calls,1);let d=await f.yt.work('a');assert.equal(d.session.plans.length,1);assert.equal(d.session.approval,null);
   await queue.tick(160001);assert.equal(calls,1);
@@ -25,11 +26,19 @@ test('automatic intake runs once per source version, catches edited descriptions
   f.store.lock();await queue.tick(340004);assert.equal(calls,2);
  }finally{f.done()}
 });
-test('failed intake is not retried on the next poll or after scheduler recreation; manual retry remains possible',async()=>{
- const f=setup();let calls=0;const agent=new Claude(f.store,f.yt,(async()=>{calls++;return new Response('',{status:503})}) as typeof fetch);
+test('a failed automatic investigation is retried once after a minute, then moves to the dead letter; manual retry remains possible',async()=>{
+ const f=setup();let calls=0,clock=1_000_000;const agent=new Claude(f.store,f.yt,(async()=>{calls++;return new Response('',{status:503})}) as typeof fetch);
  try{
-  const queue=new InvestigationQueue(f.store,f.yt,agent);await queue.tick(100000);await settle(agent,f.store);await queue.tick(160001);await new InvestigationQueue(f.store,f.yt,agent).tick(220002);assert.equal(calls,1);
-  const d=await f.yt.work('a');await agent.start('a',{revision:d.session.revision,sourceUpdated:d.issue.updated});await settle(agent,f.store);assert.equal(calls,2);
+  const q=wireQueue(f.store,agent,{youtrack:{load:id=>f.yt.work(id),start:(id,e)=>agent.start(id,e)}},()=>clock);const intake=new InvestigationQueue(f.store,f.yt,q);
+  await intake.tick(100000);await q.tick();await settle(agent,f.store);assert.equal(calls,1);
+  let e=q.list()[0];assert.equal(e.state,'queued');assert.equal(e.attempts,1);assert.ok(e.lastError);
+  await q.tick();assert.equal(calls,1,'no retry before the delay');
+  clock+=61_000;await q.tick();await settle(agent,f.store);assert.equal(calls,2);
+  e=q.list()[0];assert.equal(e.state,'dead');assert.equal(e.attempts,2);
+  clock+=600_000;await intake.tick(160001);await q.tick();await new InvestigationQueue(f.store,f.yt,q).tick(220002);await q.tick();assert.equal(calls,2);
+  q.retry(e.scope);assert.equal(q.list()[0].state,'queued');await q.tick();await settle(agent,f.store);assert.equal(calls,3);
+  q.discard(e.scope);assert.equal(q.list().length,0);
+  const d=await f.yt.work('a');await agent.start('a',{revision:d.session.revision,sourceUpdated:d.issue.updated});await settle(agent,f.store);assert.equal(calls,4);
  }finally{f.done()}
 });
 test('two separate investigations run concurrently, third and duplicate reject, cancelling one preserves the other',async()=>{

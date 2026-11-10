@@ -1,19 +1,19 @@
 import {useState} from 'react';
 import {api} from './api';
 import {notificationsSupported} from './browser-notifications';
+import {useFeedback} from './Toasts';
 
 /** Settings section that requests the browser permission and sends a test notification. */
 export function BrowserNotifications({unlocked,dirty}:{unlocked:boolean;dirty:boolean}){
  const supported=notificationsSupported();
  const [permission,setPermission]=useState<NotificationPermission>(supported?Notification.permission:'denied');
  const [busy,setBusy]=useState(false);
- const [message,setMessage]=useState('');
- const [error,setError]=useState('');
- async function allow(){setError('');setMessage('');setPermission(await Notification.requestPermission());}
+ const feedback=useFeedback();
+ async function allow(){setPermission(await Notification.requestPermission());}
  async function test(){
-  setBusy(true);setError('');setMessage('');
-  try{await api('/notifications/test','POST',{});setMessage('Test sent. It appears within 10 seconds.');}
-  catch(e){setError(e instanceof Error?e.message:'Could not send the test notification.');}
+  setBusy(true);
+  try{await api('/notifications/test','POST',{});feedback.success('Test sent. It appears within 10 seconds.');}
+  catch(e){feedback.error(e instanceof Error?e:'Could not send the test notification.');}
   finally{setBusy(false);}
  }
  return <section className="browser-notifications" aria-label="Browser notifications">
@@ -24,7 +24,6 @@ export function BrowserNotifications({unlocked,dirty}:{unlocked:boolean;dirty:bo
    :<div className="actions"><button type="button" onClick={()=>void allow()}>Allow notifications</button></div>}
   {supported&&permission==='granted'&&<div className="actions"><button type="button" disabled={busy||!unlocked||dirty} onClick={()=>void test()}>Send test notification</button></div>}
   {dirty&&<p className="small muted">Save your notification preferences before testing.</p>}
-  {error&&<p role="alert" className="error">{error}</p>}{message&&<p role="status" className="small">{message}</p>}
   <p className="small muted">Bursts are grouped into one summary, and Support notifies at most once a minute. Delivery pauses when the Vault is locked. Clicking a notification opens Support. Approvals stay in the app.</p>
  </section>;
 }

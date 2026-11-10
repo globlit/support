@@ -1,3 +1,4 @@
+import {Toggle} from './Toggle';
 import type {Config,ConnectionName} from './model';
 const behavior:Record<ConnectionName,{label:string;on:string;off:string}>={
  YouTrack:{label:'Read YouTrack tickets',on:'The queue reads tickets and comments from your configured query.',off:'Ticket reads are unavailable. Saved work sessions and credentials are kept.'},
@@ -11,5 +12,5 @@ const behavior:Record<ConnectionName,{label:string;on:string;off:string}>={
 };
 export function ConnectionAvailability({name,config,onChange}:{name:ConnectionName;config:Config;onChange:(enabled:boolean)=>void}){
  const enabled=config.connections[name].enabled,b=behavior[name];
- return <div className="connection-availability"><label className="toggle"><input type="checkbox" role="switch" aria-checked={enabled} checked={enabled} onChange={e=>onChange(e.target.checked)}/><span className="toggle-track" aria-hidden="true"/><span className="toggle-text">{b.label}<small>{enabled?b.on:b.off}</small></span></label><p className="small muted">{name==='Alertmanager'&&enabled?`Polls every ${config.alerting.pollSeconds} seconds. `:''}{name==='Model'&&enabled?'Automatic alert investigations are configured under Connections → Alertmanager. ':''}Changes take effect when you save settings. Turning this off keeps the saved credentials.</p></div>;
+ return <div className="connection-availability"><Toggle label={b.label} hint={enabled?b.on:b.off} checked={enabled} onChange={onChange}/><p className="small muted">{name==='Alertmanager'&&enabled?`Polls every ${config.alerting.pollSeconds} seconds. `:''}{name==='Model'&&enabled?'Automatic alert investigations are configured under Connections → Alertmanager. ':''}Changes take effect when you save settings. Turning this off keeps the saved credentials.</p></div>;
 }

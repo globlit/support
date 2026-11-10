@@ -1,27 +1,25 @@
 import {agentHalted} from './agent-feed.js';
 import {handling,isIgnored} from './intake.js';
-import {Store,AppError} from './store.js';
+import {Store} from './store.js';
 import {YouTrack} from './youtrack.js';
-import {Claude} from './claude.js';
+import type {AgentQueue} from './agent-queue.js';
 import {recordDiagnostic} from './diagnostics.js';
-/** Server-owned intake. Never executes plans. */
+/** YouTrack intake: offers eligible tickets to the agent queue every minute. Never starts or executes anything itself. */
 export class InvestigationQueue {
  private busy=false;private next=0;private offset=0;private revision=0;
- constructor(private store:Store,private source:YouTrack,private agent:Claude){}
+ constructor(private store:Store,private source:YouTrack,private queue:AgentQueue){}
  async tick(now=Date.now()){
   const snapshot=this.store.snapshot(),config=snapshot.config;
   if(this.busy||!this.store.key||agentHalted(this.store)||!config.autoInvestigate||!config.connections.YouTrack.enabled||!config.connections.Model.enabled)return;
   if(this.revision!==snapshot.configRevision){this.offset=0;this.next=0;this.revision=snapshot.configRevision;}
-  if(now<this.next||!this.store.canAnalyze())return;
+  if(now<this.next)return;
   this.busy=true;this.next=now+60000;
   const epoch=this.store.credentialEpoch;
   const current=()=>!!this.store.key&&epoch===this.store.credentialEpoch&&snapshot.configRevision===this.store.snapshot().configRevision;
   try{
    const page=await this.source.list(this.offset);if(!current())return;
-   let saturated=false;
    for(const candidate of page.issues){
-    if(!this.store.canAnalyze()){saturated=true;break;}
-    if(candidate.resolved)continue;
+    if(candidate.resolved){this.queue.close(candidate.connection,candidate.id);continue;}
     const {issue,session}=await this.source.work(candidate.id);if(!current())return;
     const pendingOrigins=[...this.store.alertCases(),...(this.store.get<string[]>('slackIds')??[]).map(id=>this.store.get<import('../src/model.js').AlertCase>('slack:'+id)!).filter(Boolean)].filter(c=>c.ticketCreation?.state==='pending');
     if(pendingOrigins.some(c=>issue.description.split('\n').some(line=>line.trim()==='Support alert case: '+c.ticketCreation!.marker)))continue;
@@ -34,13 +32,9 @@ export class InvestigationQueue {
     if(runs.some(r=>r.startedAt>=(session.handling?.at||'')&&r.sourceFingerprint===issue.sourceFingerprint&&r.sourceUpdated===issue.updated))continue;
     // Keep imported and reviewed plans.
     if(session.plans.length&&!session.sourceChangedAt)continue;
-    try{await this.agent.start(issue.id,{revision:session.revision,sourceUpdated:issue.updated});}
-    catch(e){if(e instanceof AppError&&e.status===409){saturated=true;break;}
-     this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(scope,fingerprint,new Date(now).toISOString());
-     throw e;
-    }
+    this.queue.offer({connection:issue.connection,id:issue.id,title:`${issue.key} · ${issue.title}`,fingerprint});
    }
-   if(!saturated)this.offset=page.hasMore?this.offset+page.issues.length:0;
+   this.offset=page.hasMore?this.offset+page.issues.length:0;
   }catch(e){if(current())recordDiagnostic(this.store,{tool:'YouTrack',operation:'Automatic investigation intake',status:'error',durationMs:0,output:(e as Error).message});}
   finally{this.busy=false;}
  }

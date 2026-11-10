@@ -106,3 +106,13 @@ test('agent console routes require a session, and the kill switch blocks new run
   await reader.cancel();
  }finally{await f.done()}
 });
+
+test('queue routes require a session and report counts; unknown dead-letter entries are refused',{timeout:15000},async()=>{
+ const f=await fixture(),c=f.client(),other=f.client();try{
+  await c.post('/api/vault',{action:'initialize',passphrase});
+  assert.equal((await other.get('/api/agent/queue')).status,401);assert.equal((await other.post('/api/agent/queue/retry',{scope:'yt:a'})).status,401);
+  const q=await (await c.get('/api/agent/queue')).json();assert.deepEqual(q.entries,[]);assert.deepEqual(q.counts,{queued:0,running:0,review:0,dead:0,budgetFull:false});
+  assert.equal((await c.post('/api/agent/queue/retry',{scope:'yt:missing'})).status,404);
+  const state=await (await c.get('/api/agent/state')).json();assert.equal(state.parallelReview,true);assert.equal(state.queue.dead,0);
+ }finally{await f.done()}
+});

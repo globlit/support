@@ -1,12 +1,13 @@
-import {ErrorNotice} from './ErrorNotice';
+import {ErrorNotice,ErrorRecoveryAction} from './ErrorNotice';
 import {InvestigationHistory} from './InvestigationHistory';
 import {useEffect,useRef,useState} from 'react';
 import {useWorkspaceApi,useWorkspacePreview} from './WorkspaceRuntime';
 import type {AnalysisRun,LiveDetail} from './model';
+import {useFeedback} from './Toasts';
 
 export function AnalysisPanel({detail,disabled,refresh,sourcePath='/youtrack/issues',initialRun,onRunning,historyView=false,onLatest,startRequest=0,automatic=false,maxRuns=2}:{detail:LiveDetail;disabled:boolean;refresh:()=>void;sourcePath?:string;initialRun?:AnalysisRun;onRunning?:(running:boolean)=>void;historyView?:boolean;onLatest?:(run:AnalysisRun)=>void;startRequest?:number;automatic?:boolean;maxRuns?:number}){const api=useWorkspaceApi();const preview=useWorkspacePreview();
  const storageKey=`analysis:${detail.issue.connection}:${detail.issue.id}`;
- const [run,setRun]=useState<AnalysisRun|null>(initialRun??null),[starting,setStarting]=useState(false),[error,setError]=useState('');
+ const [run,setRun]=useState<AnalysisRun|null>(initialRun??null),[starting,setStarting]=useState(false),[error,setError]=useState(''),feedback=useFeedback();
  const [runId,setRunId]=useState(()=>(preview?null:sessionStorage.getItem(storageKey))??(initialRun?.state==='running'?initialRun.id:null));
  const refreshRef=useRef(refresh);refreshRef.current=refresh;
  useEffect(()=>{
@@ -14,7 +15,7 @@ export function AnalysisPanel({detail,disabled,refresh,sourcePath='/youtrack/iss
   const poll=async()=>{try{const next=await api<AnalysisRun>('/analysis/'+runId);if(disposed)return;setRun(next);if(next.state==='running')timer=setTimeout(()=>void poll(),1200);else{sessionStorage.removeItem(storageKey);setRunId(null);if(next.state==='ready')refreshRef.current();}}catch(e){if(!disposed){setError((e as Error).message);setRunId(null);sessionStorage.removeItem(storageKey);}}};
   void poll();return()=>{disposed=true;clearTimeout(timer)};
  },[runId,storageKey]);
- async function start(){setStarting(true);setError('');try{const fresh=await api<LiveDetail>(sourcePath+'/'+detail.issue.id);const next=await api<AnalysisRun>(sourcePath+'/'+detail.issue.id+'/analyze','POST',{revision:fresh.session.revision,sourceUpdated:fresh.issue.updated});setRun(next);sessionStorage.setItem(storageKey,next.id);setRunId(next.id);}catch(e){setError((e as Error).message)}finally{setStarting(false)}}
+ async function start(){setStarting(true);setError('');try{const fresh=await api<LiveDetail>(sourcePath+'/'+detail.issue.id);const next=await api<AnalysisRun>(sourcePath+'/'+detail.issue.id+'/analyze','POST',{revision:fresh.session.revision,sourceUpdated:fresh.issue.updated});setRun(next);sessionStorage.setItem(storageKey,next.id);setRunId(next.id);feedback.info('Investigation started.');}catch(e){feedback.error(e,<ErrorRecoveryAction message={(e as Error).message} context="Model"/>)}finally{setStarting(false)}}
  const handledRequest=useRef(startRequest);useEffect(()=>{if(startRequest>handledRequest.current){handledRequest.current=startRequest;void start()}},[startRequest]);
  const running=starting||!!runId;
  useEffect(()=>{onRunning?.(running);return()=>onRunning?.(false)},[running,onRunning]);
