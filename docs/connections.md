@@ -9,6 +9,7 @@ Unlock the Vault, then open **Settings → Connections → `<connection>`**. The
 | Slack | Bot token (`xoxb-`). |
 | Outline | API key. |
 | Alertmanager, Prometheus | None, Basic auth or bearer token. |
+| Grafana | Username and password, or service account token. Viewer role with query access to the Prometheus datasources. |
 | Toolbox | kubeconfig. |
 | Model | API key, Claude Code login or ChatGPT sign-in, in **Settings → Model**. |
 
@@ -23,14 +24,16 @@ The token decides which projects Support can reach. Fine-grained token permissio
 | Branch | Read, Create | Change branches. |
 | Commit | Create | Prepared changes. |
 
-With a legacy token, use the `api` scope. `read_api` allows investigations only.
+With a legacy token, use the `api` scope. `read_api` allows investigations only. Clones with history (`repo_checkout`) also need `read_repository`.
 
 ## Outline scopes
 
 | Scope | Needed for |
 | --- | --- |
 | `documents:read` | Searching and reading documents. |
-| `collections:read` | Finding the collection by name or URL. Not needed when **Allowed collection** is the collection ID. |
+| `collections:read` | Listing collections, and finding the collection by name or URL. Not needed when **Allowed collection** is the collection ID. |
+
+Leave **Allowed collection** empty to let the agent search every collection the API key can read.
 
 ## Toolbox
 
@@ -47,3 +50,15 @@ Generation lists each cluster's namespaces and allows every namespace that match
 - at most 100 allowed namespaces per context
 
 Generate again after namespaces are created.
+
+## Prometheus sources
+
+The agent can query several Prometheus servers. Each one is a source:
+
+| Source | Configured in |
+| --- | --- |
+| `prometheus` | The Service URL of the Prometheus connection. |
+| `grafana/<datasource>` | Each Prometheus datasource of the Grafana connection. Requests go through the Grafana datasource proxy. |
+| `<name>` | **Sources through Kubernetes** in the Prometheus connection. Support opens a Toolbox tunnel to the service or StatefulSet on first use. Requires Toolbox port forwarding. |
+
+Example for a federation Prometheus deployed by kube-prometheus-stack: context `monitoring`, namespace `monitoring-federation`, target `service/prometheus-operated`, port `9090`. Click **Test** to open a tunnel and read the Prometheus build information.

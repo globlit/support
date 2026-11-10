@@ -14,7 +14,7 @@ const repoPath=z.string().max(1000).regex(/^[^\0]*$/).refine(p=>!p.split('/').in
 const tail=(text:string)=>text.length>textLimit?{text:text.slice(-textLimit),truncated:true}:{text,truncated:false};
 
 /**
- * Read-only agent tools for GitLab, YouTrack, Alertmanager and Prometheus. Each tool is offered only when its
+ * Read-only agent tools for GitLab, YouTrack and Alertmanager. Each tool is offered only when its
  * connection is enabled with a service URL. Every request uses the credential saved in the Vault.
  */
 export function readTools(store:Store,config:Config,youtrack:YouTrack,fetcher:typeof fetch){
@@ -36,9 +36,6 @@ export function readTools(store:Store,config:Config,youtrack:YouTrack,fetcher:ty
  }
  if(c.Alertmanager.enabled&&c.Alertmanager.endpoint){
   add(toolDefinition('alertmanager_alerts','Read active Alertmanager alerts. Optional matchers in Alertmanager syntax, for example severity="critical". Returns at most 100 alerts.',{filter:{type:'array',items:str,maxItems:10}},[]),async input=>{const {filter}=z.object({filter:z.array(z.string().min(1).max(300)).max(10).optional()}).strict().parse(input);const u=new URL('api/v2/alerts',serviceBase(c.Alertmanager.endpoint));u.searchParams.set('active','true');u.searchParams.set('silenced','false');u.searchParams.set('inhibited','false');for(const f of filter??[])u.searchParams.append('filter',f);const alerts=z.array(z.object({labels:z.record(z.string(),z.string()),annotations:z.record(z.string(),z.string()).optional(),startsAt:z.string().optional(),status:z.object({state:z.string()}).optional()})).parse(await boundedJSON(fetcher,u,serviceAuthHeaders(store,'Alertmanager')));return {count:alerts.length,alerts:alerts.slice(0,100).map(a=>({labels:a.labels,summary:a.annotations?.summary,description:a.annotations?.description?.slice(0,500),startsAt:a.startsAt,state:a.status?.state}))};});
- }
- if(c.Prometheus.enabled&&c.Prometheus.endpoint){
-  add(toolDefinition('prometheus_query_range','Read a PromQL range query. start and end are RFC 3339 times or Unix seconds. step is a duration such as 60s or 5m. At most 11,000 points per series.',{query:str,start:str,end:str,step:str}),async input=>{const i=z.object({query:z.string().min(1).max(2000),start:z.string().max(40),end:z.string().max(40),step:z.string().regex(/^\d{1,6}(ms|s|m|h)?$/)}).strict().parse(input);const u=new URL('api/v1/query_range',serviceBase(c.Prometheus.endpoint));for(const [k,v] of Object.entries({query:i.query,start:i.start,end:i.end,step:i.step,timeout:'20s',limit:'100'}))u.searchParams.set(k,v);return boundedJSON(fetcher,u,serviceAuthHeaders(store,'Prometheus'));});
  }
  return {definitions,async run(name:string,input:unknown){const handler=handlers.get(name);if(!handler)throw new AppError(403,'Tool is not available.');return handler(input);}};
 }

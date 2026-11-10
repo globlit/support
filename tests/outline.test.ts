@@ -14,12 +14,12 @@ function fixture(scope:string){
 }
 const allowed='3f1c2b7a-9d4e-4a10-b2c3-0123456789ab',other='9a8b7c6d-1111-4222-8333-444455556666';
 
-test('Outline tools need an enabled connection, a collection and a saved API key',()=>{
+test('Outline tools need an enabled connection and a saved API key',()=>{
  const f=fixture('DevOps');
  try{
   assert.equal(outlineAvailable(f.store,f.config),false);
   f.store.credential('Outline','outline-key');assert.equal(outlineAvailable(f.store,f.config),true);
-  assert.equal(outlineAvailable(f.store,{...f.config,connections:{...f.config.connections,Outline:{...f.config.connections.Outline,scope:' '}}}),false);
+  assert.equal(outlineAvailable(f.store,{...f.config,connections:{...f.config.connections,Outline:{...f.config.connections.Outline,scope:' '}}}),true);
   assert.equal(outlineAvailable(f.store,{...f.config,connections:{...f.config.connections,Outline:{...f.config.connections.Outline,enabled:false}}}),false);
  }finally{f.close()}
 });
@@ -52,4 +52,20 @@ test('a collection ID skips collections.list',async()=>{
  const f=fixture(allowed);f.store.credential('Outline','outline-key');const paths:string[]=[];
  const fetcher=(async(input:RequestInfo|URL)=>{const url=new URL(String(input));paths.push(url.pathname);return Response.json({data:[]});}) as typeof fetch;
  try{await new OutlineReader(f.store,f.config,fetcher).search({query:'dns'});assert.deepEqual(paths,['/api/documents.search']);}finally{f.close()}
+});
+
+test('without an allowed collection, search covers every collection and can be narrowed by name',async()=>{
+ const f=fixture('');f.store.credential('Outline','outline-key');const bodies:{path:string;body:any}[]=[];
+ const fetcher=(async(input:RequestInfo|URL,init?:RequestInit)=>{const url=new URL(String(input)),body=JSON.parse(String(init?.body));bodies.push({path:url.pathname,body});
+  if(url.pathname==='/api/collections.list')return Response.json({data:[{id:allowed,name:'DevOps'},{id:other,name:'Network'}]});
+  if(url.pathname==='/api/documents.info')return Response.json({data:{id:'d2',title:'Elsewhere',text:'vlan',collectionId:other}});
+  return Response.json({data:[]});}) as typeof fetch;
+ try{
+  const reader=new OutlineReader(f.store,f.config,fetcher);
+  assert.deepEqual((await reader.collections()).collections.map(c=>c.name),['DevOps','Network']);
+  await reader.search({query:'vlan'});assert.deepEqual(bodies.at(-1)?.body,{query:'vlan',limit:10});
+  await reader.search({query:'vlan',collection:'network'});assert.deepEqual(bodies.at(-1)?.body,{query:'vlan',collectionId:other,limit:10});
+  await assert.rejects(reader.search({query:'vlan',collection:'missing'}),/was not found/);
+  assert.equal((await reader.read({id:'d2'})).text,'vlan');
+ }finally{f.close()}
 });

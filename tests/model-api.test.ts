@@ -46,7 +46,7 @@ test('OpenAI analysis reads a tool and persists only an unapproved plan',async()
   const ai=new Claude(store,new YouTrack(store),async(url,init)=>{
    if(String(url).includes('metrics.internal')){assert.equal(init?.method,'GET');return Response.json({status:'success',data:{result:[]}})}
    assert.equal(String(url),'https://model.internal/v1/responses');const b=JSON.parse(String(init?.body));assert.equal(b.store,false);
-   for(const t of b.tools){assert.deepEqual([...t.parameters.required].sort(),Object.keys(t.parameters.properties).sort(),'Strict tools must require every property');}
+   for(const t of b.tools)if(t.strict){assert.deepEqual([...t.parameters.required].sort(),Object.keys(t.parameters.properties).sort(),'Strict tools must require every property');}assert.equal(b.tools.find((t:{name:string})=>t.name==='prometheus_query').strict,false);assert.equal(b.tools.find((t:{name:string})=>t.name==='ask_engineer').strict,true);
    return Response.json({status:'completed',output:[calls++===0?{...call,name:'prometheus_query',arguments:'{"query":"up"}'}:{...call,call_id:'call_2'}]});
   });
   const run=await ai.start('3-0',{revision:1,sourceUpdated:1000},source);

@@ -5,6 +5,12 @@ import {AppError} from './store.js';
 import {networkReason} from './network-reason.js';
 import type {Diagnostic,LogTool,LogPage} from '../src/diagnostics-model.js';
 const captureLimit=24*1024;
+const kib=(bytes:number)=>`${(bytes/1024).toFixed(bytes<10240?1:0)} KB`;
+/** Returns the start of a long text, cut to fit the 24 KB log limit, followed by a line that gives the shown and total sizes. */
+export function truncatedText(text:string,totalBytes=Buffer.byteLength(text),note=''){
+ const head=Buffer.from(text).subarray(0,captureLimit-200).toString('utf8').replace(/\uFFFD$/,'');
+ return `${head}\n… [truncated: first ${kib(Buffer.byteLength(head))} of ${kib(totalBytes)} shown${note?'. '+note:''}]`;
+}
 const sensitive=/^(authorization|proxy-authorization|cookie|set-cookie|private-token|.*password.*|.*token.*|.*secret.*|.*credential.*|api[_-]?key|private[_-]?key|encrypted_content|reasoning|thinking|signature)$/i;
 export function redactDiagnostic(text:string,secrets:string[]=[]):string{
  for(const secret of secrets.sort((a,b)=>b.length-a.length))if(secret)text=text.split(secret).join('[redacted]');
@@ -15,7 +21,7 @@ function plain(text:string){return text.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._
 export function pruneLogs(store:Store){store.db.prepare('DELETE FROM diagnostics WHERE at < ?').run(new Date(Date.now()-store.snapshot().config.retentionDays*86400000).toISOString());store.db.exec('DELETE FROM diagnostics WHERE seq NOT IN (SELECT seq FROM diagnostics ORDER BY seq DESC LIMIT 2000)');}
 export function recordDiagnostic(store:Store,entry:Omit<Diagnostic,'id'|'at'>&Partial<Pick<Diagnostic,'id'|'at'>>,secrets?:string[]){
  if(!store.key)return;
- try{const clean=(s:string)=>redactDiagnostic(s,secrets??store.secretValues()).slice(0,captureLimit);const value:Diagnostic={...entry,id:entry.id??randomUUID(),at:entry.at??new Date().toISOString(),operation:clean(entry.operation),request:entry.request?clean(entry.request):undefined,output:clean(entry.output)};
+ try{const clean=(s:string)=>{const v=redactDiagnostic(s,secrets??store.secretValues());return Buffer.byteLength(v)>captureLimit?truncatedText(v):v;};const value:Diagnostic={...entry,id:entry.id??randomUUID(),at:entry.at??new Date().toISOString(),operation:clean(entry.operation),request:entry.request?clean(entry.request):undefined,output:clean(entry.output)};
  store.db.prepare('INSERT OR IGNORE INTO diagnostics(id,at,tool,status,value) VALUES (?,?,?,?,?)').run(value.id,value.at,value.tool,value.status,store.encrypt(JSON.stringify(value),store.key));pruneLogs(store);}catch{/* Diagnostics must not change the result of an operation. */}
 }
 export function readLogs(store:Store,{tool,status,before,limit=50,query='',time,duration,from,to,zone}:{tool?:string;status?:string;before?:number;limit?:number;query?:string;time?:'hour'|'day'|'week';duration?:'fast'|'normal'|'slow';from?:string;to?:string;zone?:string}={}):LogPage{
@@ -40,7 +46,7 @@ export function loggedFetch(store:Store,fetcher:typeof fetch=fetch):typeof fetch
   // Never capture OAuth exchanges.
   if(url.hostname==='auth.openai.com')return fetcher(input,init);
   const config=store.snapshot().config;
-  const tool=(['Model','YouTrack','GitLab','Alertmanager','Prometheus','Slack'] as const).find(name=>{try{const base=new URL(config.connections[name].endpoint);return base.origin===url.origin&&url.pathname.startsWith(base.pathname.replace(/\/$/,''));}catch{return false;}});
+  const tool=(['Model','YouTrack','GitLab','Alertmanager','Prometheus','Grafana','Slack'] as const).find(name=>{try{const base=new URL(config.connections[name].endpoint);return base.origin===url.origin&&url.pathname.startsWith(base.pathname.replace(/\/$/,''));}catch{return false;}});
   if(!tool||!store.key)return fetcher(input,init);
   const revision=store.snapshot().configRevision,credentialEpoch=store.credentialEpoch,epoch=store.vaultEpoch,secrets=store.secretValues(),start=Date.now();
   const path=url.pathname;const query=Object.fromEntries([...url.searchParams].map(([k,v])=>[k,sensitive.test(k)?'[redacted]':v]));
@@ -50,7 +56,7 @@ export function loggedFetch(store:Store,fetcher:typeof fetch=fetch):typeof fetch
   if(tool==='Model'){done(response.ok?'ok':'error','Model transport body omitted. Inspect the conversation for tool results and produced work.',response.status);return response;}
   if(!response.body){done(response.ok?'ok':'error','Empty response',response.status);return response;}
   const reader=response.body.getReader(),chunks:Uint8Array[]=[];let size=0;
-  const stream=new ReadableStream<Uint8Array>({async pull(controller){try{const next=await reader.read();if(next.done){done(response.ok?'ok':'error',size<=captureLimit?Buffer.concat(chunks).toString('utf8'):'Response exceeded the 24 KB capture limit; body omitted.',response.status,size>captureLimit);controller.close();return;}size+=next.value.byteLength;if(size<=captureLimit)chunks.push(next.value);else chunks.length=0;controller.enqueue(next.value);}catch(e){done('error','Response stream interrupted.',response.status);controller.error(e);}},async cancel(reason){done(response.ok?'cancelled':'error','Response was not fully read; body omitted.',response.status);await reader.cancel(reason);}});
+  const stream=new ReadableStream<Uint8Array>({async pull(controller){try{const next=await reader.read();if(next.done){done(response.ok?'ok':'error',size<=captureLimit?Buffer.concat(chunks).toString('utf8'):truncatedText(Buffer.concat(chunks).toString('utf8'),size),response.status,size>captureLimit);controller.close();return;}const kept=chunks.reduce((n,c)=>n+c.byteLength,0);if(kept<captureLimit)chunks.push(next.value.subarray(0,captureLimit-kept));size+=next.value.byteLength;controller.enqueue(next.value);}catch(e){done('error','Response stream interrupted.',response.status);controller.error(e);}},async cancel(reason){done(response.ok?'cancelled':'error',chunks.length?truncatedText(Buffer.concat(chunks).toString('utf8'),size,'Response was not fully read.'):'Response was not fully read.',response.status);await reader.cancel(reason);}});
   return new Response(stream,{status:response.status,statusText:response.statusText,headers:response.headers});
  };
 }

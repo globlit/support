@@ -34,12 +34,12 @@ export function toolboxContexts(config:Config,files:ToolboxFiles|null){
 const namespaceName=z.string().regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/).max(63);
 /** Returns Toolbox arguments for one read. Toolbox's configuration decides which namespaces are allowed. */
 export function toolboxArgs(config:Config,input:unknown,configPath:string,allowedContexts:string[]){
- const {context,namespace,resource}=z.object({context:z.string().min(1).max(253),resource:z.string().min(1).max(100),namespace:namespaceName.optional()}).strict().parse(input);
+ const {context,namespace,resource,name,selector}=z.object({context:z.string().min(1).max(253),resource:z.string().min(1).max(100),namespace:namespaceName.optional(),name:z.string().max(253).regex(/^[a-z0-9]([-a-z0-9.:]*[a-z0-9])?$/,'Use a resource name.').optional(),selector:z.string().max(500).regex(/^[A-Za-z0-9_./!=, ()-]+$/,'Use a label selector such as app=web,tier!=cache.').optional()}).strict().parse(input);
  if(!config.connections.Toolbox.enabled||!configPath||!isAbsolute(configPath)||!allowedContexts.includes(context))throw new AppError(403,'Toolbox context is not enabled in Settings.');
  if(!readableResources(config).includes(resource))throw new AppError(403,`Reading ${resource} is not enabled in Settings → Connections → Toolbox.`);
  const cluster=(clusterResources as readonly string[]).includes(resource);
  if(!cluster&&!namespace)throw new AppError(400,`Name a namespace to read ${resource}.`);
- return ['--config',configPath,'kubectl','get',resource,'--context',context,...(cluster?[]:['--namespace',namespace!]),'-o','json'];
+ return ['--config',configPath,'kubectl','get',resource,...(name?[name]:[]),'--context',context,...(cluster?[]:['--namespace',namespace!]),...(selector?['-l',selector]:[]),'-o','json'];
 }
 /** Returns the pasted Toolbox configuration saved in the Vault, or null when none is saved. */
 export function toolboxFiles(store:Store):ToolboxFiles|null{
@@ -181,16 +181,16 @@ const tunnels=new Set<ChildProcess>();
 /** Port-forward request from the agent, as accepted by `toolbox kubectl port-forward`. */
 export const portForwardInput=z.object({
  context:z.string().min(1).max(253),namespace:namespaceName,
- target:z.string().max(253).regex(/^((pod|service|deployment)\/)?[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/,'Use a pod name, pod/NAME, service/NAME or deployment/NAME.'),
+ target:z.string().max(253).regex(/^((pod|service|svc|deployment|statefulset)\/)?[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/,'Use a pod name, pod/NAME, service/NAME, deployment/NAME or statefulset/NAME.'),
  ports:z.array(z.string().regex(/^(\d{1,5})?:\d{1,5}$|^\d{1,5}$/,'Use REMOTE, :REMOTE or LOCAL:REMOTE.')).min(1).max(8),
  durationSeconds:z.number().int().min(1).max(3600),
 }).strict();
 /**
- * Starts a Toolbox tunnel and returns Toolbox's first status line (ID, local address and ports, expiry).
- * The tunnel runs in the background until its duration, capped by the port-forward lifetime setting, ends.
+ * Starts a Toolbox tunnel and resolves with Toolbox's first status line (ID, local address and ports, expiry) and the
+ * tunnel process. The tunnel runs until its duration, capped by the port-forward lifetime setting, ends.
  * Toolbox listens on 127.0.0.1 inside the Support container only.
  */
-export async function startPortForward(config:Config,input:unknown,files:ToolboxFiles|null){
+export async function openTunnel(config:Config,input:unknown,files:ToolboxFiles|null){
  const binary=toolboxBinary(),p=portForwardInput.parse(input);
  if(!config.connections.Toolbox.enabled||!config.toolbox.allowPortForward)throw new AppError(403,'Port forwarding is not enabled in Settings → Connections → Toolbox.');
  if(!toolboxContexts(config,files).includes(p.context))throw new AppError(403,'Toolbox context is not enabled in Settings.');
@@ -199,14 +199,22 @@ export async function startPortForward(config:Config,input:unknown,files:Toolbox
  tunnels.add(child);
  const stop=setTimeout(()=>child.kill('SIGTERM'),(duration+15)*1000);stop.unref();
  child.once('exit',()=>{tunnels.delete(child);clearTimeout(stop);void run.cleanup();});
- return await new Promise<unknown>((resolve,reject)=>{
+ return await new Promise<{status:unknown;child:ChildProcess;ports:string[]}>((resolve,reject)=>{
   let out='';
   const timer=setTimeout(()=>{child.kill('SIGTERM');reject(new AppError(504,'The tunnel did not start within 20 seconds.'));},20000);
   child.stdout!.on('data',(chunk:Buffer)=>{out+=chunk.toString('utf8');const end=out.indexOf('\n');if(end<0)return;clearTimeout(timer);
    let status:unknown;try{status=JSON.parse(out.slice(0,end));}catch{child.kill('SIGTERM');reject(new AppError(502,`Toolbox refused the tunnel: ${out.slice(0,end).slice(0,200)}`));return;}
-   void relayPorts(tunnelLocalPorts(p.ports,status),child).then(relays=>resolve(relays.length?{tunnel:status,reachableFromSandbox:relays.map(r=>`${r.address}:${r.port} → local ${r.local}`)}:{tunnel:status,reachableFromSandbox:[],note:'No relay: SUPPORT_RELAY_BIND is not set, so sandbox commands cannot reach this tunnel.'}),()=>resolve({tunnel:status,reachableFromSandbox:[],note:'The relay for sandbox commands could not start.'}));});
+   resolve({status,child,ports:p.ports});});
   child.once('exit',()=>{clearTimeout(timer);reject(new AppError(502,`The tunnel stopped before it started: ${out.trim().split('\n')[0]?.slice(0,200)||'no output'}`));});
  });
+}
+/**
+ * Starts a Toolbox tunnel for the agent and returns Toolbox's status with the relay addresses that sandbox commands
+ * can reach. Without SUPPORT_RELAY_BIND, no relay is started.
+ */
+export async function startPortForward(config:Config,input:unknown,files:ToolboxFiles|null){
+ const {status,child,ports}=await openTunnel(config,input,files);
+ return relayPorts(tunnelLocalPorts(ports,status),child).then(relays=>relays.length?{tunnel:status,reachableFromSandbox:relays.map(r=>`${r.address}:${r.port} → local ${r.local}`)}:{tunnel:status,reachableFromSandbox:[],note:'No relay: SUPPORT_RELAY_BIND is not set, so sandbox commands cannot reach this tunnel.'},()=>({tunnel:status,reachableFromSandbox:[],note:'The relay for sandbox commands could not start.'}));
 }
 /** Stops every running tunnel. */
 export function stopTunnels(){for(const t of tunnels)t.kill('SIGTERM');}

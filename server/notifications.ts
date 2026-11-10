@@ -7,11 +7,11 @@ import {workflowStep} from '../src/workflow-step.js';
 
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const reviewStages=new Set(['Request review','Plan approval','Diff approval','Fix approval','Summary approval','Closure approval','Diagnosis review','Ticket approval','Reply approval','Intake decision','Direct reply']);
-type Kind='reviews'|'blocked'|'reopened'|'completion'|'test';
+type Kind='reviews'|'blocked'|'reopened'|'completion'|'test'|'question';
 type Source='youtrack'|'alert'|'slack';
 type Event={id:string;seq:number;at:number;kind:Kind;workflow?:string;signature?:string;key?:string;title?:string;stage?:string;source?:Source;route:string};
 type History={seq:number;seen:Record<string,{signature:string;state:string;at:number}>;events:Event[]};
-const text:Record<Kind,[string,string]>={reviews:['Review ready','Open Support to review the next step.'],blocked:['Work needs attention','Open Support to check what is blocking progress.'],reopened:['Work reopened','Open Support to review the updated request.'],completion:['Work completed','Open Support to view the result.'],test:['Support notifications work','Notifications from Support can reach this browser.']};
+const text:Record<Kind,[string,string]>={reviews:['Review ready','Open Support to review the next step.'],blocked:['Work needs attention','Open Support to check what is blocking progress.'],reopened:['Work reopened','Open Support to review the updated request.'],completion:['Work completed','Open Support to view the result.'],test:['Support notifications work','Notifications from Support can reach this browser.'],question:['The agent asked a question','Open Support to answer. The agent keeps working meanwhile.']};
 /** Notification titles for workflow stages that wait for a review. */
 const reviewTitles:Record<string,string>={'Request review':'Request ready for review','Plan approval':'Plan ready for approval','Diff approval':'Code changes ready for review','Fix approval':'Fix ready for review','Summary approval':'Resolution summary ready for review','Closure approval':'Ticket closure ready for review','Diagnosis review':'Diagnosis ready for review','Ticket approval':'Ticket draft ready for approval','Reply approval':'Reply ready for approval','Intake decision':'New request needs a decision','Direct reply':'Reply ready for approval'};
 const sourceLabels:Record<Source,string>={youtrack:'YouTrack ticket',alert:'Alert',slack:'Slack request'};
@@ -62,7 +62,7 @@ export class Notifications {
   }
   for(const [id,s] of Object.entries(h.seen))if(!current.has(id)&&s.at<cutoff)delete h.seen[id];
   // Retire expired, disabled and superseded notifications.
-  h.events=h.events.filter(e=>e.at>=cutoff&&(e.kind==='test'||prefs[e.kind])&&(!e.workflow||(current.has(e.workflow)&&h.seen[e.workflow]?.signature===e.signature))).slice(-500);
+  h.events=h.events.filter(e=>e.at>=cutoff&&(e.kind==='test'||prefs[e.kind==='question'?'reviews':e.kind])&&(!e.workflow||(current.has(e.workflow)&&h.seen[e.workflow]?.signature===e.signature))).slice(-500);
   if(JSON.stringify(h)!==before)this.saveHistory(h);if(!hadBaseline)this.store.put('notifications.baseline',true);
  }
  /**
@@ -76,9 +76,14 @@ export class Notifications {
   if(after===undefined||after>h.seq)return {seq:h.seq,paused:false,events:[]};
   if(this.queueError)return {seq:after,paused:true,reason:this.queueError,events:[]};
   const prefs=this.store.snapshot().config.notifications,cutoff=this.clock()-this.store.snapshot().config.retentionDays*86400000;
-  const pending=h.events.filter(e=>e.seq>after&&e.at>=cutoff&&(e.kind==='test'||prefs[e.kind])).slice(0,pageSize);
+  const pending=h.events.filter(e=>e.seq>after&&e.at>=cutoff&&(e.kind==='test'||prefs[e.kind==='question'?'reviews':e.kind])).slice(0,pageSize);
   const seq=pending.length===pageSize?pending[pageSize-1].seq:h.seq;
   return {seq,paused:false,events:pending.map(e=>({id:e.id,seq:e.seq,at:e.at,...message(e,prefs.privatePreview),route:e.route}))};
+ }
+ /** Adds a notification for a question the agent asked during a run. Uses the review preference. */
+ question(input:{key?:string;title?:string;source?:Source;route:string}){
+  if(!this.store.key)return;const h=this.history();
+  h.events.push({id:randomUUID(),seq:++h.seq,at:this.clock(),kind:'question',key:input.key,title:input.title,source:input.source,route:input.route});h.events=h.events.slice(-500);this.saveHistory(h);
  }
  /** Adds a test notification. Rejects a second test within 10 seconds. */
  test(){

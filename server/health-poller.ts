@@ -67,6 +67,7 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
   case 'GitLab':{path='api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=v=>Array.isArray(v);detail='GitLab project API responds and accepts the saved token.';break;}
   case 'Alertmanager':path='api/v2/status';check=v=>typeof v?.versionInfo==='object';detail='Alertmanager API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Prometheus':path='api/v1/status/buildinfo';check=v=>v?.status==='success';detail='Prometheus API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
+  case 'Grafana':path='api/user';check=v=>typeof v?.login==='string';detail='Grafana API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Outline':path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline responds. No token saved, so only availability is checked.';break;
   case 'Slack':path=base.pathname.replace(/\/$/,'').endsWith('/api')?'auth.test':'api/auth.test';method='POST';headers.Authorization='Bearer '+store.readCredential(name);check=v=>v?.ok===true;detail='Slack API accepts the saved token. Channel permissions are checked when a request is opened.';break;
   case 'Model':{

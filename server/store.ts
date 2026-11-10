@@ -12,7 +12,7 @@ import {kubeconfigSecrets,parseToolboxFiles} from './toolbox-config.js';
 import {isServiceAuthConnection,parseServiceAuth,serviceAuthSecrets,type ServiceAuthConnection,type ServiceAuthScheme} from './service-auth.js';
 export class AppError extends Error{constructor(public status:number,message:string,public code?:string){super(message)}}
 /** Log category of an agent tool. */
-export function toolCategory(tool:string):LogTool{return tool==='run_command'?'Sandbox':tool.startsWith('gitlab')?'GitLab':tool.startsWith('prom')?'Prometheus':tool.startsWith('toolbox')||tool.startsWith('kube')?'Toolbox':tool.startsWith('youtrack')?'YouTrack':tool.startsWith('outline')?'Outline':tool.startsWith('alertmanager')?'Alertmanager':'Model';}
+export function toolCategory(tool:string):LogTool{return tool==='run_command'?'Sandbox':tool.startsWith('gitlab')?'GitLab':tool.startsWith('prom')?'Prometheus':tool.startsWith('grafana')?'Grafana':tool.startsWith('toolbox')||tool.startsWith('kube')?'Toolbox':tool.startsWith('youtrack')?'YouTrack':tool.startsWith('outline')?'Outline':tool.startsWith('alertmanager')?'Alertmanager':'Model';}
 export class Store{
  private workActive=false;
  private analyses=new Map<string,string>();

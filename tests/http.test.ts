@@ -116,3 +116,14 @@ test('queue routes require a session and report counts; unknown dead-letter entr
   const state=await (await c.get('/api/agent/state')).json();assert.equal(state.parallelReview,true);assert.equal(state.queue.dead,0);
  }finally{await f.done()}
 });
+
+test('engineer messages need a session and a running investigation',{timeout:15000},async()=>{
+ const f=await fixture(),c=f.client(),other=f.client();try{
+  await c.post('/api/vault',{action:'initialize',passphrase});
+  const id='00000000-0000-4000-8000-000000000000';
+  assert.equal((await other.post(`/api/agent/runs/${id}/message`,{text:'hello'})).status,401);
+  assert.equal((await c.post(`/api/agent/runs/${id}/message`,{text:'hello'})).status,409);
+  assert.equal((await c.post(`/api/agent/runs/${id}/message`,{text:''})).status,400);
+  const p=await (await c.get('/api/proposals?connection=yt&issue=2-1')).json();assert.deepEqual(p.proposals,[]);
+ }finally{await f.done()}
+});

@@ -8,11 +8,11 @@ import type {ConnectionName,Snapshot,ToolboxSettings} from './model';
 import {useFeedback} from './Toasts';
 
 type Props={name:ConnectionName;data:Snapshot;run:(f:()=>Promise<void>)=>Promise<void>;reload:()=>Promise<Snapshot>;busy:boolean;dirty:boolean;pending:boolean;setPending:(name:ConnectionName,body:unknown)=>void;toolboxSettings?:ToolboxSettings;settingsDirty?:boolean};
-type ServiceAuthName='Alertmanager'|'Prometheus';
+type ServiceAuthName='Alertmanager'|'Prometheus'|'Grafana';
 /** Connections with a credential edited on their Connections page, in display order. */
-export const credentialConnections=['YouTrack','GitLab','Slack','Outline','Alertmanager','Prometheus','Toolbox'] as const satisfies readonly ConnectionName[];
+export const credentialConnections=['YouTrack','GitLab','Slack','Outline','Alertmanager','Prometheus','Grafana','Toolbox'] as const satisfies readonly ConnectionName[];
 const required:ConnectionName[]=['YouTrack','GitLab','Slack'];
-const isServiceAuth=(name:ConnectionName):name is ServiceAuthName=>name==='Alertmanager'||name==='Prometheus';
+const isServiceAuth=(name:ConnectionName):name is ServiceAuthName=>name==='Alertmanager'||name==='Prometheus'||name==='Grafana';
 const replaceHint='The saved credential stays active until you save its replacement.',newHint='Stored encrypted in the Vault. Never shown again.';
 
 /** Returns the credential status text for a connection. */

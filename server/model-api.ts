@@ -36,6 +36,7 @@ export function modelFetch(provider:ModelProvider,fetcher:typeof fetch=fetch,sub
     if(!output)throw new AppError(502,'Model tool history is incomplete.');
     input.push(...output);
    }else for(const block of message.content){
+    if(block.type==='text'&&typeof block.text==='string'){input.push({role:'user',content:block.text});continue;}
     if(block.type!=='tool_result'||typeof block.tool_use_id!=='string')throw new AppError(502,'Unsupported model tool result.');
     input.push({type:'function_call_output',...(subscription?{namespace:'support'}:{}),call_id:block.tool_use_id,output:typeof block.content==='string'?block.content:JSON.stringify(block.content)});
    }
@@ -43,7 +44,7 @@ export function modelFetch(provider:ModelProvider,fetcher:typeof fetch=fetch,sub
   target.pathname=target.pathname.replace(/\/v1\/messages$/,'/v1/responses');
   const key=new Headers(init.headers).get('x-api-key');if(!key)throw new AppError(400,'Model API key missing.');
   if(subscription&&target.href!=='https://api.openai.com/v1/responses')throw new AppError(400,'Subscription credentials may only be sent to OpenAI.');
-  const tools=body.tools.map(t=>({type:'function',name:t.name,description:t.description,parameters:t.input_schema,strict:true}));
+  const tools=body.tools.map(t=>({type:'function',name:t.name,description:t.description,parameters:t.input_schema,strict:strictSchema(t.input_schema)}));
   const response=await fetcher(target,{...init,redirect:'manual',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({model:body.model,instructions:body.system,input,...(subscription?{stream:true}:{max_output_tokens:body.max_tokens}),store:false,include:['reasoning.encrypted_content'],parallel_tool_calls:false,tools:subscription?[{type:'namespace',name:'support',description:'Approved support-app custom tools only.',tools}]:tools})});
   const failure=(payload:unknown,event?:string)=>{const result=responseFailure(payload,response,event,[key,...(options.secrets??[])]);options.onFailure?.(result);return new AppError(502,result.summary);};
   if(!response.ok){if(response.status>=400)throw failure(await readFailureBody(response));return response;}
@@ -80,4 +81,18 @@ export async function completedStream(response:Response,failure=(payload:unknown
  const event=(block:string)=>{const data=block.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trimStart()).join('\n');if(!data||data==='[DONE]')return;const e=JSON.parse(data);if(['response.failed','response.incomplete','error'].includes(e.type))throw failure(e,e.type);if(e.type==='response.completed'){if(completed)throw new AppError(502,'Repeated completion event.');completed=e.response;}};
  for await(const chunk of response.body as unknown as AsyncIterable<Uint8Array>){bytes+=chunk.length;if(bytes>4_000_000)throw new AppError(502,'Subscription stream exceeded its size limit.');buffer+=decoder.decode(chunk,{stream:true});buffer=buffer.replace(/\r\n/g,'\n');let i;while((i=buffer.indexOf('\n\n'))>=0){event(buffer.slice(0,i));buffer=buffer.slice(i+2);}}
  buffer+=decoder.decode();if(buffer.trim())event(buffer);if(!completed)throw new AppError(502,'Subscription stream ended without completion. No result was applied.');return completed;
+}
+/**
+ * True when a JSON schema meets OpenAI strict mode: every object lists all its properties as required and sets
+ * additionalProperties to false. Tools with optional inputs are sent without strict mode.
+ */
+export function strictSchema(schema:unknown):boolean{
+ if(!schema||typeof schema!=='object')return true;
+ const s=schema as {type?:unknown;properties?:Record<string,unknown>;required?:string[];additionalProperties?:unknown;items?:unknown;anyOf?:unknown[]};
+ if(s.type==='object'||s.properties){
+  const keys=Object.keys(s.properties??{});
+  if(s.additionalProperties!==false||keys.length!==(s.required??[]).length||!keys.every(k=>s.required!.includes(k)))return false;
+  if(!Object.values(s.properties??{}).every(strictSchema))return false;
+ }
+ return strictSchema(s.items)&&(s.anyOf??[]).every(strictSchema);
 }

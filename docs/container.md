@@ -24,4 +24,4 @@ Mount `/home/node/.claude` to keep the login when the container is recreated.
 
 ## Command sandbox
 
-Set `SUPPORT_SANDBOX_URL` to let the agent run shell commands in a separate sandbox service. Set `SUPPORT_RELAY_BIND` to an address of Support that the sandbox can reach, so that sandbox commands can use port-forward tunnels. The claude-jail compose file sets both.
+Set `SUPPORT_SANDBOX_URL` to let the agent run shell commands in a separate sandbox service. Set `SUPPORT_RELAY_BIND` to an address of Support that the sandbox can reach, so that sandbox commands can use port-forward tunnels and clone GitLab repositories through the Git proxy on port 7071 (`SUPPORT_GIT_PROXY_PORT`). The claude-jail compose file sets both.

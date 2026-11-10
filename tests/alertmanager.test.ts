@@ -92,8 +92,8 @@ test('alert changes during analysis discard the plan and stale approvals are rej
 test('automatic analysis is opt-in, once per occurrence, and failures never loop or write to tools',async()=>{
  const f=fixture();try{let calls=0;const c=new Claude(f.store,new YouTrack(f.store),(async()=>{calls++;return Response.json({stop_reason:'tool_use',content:[{type:'tool_use',id:'bad',name:'silence_alert',input:{}}]});}) as typeof fetch);const q=wireQueue(f.store,c,{alert:{load:id=>f.alerts.work(id),start:(id,e)=>f.alerts.analyze(id,e,c),onStartError:(id,e)=>f.alerts.recordStartFailure(id,e)}});const tick=async()=>{await f.alerts.tick(c,q);await q.tick();};
   await tick();assert.equal(calls,0);f.settings({autoInvestigate:true});await tick();assert.equal(calls,0);await f.allow();await tick();let item=f.alerts.queue(c).cases[0];assert.ok(item.run);assert.equal((await wait(c,item.run!.id)).state,'failed');
-  await tick();assert.equal(calls,1);assert.equal(f.alerts.queue(c).cases[0].run?.state,'failed');
-  f.remote.body=[];await f.alerts.poll();f.remote.body=[sample()];await f.alerts.poll();await tick();item=f.alerts.queue(c).cases[0];await wait(c,item.run!.id);assert.equal(calls,2);
+  await tick();assert.equal(calls,3);assert.equal(f.alerts.queue(c).cases[0].run?.state,'failed');
+  f.remote.body=[];await f.alerts.poll();f.remote.body=[sample()];await f.alerts.poll();await tick();item=f.alerts.queue(c).cases[0];await wait(c,item.run!.id);assert.equal(calls,6);
  }finally{f.done();}
 });
 test('ticket links are read-only, survive restart and recurrence, and cannot be silently replaced',async()=>{

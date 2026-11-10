@@ -5,6 +5,7 @@ const behavior:Record<ConnectionName,{label:string;on:string;off:string}>={
  GitLab:{label:'Use GitLab for support work',on:'Read repositories and pipelines. Branch changes and merge requests still require engineer approval.',off:'New GitLab requests are blocked. Existing branches and merge requests stay in GitLab.'},
  Toolbox:{label:'Allow Toolbox reads',on:'The agent can read allowed resources in the contexts and namespaces configured here.',off:'The agent cannot call Toolbox. Its configuration and kubeconfig files are unchanged.'},
  Prometheus:{label:'Allow metric queries',on:'The agent can query this Prometheus endpoint during an investigation.',off:'Metric queries through this connection are unavailable.'},
+ Grafana:{label:'Allow Grafana reads',on:'The agent can query the Prometheus datasources and read the dashboards of this Grafana.',off:'Grafana reads are unavailable.'},
  Alertmanager:{label:'Poll Alertmanager',on:'Refresh alerts automatically while the server runs and the Vault is unlocked.',off:'Automatic polling is paused. Existing alert cases and their history are kept.'},
  Model:{label:'Allow model requests',on:'Allow investigations and approved change preparation. This switch does not start a run.',off:'New model requests are blocked. Plans, conversations and account credentials are kept.'},
  Outline:{label:'Allow Outline reads',on:'The agent can search and read documents in the allowed collection.',off:'The agent cannot read Outline. Its settings and API key are kept.'},

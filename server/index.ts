@@ -1,6 +1,9 @@
+import {sourceKind,sourcePage} from '../src/intake-model.js';
 import {AgentQueue} from './agent-queue.js';
 import {agentFeed,agentHalted,setAgentHalted,type FeedEntry} from './agent-feed.js';
 import {killAllSandbox,sandboxHealth} from './sandbox.js';
+import {GitProxy} from './git-proxy.js';
+import {PrometheusSources} from './prometheus-sources.js';
 import {deployment} from './deployment.js';
 import {Sessions} from './sessions.js';
 import {withIdentity,workspaceIdentity,assertActiveRequest} from './identity.js';
@@ -37,7 +40,7 @@ import { AlertTickets,alertDraftInput } from './alert-tickets.js';
 import { Alertmanager } from './alertmanager.js';
 import { Claude } from './claude.js';
 import { YouTrack } from './youtrack.js';
-import { connectionNames,configSchema ,toolboxSettingsSchema} from '../src/model.js';
+import { connectionNames,configSchema ,toolboxSettingsSchema,prometheusSourceSchema} from '../src/model.js';
 import {credentialInput,storedCredential} from './service-auth.js';
 process.umask(0o077);
 const runtime=deployment(),{port}=runtime,origin=runtime.publicOrigin;
@@ -48,11 +51,14 @@ const health=new HealthPoller(store);
 const healthTimer=setInterval(()=>void health.tick(),1000);healthTimer.unref();
 const youtrack=new YouTrack(store,transport);
 const claude=new Claude(store,youtrack,transport);
+const gitProxy=new GitProxy(store);
+if(process.env.SUPPORT_RELAY_BIND?.trim())gitProxy.listen(process.env.SUPPORT_RELAY_BIND.trim(),Number(process.env.SUPPORT_GIT_PROXY_PORT??7071)).then(()=>claude.useGitProxy(gitProxy),e=>console.error('Git proxy not started:',e instanceof Error?e.message:e));
 const agentQueue=new AgentQueue(store,id=>claude.isActive(id));
 claude.onRun({started:r=>agentQueue.started(r),finished:(id,state,error)=>agentQueue.finished(id,state,error)});
 /** Kill switch, running investigations and sandbox status, as shown in the agent console. */
 const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands},queue:agentQueue.counts(),parallelReview:store.snapshot().config.parallelReview});
 const notifications=new Notifications(store,()=>aiOverview(store,claude).workflows);
+claude.onQuestion(run=>{const [key,...title]=(run.title??'').split(' · ');notifications.question({key,title:title.join(' · '),source:sourceKind(run.connection??'')==='alert'?'alert':sourceKind(run.connection??'')==='slack'?'slack':'youtrack',route:`#/${sourcePage(run.connection??'')}?issue=${encodeURIComponent(run.issueId)}&step=investigation`});});
 const notificationTimer=setInterval(()=>notifications.tick(),5000);notificationTimer.unref();
 const intake=new InvestigationQueue(store,youtrack,agentQueue);
 const intakeTimer=setInterval(()=>void intake.tick(),5000);intakeTimer.unref();
@@ -98,6 +104,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(path==='/api/session/logout'&&req.method==='POST'){sessions.logout(req,res);return send(res,{authenticated:false});}
  if(path==='/api/notifications'&&req.method==='GET')return send(res,notifications.list(notificationQuery.parse(Object.fromEntries(url.searchParams)).after));
  if(path==='/api/notifications/test'&&req.method==='POST'){await body(req);return send(res,notifications.test());}
+ if(path==='/api/proposals'&&req.method==='GET'){const q=z.object({connection:z.string().min(1).max(300),issue:z.string().min(1).max(200)}).parse(Object.fromEntries(url.searchParams));const version=store.getWorkSession(q.connection,q.issue)?.plans.at(-1)?.version;return send(res,{proposals:version?store.investigations(q.connection,q.issue).filter(r=>r.planVersion===version).flatMap(r=>r.proposals??[]):[]});}
  if(path==='/api/agent/state'&&req.method==='GET')return send(res,await agentState());
  if(path==='/api/agent/feed'&&req.method==='GET'){
   const after=Number(req.headers['last-event-id']??url.searchParams.get('after')??NaN);
@@ -110,6 +117,8 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   res.on('close',()=>{clearInterval(heartbeat);agentFeed.off('entry',entry);agentFeed.off('state',state);});
   return;
  }
+ const agentMessage=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/message$/);
+ if(agentMessage&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(4000),replyTo:z.string().uuid().optional()}).strict().parse(await body(req));return send(res,claude.message(agentMessage[1],v,session.principal.name));}
  const agentRunStop=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/stop$/);
  if(agentRunStop&&req.method==='POST'){await body(req);claude.cancel(agentRunStop[1]);return send(res,await agentState());}
  if(path==='/api/agent/halt'&&req.method==='POST'){await body(req);setAgentHalted(store,true);const stopped=claude.cancelAll();stopTunnels();await killAllSandbox();recordDiagnostic(store,{tool:'Agent',operation:'Agent stopped (Stop all)',status:'cancelled',durationMs:0,output:`Runs stopped: ${stopped}\nCommands and tunnels stopped. New runs blocked until resume.`});return send(res,await agentState());}
@@ -240,6 +249,17 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(path==='/api/toolbox/contexts'&&req.method==='POST'){const {kubeconfig}=z.object({kubeconfig:z.string().min(1).max(maxKubeconfigBytes)}).strict().parse(await body(req,kubeconfigBodyLimit));return send(res,{contexts:await kubeconfigContexts(kubeconfig)});}
  // Preview with unsaved settings. Nothing is stored: saving the Toolbox credential generates again with the saved settings.
  if(path==='/api/toolbox/generate'&&req.method==='POST'){const v=z.object({kubeconfig:z.string().min(1).max(maxKubeconfigBytes),contexts:z.array(z.string().min(1).max(253)).min(1).max(100),settings:toolboxSettingsSchema}).strict().parse(await body(req,kubeconfigBodyLimit));return send(res,await generateToolboxSetup(v.kubeconfig,v.contexts,v.settings));}
+ if(path==='/api/prometheus/sources'&&req.method==='GET'){const sources=await PrometheusSources.create(store,store.snapshot().config,transport);return send(res,sources.describe());}
+ if(path==='/api/prometheus/test'&&req.method==='POST'){
+  const source=prometheusSourceSchema.parse((z.object({source:z.unknown()}).strict().parse(await body(req))).source),config=store.snapshot().config;
+  const sources=await PrometheusSources.create(store,{...config,connections:{...config.connections,Grafana:{...config.connections.Grafana,enabled:false}},prometheusSources:[source]},transport);
+  try{
+   if(!sources.names().includes(source.name))return send(res,{ok:false,detail:'Enable Toolbox and its port forwarding in Settings → Connections → Toolbox, then save.'});
+   const v=await sources.buildInfo(source.name,AbortSignal.timeout(30000)) as {data?:{version?:string}};
+   return send(res,{ok:true,detail:`Prometheus ${v.data?.version??''} responds through a tunnel to ${source.target} in ${source.context}/${source.namespace}.`.replace('  ',' ')});
+  }catch(e){return send(res,{ok:false,detail:e instanceof AppError?e.message:'The tunnel or the query failed.'});}
+  finally{sources.close();}
+ }
  if(path==='/api/toolbox/status'&&req.method==='GET'){const files=toolboxFiles(store),c=store.snapshot().config;if(!files)return send(res,{source:c.connections.Toolbox.path?'path':'none'});if(files.v===1)return send(res,{source:'custom'});return send(res,{source:'generated',contexts:files.contexts,generatedAt:files.generatedAt,stale:setupHash(c.toolbox,files.contexts.map(x=>x.name))!==files.settingsHash});}
  if(path==='/api/toolbox/regenerate'&&req.method==='POST'){await body(req);const files=toolboxFiles(store);if(files?.v!==2)throw new AppError(409,'Save a kubeconfig and select contexts first.');const settings=store.snapshot().config.toolbox,names=files.contexts.map(x=>x.name),setup=await generateToolboxSetup(files.kubeconfig,names,settings);store.credential('Toolbox',toolboxStoredValue(setup,files.kubeconfig,setupHash(settings,names)));return send(res,{contexts:setup.contexts.map(x=>({name:x.name,namespaces:x.namespaces.length,excluded:x.excluded}))});}
  if(path==='/api/connection/check'&&req.method==='POST'){const {name,config}=z.object({name:z.enum(connectionNames),config:z.unknown().optional()}).strict().parse(await body(req));if(config!==undefined){const result=await testConnection(name,configSchema.parse(config),serviceProbe(store));return send(res,{checks:[{label:`${name} (unsaved settings)`,ok:result.ok,detail:result.detail}],draft:true});}const started=Date.now();

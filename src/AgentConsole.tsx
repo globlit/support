@@ -3,14 +3,15 @@ import {Fragment,useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
 import {navigate,type Route} from './navigation';
 import {useFeedback} from './Toasts';
+import {AgentComposer,type Reply} from './AgentComposer';
 
-type FeedKind='run-start'|'step'|'tool'|'command'|'output'|'result'|'error'|'run-end';
-export type FeedEntry={seq:number;at:string;runId:string;title:string;route?:{page:string;issue:string};kind:FeedKind;text:string};
-type Running={runId:string;title:string;route:{page:string;issue:string};startedAt:string;lastStep:string};
+type FeedKind='run-start'|'step'|'tool'|'command'|'output'|'result'|'error'|'run-end'|'engineer'|'question';
+export type FeedEntry={seq:number;at:string;runId:string;title:string;route?:{page:string;issue:string};kind:FeedKind;text:string;ref?:string};
+type Running={runId:string;title:string;route:{page:string;issue:string};startedAt:string;lastStep:string;questions?:number};
 export type QueueCounts={queued:number;running:number;review:number;dead:number;budgetFull:boolean};
 export type AgentState={halted:boolean;running:Running[];sandbox:{configured:boolean;reachable:boolean;commandsEnabled:boolean};queue?:QueueCounts;parallelReview?:boolean};
 type QueueItem={scope:string;title:string;state:'queued'|'running'|'review'|'dead';origin:'auto'|'manual';attempts:number;lastError:string|null;nextAttemptAt:string;route:{page:string;issue:string}};
-const markers:Record<FeedKind,string>={'run-start':'▸','step':'·','tool':'→','command':'$','output':' ','result':'←','error':'!','run-end':'■'};
+const markers:Record<FeedKind,string>={'run-start':'▸','step':'·','tool':'→','command':'$','output':' ','result':'←','error':'!','run-end':'■','engineer':'›','question':'?'};
 const keep=1500;
 const stored=(key:string,fallback:string)=>{try{return localStorage.getItem(key)??fallback}catch{return fallback}};
 const store=(key:string,value:string)=>{try{localStorage.setItem(key,value)}catch{}};
@@ -40,6 +41,7 @@ export function AgentConsole(){
  const [entries,setEntries]=useState<FeedEntry[]>([]),[state,setState]=useState<AgentState|null>(null),[open,setOpen]=useState(()=>stored('support.agentConsole','min')==='open');
  const [filter,setFilter]=useState('all'),[follow,setFollow]=useState(true),[connected,setConnected]=useState(false),[busy,setBusy]=useState(''),feedback=useFeedback();
  const body=useRef<HTMLDivElement>(null);
+ const [reply,setReply]=useState<Reply&{runId:string}|null>(null),[answered,setAnswered]=useState<Set<string>>(()=>new Set()),[composeTo,setComposeTo]=useState('');
  const [size,setSize]=useState<{w:number;h:number}>(()=>{try{const v=JSON.parse(localStorage.getItem('support.agentConsole.size')??'');if(Number.isFinite(v?.w)&&Number.isFinite(v?.h))return v;}catch{}return {w:620,h:380};});
  useEffect(()=>{store('support.agentConsole.size',JSON.stringify(size));},[size]);
  const resize=(w:number,h:number)=>setSize(clampSize(w,h,window.innerWidth,window.innerHeight));
@@ -63,13 +65,17 @@ export function AgentConsole(){
  const running=state?.running??[],halted=!!state?.halted,last=[...entries].reverse().find(e=>e.kind!=='output');
  const runs=useMemo(()=>runTabs(entries,running),[entries,running]);
  const selected=runs.find(r=>r.runId===filter);
+ const delivered=useMemo(()=>new Set(entries.filter(e=>e.kind==='step'&&e.ref).map(e=>e.ref!)),[entries]);
+ const questions=running.reduce((n,r)=>n+(r.questions??0),0);
+ const targets=running.map(r=>({runId:r.runId,key:runKey(r.title)}));
+ const composeTarget=reply?.runId??(selected?.running?selected.runId:composeTo||targets[0]?.runId);
  const act=async(label:string,path:string)=>{setBusy(label);try{setState(await api<AgentState>(path,'POST',{}));feedback.info(label==='halt'?'Agent stopped. New runs are blocked until you resume.':label==='resume'?'Agent resumed.':'Run stopped.');}catch(e){feedback.error(e);}finally{setBusy('');}};
  const dot=halted?'stopped':running.length?'running':'idle';
  const status=halted?'Agent stopped':running.length?`Agent · ${running.length} running`:'Agent idle';
  const stopAll=<button type="button" className="agent-kill" disabled={!!busy||halted} onClick={()=>void act('halt','/agent/halt')} title="Stop every investigation and command, and block new runs">{busy==='halt'?'Stopping…':'Stop all'}</button>;
  if(!open)return <aside key="min" className="agent-console minimized" aria-label="Agent console">
   <button type="button" className="agent-summary" onClick={()=>setOpen(true)} aria-expanded="false">
-   <i className={'agent-dot '+dot}/><strong>{status}</strong><span className="agent-last">{last?`${runKey(last.title)} ${last.text}`:connected?'No activity yet':'Connecting…'}</span><span className="agent-chevron" aria-hidden="true">⌃</span>
+   <i className={'agent-dot '+dot}/><strong>{status}</strong><span className="agent-last">{last?`${runKey(last.title)} ${last.text}`:connected?'No activity yet':'Connecting…'}</span>{questions>0&&<span className="agent-question-badge">{questions} question{questions===1?'':'s'}</span>}<span className="agent-chevron" aria-hidden="true">⌃</span>
   </button>
   {halted?<button type="button" className="agent-resume" disabled={!!busy} onClick={()=>void act('resume','/agent/resume')}>Resume</button>:stopAll}
  </aside>;
@@ -102,11 +108,12 @@ export function AgentConsole(){
     {filter==='all'&&shown[i-1]?.runId!==e.runId&&<div className="agent-separator" title={e.title}><span>{runKey(e.title)}</span></div>}
     <div className={'agent-line '+e.kind}>
      <time dateTime={e.at}>{clock(e.at)}</time>
-     <span className="agent-marker" aria-hidden="true">{markers[e.kind]}</span><span className="agent-text">{e.text}</span>
+     <span className="agent-marker" aria-hidden="true">{markers[e.kind]}</span><span className="agent-text">{e.kind==='engineer'&&<span className="agent-you">you</span>}{e.text}{e.kind==='engineer'&&e.ref&&<span className="agent-delivery">{delivered.has(e.ref)?'delivered':'queued'}</span>}{e.kind==='question'&&e.ref&&running.some(r=>r.runId===e.runId)&&!answered.has(e.ref)&&<button type="button" className="agent-reply" onClick={()=>setReply({id:e.ref!,text:e.text,runId:e.runId})}>Reply</button>}</span>
     </div>
    </Fragment>):<p className="agent-empty">{connected?'No agent activity yet. Investigations appear here as they run.':'Connecting to the agent feed…'}</p>}
   </div>
-  {!follow&&<button type="button" className="agent-follow" onClick={()=>{setFollow(true);if(body.current)body.current.scrollTop=body.current.scrollHeight;}}>Jump to latest</button>}</>}
+  {!follow&&<button type="button" className="agent-follow" onClick={()=>{setFollow(true);if(body.current)body.current.scrollTop=body.current.scrollHeight;}}>Jump to latest</button>}
+  <AgentComposer targets={targets} target={composeTarget} onTarget={setComposeTo} reply={reply} onClearReply={()=>setReply(null)} onSent={()=>{if(reply)setAnswered(s=>new Set(s).add(reply.id));}}/></>}
  </aside>;
 }
 

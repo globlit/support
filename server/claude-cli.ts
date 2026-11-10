@@ -46,7 +46,7 @@ export async function claudeCliStatus(path:string,runner:CliRunner=runCli,signal
  return {connected:result.code===0&&status.loggedIn&&status.authMethod==='claude.ai',method:status.authMethod??'none',plan:status.subscriptionType??undefined};
 }
 
-const request=z.object({model:z.string().min(1).max(200),system:z.string().max(32000),messages:z.array(z.unknown()).max(64),tools:z.array(z.object({name:z.string(),description:z.string(),input_schema:z.unknown()})).min(1).max(32)});
+const request=z.object({model:z.string().min(1).max(200),system:z.string().max(32000),messages:z.array(z.unknown()).max(256),tools:z.array(z.object({name:z.string(),description:z.string(),input_schema:z.unknown()})).min(1).max(64)});
 export function claudeCliFetch(path:string,runner:CliRunner=runCli,secrets:string[]=[],onUsage?:(usage:TokenUsage|undefined)=>void):typeof fetch{
  return async(_url,init)=>{
   if(init?.method!=='POST'||!String(_url).endsWith('/v1/messages'))throw new AppError(400,'Unsupported local Claude request.');

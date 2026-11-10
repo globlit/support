@@ -12,6 +12,7 @@ export function endpointHelp(name:ConnectionName):ReactNode{
   case 'Outline':return <>Base URL of the Outline workspace. Example: <code>https://outline.example.com</code></>;
   case 'Alertmanager':return <>Base URL of Alertmanager, without <code>/api/v2</code>. Example: <code>https://alertmanager.example.com</code></>;
   case 'Prometheus':return <>Base URL of Prometheus, without <code>/api/v1</code>. Example: <code>https://prometheus.example.com</code></>;
+  case 'Grafana':return <>Base URL of Grafana. Example: <code>https://grafana.example.com</code></>;
   case 'Slack':return <>Use <code>https://slack.com/api</code>.</>;
   default:return undefined;
  }
@@ -36,6 +37,7 @@ export function credentialHelp(name:ConnectionName):ReactNode{
   case 'Slack':return <>Slack app with bot scopes <code>channels:history</code> and <code>chat:write</code>. Copy the <strong>Bot User OAuth Token</strong> (<code>xoxb-…</code>) and invite the app to the channel. <Doc href="https://api.slack.com/apps">Slack apps</Doc></>;
   case 'Outline':return <>Outline <strong>Settings → API → New API key</strong>, with the scopes:<ul><li><code>documents:read</code></li><li><code>collections:read</code>: not needed if the collection is set by ID</li></ul><Doc href="https://www.getoutline.com/developers">Docs</Doc></>;
   case 'Alertmanager':case 'Prometheus':return <>Only needed when a reverse proxy protects {name}. Use a username and password, or a bearer token.</>;
+  case 'Grafana':return <>A user with the Viewer role and query access to the Prometheus datasources. Use its username and password, or a service account token.</>;
   case 'Toolbox':return <>Prefer a read-only service account, with certificates embedded in the <code>*-data</code> fields. Export one context with <code>kubectl config view --minify --flatten --context NAME</code></>;
   default:return undefined;
  }

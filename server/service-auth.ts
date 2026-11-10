@@ -3,7 +3,7 @@ import type {Store} from './store.js';
 import {connectionNames} from '../src/model.js';
 import {toolboxCredentialSchema} from './toolbox-config.js';
 
-export const serviceAuthConnections=['Alertmanager','Prometheus'] as const;
+export const serviceAuthConnections=['Alertmanager','Prometheus','Grafana'] as const;
 export type ServiceAuthConnection=typeof serviceAuthConnections[number];
 export type ServiceAuthScheme='bearer'|'basic';
 

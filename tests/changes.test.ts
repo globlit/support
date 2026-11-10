@@ -111,3 +111,15 @@ test('preparing changes needs a project the token can access, and an explicit br
  assert.deepEqual(f.remote.writes,[]);
  for(const project of ['flux','../infra/flux','infra/.flux','infra//flux'])assert.equal(prepareSchema.safeParse({...f.input,project}).success,false,project);
 }finally{f.done()}});
+test('a branch is prepared from an agent proposal only for the approved plan and an unchanged target',async()=>{
+ const save=async(f:Awaited<ReturnType<typeof fixture>>,before:string,planVersion=1)=>{const {randomUUID}=await import('node:crypto');const d=await f.yt.work('2-42');const id=randomUUID();f.store.saveInvestigation({id:randomUUID(),connection:d.issue.connection,issueId:'2-42',state:'ready',events:[],startedAt:new Date().toISOString(),planVersion,proposals:[{id,project:'infra/flux',commit:base,title:'Scale to two replicas',summary:'Development needs two replicas.',at:new Date().toISOString(),files:[{path:'deploy.yaml',before,after:'replicas: 2\n'}]}]});return {...f.input,paths:undefined,proposalId:id};};
+ let f=await fixture();try{
+  f.remote.edits=[{path:'deploy.yaml',content:'replicas: 2\n'}];
+  const c=await f.changes.prepare('2-42',await save(f,'replicas: 1\n'));
+  assert.equal(c.state,'review',c.message);assert.deepEqual(f.remote.writes,['commit']);assert.deepEqual(c.files,[{path:'deploy.yaml',before:'replicas: 1\n',after:'replicas: 2\n'}]);assert.match(c.title,/Scale to two replicas/);
+ }finally{f.done()}
+ f=await fixture();try{const c=await f.changes.prepare('2-42',await save(f,'replicas: 5\n'));assert.equal(c.state,'failed');assert.match(c.message,/changed on main since the investigation/);assert.deepEqual(f.remote.writes,[]);}finally{f.done()}
+ f=await fixture();try{const c=await f.changes.prepare('2-42',await save(f,'replicas: 1\n',9));assert.equal(c.state,'failed');assert.match(c.message,/does not belong to the approved plan/);}finally{f.done()}
+ f=await fixture(false);try{await assert.rejects(f.changes.prepare('2-42',await save(f,'replicas: 1\n')),/Approve/);assert.deepEqual(f.remote.writes,[]);}finally{f.done()}
+ assert.equal(prepareSchema.safeParse({project:'group/project',revision:1,sourceUpdated:1}).success,false,'paths or a proposal is required');
+});

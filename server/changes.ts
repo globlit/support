@@ -8,9 +8,16 @@ import {Store,AppError} from './store.js';
 import {GitLab,boundedJSON,serviceBase,sha,projectPath} from './gitlab.js';
 import {YouTrack} from './youtrack.js';
 import type {ChangeSet,WorkSession,SourceIssue} from '../src/model.js';
+/** Throws when a text contains a saved secret, a private key, a Kubernetes Secret or a plaintext credential assignment. */
+export function assertNoCredentials(store:Store,text:string){
+ const tokens=store.secretValues();
+ if(tokens.some(t=>t&&text.includes(t))||/-----BEGIN [^-]*PRIVATE KEY-----|\bkind:\s*Secret\b|\bclient-key-data\s*:|\b(password|token|api[_-]?key|authorization)\s*[:=]\s*["']?[^\s"'<>$]+/i.test(text))throw new AppError(400,'Possible plaintext credential found. Use placeholders or sealed values; no branch was written.');
+}
+/** True for paths of credential files, which the agent may not change. */
+export const credentialFile=(p:string)=>/(^|\/)(\.env(?:\..*)?|id_rsa|id_ed25519|kubeconfig|credentials)(\/|$)|\.(pem|key)$/i.test(p);
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const filePath=z.string().min(1).max(300).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f\x7f]/.test(p)&&p.split('/').every(s=>s&&s!=='.'&&s!=='..'&&s!=='.git'),'Use a relative file path without traversal.');
-export const prepareSchema=z.object({project:projectPath,branch:z.string().trim().min(1).max(255).optional(),paths:z.array(filePath).min(1).max(10),revision:z.number().int(),sourceUpdated:z.number()}).strict();
+export const prepareSchema=z.object({project:projectPath,branch:z.string().trim().min(1).max(255).optional(),paths:z.array(filePath).min(1).max(10).optional(),proposalId:z.string().uuid().optional(),revision:z.number().int(),sourceUpdated:z.number()}).strict().refine(v=>!!v.paths!==!!v.proposalId,'Give either file paths or a proposal.');
 export const reviewSchema=z.object({title:z.string().trim().min(1).max(200),description:z.string().max(16000)}).strict();
 const generated=z.object({files:z.array(z.object({path:filePath,content:z.string().max(32000).nullable()}).strict()).min(1).max(10)}).strict();
 const compareSchema=z.object({commit:z.object({id:sha}),compare_timeout:z.boolean(),diffs:z.array(z.object({old_path:z.string(),new_path:z.string(),diff:z.string(),new_file:z.boolean(),deleted_file:z.boolean(),renamed_file:z.boolean(),a_mode:z.string().nullable(),b_mode:z.string().nullable(),collapsed:z.boolean().optional(),too_large:z.boolean().optional()})).max(10)});
@@ -21,11 +28,13 @@ export class Changes {
  async list(id:string){const issue=await this.readSource(id);const records=this.store.changes(issue.connection,issue.id);for(const c of records){if(c.resolution?.state==='closed'&&!issue.resolved){c.resolution.state='reopened';c.resolution.message='The ticket was reopened in YouTrack. Engineer review is required.';this.store.saveChange(c);}}return records;}
  private approved(issue:SourceIssue,w:WorkSession){assertAgentWork(this.store,issue);const p=w.plans.at(-1),a=w.approval;if(issue.resolved||w.pendingRevision||!p||!a||!a.actorId||!a.workspaceId||a.version!==p.version||a.sourceUpdated!==issue.updated||a.configRevision!==this.store.snapshot().configRevision)throw new AppError(409,'Approve the current plan for the current ticket and settings first.');return hash({approval:a,plan:p});}
  protected async guard(c:ChangeSet,g:GitLab){g.check();const issue=await this.readSource(c.issueId,c.connection);g.check();const w=this.store.workSession(issue);if(issue.connection!==c.connection||issue.updated!==c.sourceUpdated||w.revision!==c.sessionRevision||this.approved(issue,w)!==c.planApproval||c.configRevision!==this.store.snapshot().configRevision)throw new AppError(409,'Ticket, plan, feedback or settings changed. Prepare a new branch from the approved plan.');return issue;}
- protected git(c:ChangeSet){const g=new GitLab(this.store,c.project,this.fetcher);if(g.base.href!==c.endpoint)throw new AppError(409,'GitLab endpoint changed. Restore its settings to inspect this operation.');return g;}
- protected safeText(text:string){
-  const tokens=this.store.secretValues();
-  if(tokens.some(t=>t&&text.includes(t))||/-----BEGIN [^-]*PRIVATE KEY-----|\bkind:\s*Secret\b|\bclient-key-data\s*:|\b(password|token|api[_-]?key|authorization)\s*[:=]\s*["']?[^\s"'<>$]+/i.test(text))throw new AppError(400,'Possible plaintext credential found. Use placeholders or sealed values; no branch was written.');
+ /** Returns a code change proposal from the investigation that produced the given plan version. */
+ private proposal(issue:SourceIssue,planVersion:number,id:string){
+  for(const run of this.store.investigations(issue.connection,issue.id)){const p=run.planVersion===planVersion?run.proposals?.find(x=>x.id===id):undefined;if(p)return p;}
+  throw new AppError(404,'This proposal does not belong to the approved plan. Approve the plan that lists it, or investigate again.');
  }
+ protected git(c:ChangeSet){const g=new GitLab(this.store,c.project,this.fetcher);if(g.base.href!==c.endpoint)throw new AppError(409,'GitLab endpoint changed. Restore its settings to inspect this operation.');return g;}
+ protected safeText(text:string){assertNoCredentials(this.store,text);}
  private digest(c:ChangeSet){return hash({id:c.id,plan:c.planApproval,source:c.sourceUpdated,config:c.configRevision,project:c.project,base:c.base,head:c.head,target:c.target,branch:c.branch,diffs:c.diffs,title:c.title,description:c.description});}
  private async inspect(c:ChangeSet,g:GitLab){
   const branch=await g.branch(c.branch);if(!branch)throw new AppError(409,'Branch not found yet. No write was retried. Check remote status again.');
@@ -42,15 +51,23 @@ export class Changes {
    if(w.revision!==input.revision||issue.updated!==input.sourceUpdated)throw new AppError(409,'Refresh the ticket before preparing changes.');
    const approval=this.approved(issue,w);
    if(this.store.changes(issue.connection,issue.id).some(c=>['generating','branch_pending','mr_pending'].includes(c.state)))throw new AppError(409,'An earlier operation needs reconciliation before preparing another branch.');
-   if(new Set(input.paths).size!==input.paths.length)throw new AppError(400,'File paths must be unique.');
-   for(const p of input.paths)if(/(^|\/)(\.env(?:\..*)?|id_rsa|id_ed25519|kubeconfig|credentials)(\/|$)|\.(pem|key)$/i.test(p))throw new AppError(400,'Credential files cannot be prepared by the model.');
+   if(input.paths&&new Set(input.paths).size!==input.paths.length)throw new AppError(400,'File paths must be unique.');
+   for(const p of input.paths??[])if(credentialFile(p))throw new AppError(400,'Credential files cannot be prepared by the model.');
    const g=new GitLab(this.store,input.project,this.fetcher);const project=await g.info();if(!project)throw new AppError(404,'GitLab project not found, or the saved GitLab token cannot access it.');
    const targetName=input.branch??project.default_branch;if(!targetName)throw new AppError(400,'The GitLab project has no default branch. Enter a target branch.');
    const target=await g.branch(targetName);if(!target)throw new AppError(400,`Target branch ${targetName} does not exist in ${project.path_with_namespace}.`);
    const uuid=randomUUID();const plan=w.plans.at(-1)!;
    c={id:uuid,connection:issue.connection,issueId:issue.id,planVersion:plan.version,planApproval:approval,sessionRevision:w.revision,configRevision:s.configRevision,sourceUpdated:issue.updated,endpoint:g.base.href,project:project.path_with_namespace,target:targetName,base:target.id,branch:'support/'+uuid,files:[],diffs:[],title:`Draft: ${issue.key} · Plan v${plan.version}`,description:`Prepared from approved plan v${plan.version}.\n\n${plan.text}`.slice(0,16000),state:'generating',message:'Reading selected files and preparing changes.',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
    this.safeText(plan.text);this.store.saveChange(c);activity=this.store.trackRun('changes',issue.connection,issue.id,s.config.connections.Model.scope);activity.event('Reading the approved plan and scoped repository files');
-   const originals:Record<string,string|null>={};for(const path of input.paths){originals[path]=await g.file(path,c.base);if(originals[path]!==null)this.safeText(originals[path]!);}
+   if(input.proposalId){
+    // Files proposed by the agent from its sandbox checkout. Each file must be unchanged on the target since the investigation.
+    const proposal=this.proposal(issue,plan.version,input.proposalId);
+    if(proposal.project!==project.path_with_namespace)throw new AppError(400,`This proposal is for ${proposal.project}. Select that project.`);
+    activity.event(`Checking ${proposal.files.length} proposed files against ${targetName}`);
+    for(const f of proposal.files){if(credentialFile(f.path))throw new AppError(400,`${f.path} is a credential file.`);const current=await g.file(f.path,c.base);if(current!==f.before)throw new AppError(409,`${f.path} changed on ${targetName} since the investigation. Investigate again to refresh the proposal.`);if(f.after!==null)this.safeText(f.after);if(f.after!==f.before)c.files.push({path:f.path,before:f.before,after:f.after});}
+    c.description=`${proposal.summary}\n\nPrepared from approved plan v${plan.version}.`.slice(0,16000);c.title=`Draft: ${issue.key} · ${proposal.title}`.slice(0,200);
+   }else{
+   const originals:Record<string,string|null>={};for(const path of input.paths!){originals[path]=await g.file(path,c.base);if(originals[path]!==null)this.safeText(originals[path]!);}
    const m=s.config.connections.Model;if(!m.enabled||!m.endpoint||!m.scope)throw new AppError(400,'Configure and enable Model first.');
    const modelBase=serviceBase(m.endpoint);if(/\/v1\/?$/.test(modelBase.pathname))throw new AppError(400,'Use the model base URL without /v1.');
    await this.guard(c,g);
@@ -60,6 +77,7 @@ export class Changes {
    const calls=response.content.filter(x=>x.type==='tool_use');if(calls.length!==1||calls[0].name!=='prepare_changes')throw new AppError(400,'Model did not prepare a complete change set. Refine the plan or file scope.');
    const result=generated.parse(calls[0].input);const paths=new Set<string>();
    for(const file of result.files){if(!Object.hasOwn(originals,file.path)||paths.has(file.path))throw new AppError(403,'Model proposed a path outside the selected scope or repeated a path.');paths.add(file.path);if(file.content!==null){if(Buffer.byteLength(file.content)>32000||file.content.includes('\0'))throw new AppError(400,'Generated file is too large or binary.');this.safeText(file.content);}if(file.content!==originals[file.path])c.files.push({path:file.path,before:originals[file.path],after:file.content});}
+   }
    if(!c.files.length)throw new AppError(400,'No file changes were proposed.');
    await this.guard(c,g);if((await g.branch(c.target))?.id!==c.base)throw new AppError(409,'Target branch moved. Prepare again from its latest commit.');if(await g.branch(c.branch))throw new AppError(409,'Generated branch already exists. No write made.');
    await this.guard(c,g);

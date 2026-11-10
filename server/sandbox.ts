@@ -59,3 +59,21 @@ export async function sandboxHealth(fetcher:typeof fetch=fetch){
  if(!sandboxUrl())return {configured:false,reachable:false};
  try{const v=await call('v1/health','GET',fetcher);return {configured:true,reachable:v?.ok===true};}catch{return {configured:true,reachable:false};}
 }
+
+export type RepoChange={path:string;status:string;content:string|null};
+/** Uploads a repository archive (.tar.gz stream) into the run's folder in the sandbox as repos/<name>. Returns the folder and file count. */
+export async function uploadRepo(runId:string,name:string,archive:ReadableStream<Uint8Array>,signal:AbortSignal,fetcher:typeof fetch=fetch,base=sandboxUrl()){
+ if(!base)throw new AppError(400,'No command sandbox is configured. Set SUPPORT_SANDBOX_URL.');
+ const response=await fetcher(new URL(`v1/runs/${runId}/repos/${name}`,base),{method:'PUT',headers:{'Content-Type':'application/gzip'},body:archive,duplex:'half',signal,redirect:'manual'} as RequestInit).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the support-sandbox service.');});
+ const value=await response.json().catch(()=>({})) as {path?:string;files?:number;error?:string};
+ if(!response.ok)throw new AppError(502,'The sandbox refused the repository: '+(value.error??`HTTP ${response.status}`));
+ return {path:value.path??`repos/${name}`,files:value.files??0};
+}
+/** Returns the files changed in a sandbox checkout since its base commit. Content is base64, null for deleted files. */
+export async function repoChanges(runId:string,name:string,fetcher:typeof fetch=fetch,base=sandboxUrl()):Promise<RepoChange[]>{
+ if(!base)throw new AppError(400,'No command sandbox is configured. Set SUPPORT_SANDBOX_URL.');
+ const response=await fetcher(new URL(`v1/runs/${runId}/repos/${name}/changes`,base),{method:'GET',signal:AbortSignal.timeout(60000),redirect:'manual'}).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the support-sandbox service.');});
+ const value=await response.json().catch(()=>({})) as {files?:RepoChange[];error?:string};
+ if(!response.ok||!value.files)throw new AppError(response.status===404?404:400,value.error??`The sandbox returned HTTP ${response.status}.`);
+ return value.files;
+}
