@@ -3,7 +3,7 @@ import {z} from 'zod';
 import {AppError,type Store} from './store.js';
 import {GitLab,projectPath} from './gitlab.js';
 import {uploadRepo,repoChanges,runSandboxCommand} from './sandbox.js';
-import {assertNoCredentials,credentialFile} from './changes.js';
+import {assertNoCredentials,credentialFile,filePath} from './changes.js';
 import type {ChangeProposal} from '../src/model.js';
 
 /** Folder name of a project checkout in the sandbox: the project path in lower case, with "/" replaced by "--". */
@@ -45,6 +45,7 @@ export async function proposeChange(store:Store,input:unknown,runId:string,check
  if(!changed.length)throw new AppError(400,'The checkout has no changes to propose.');
  const g=new GitLab(store,project,fetcher),files:ChangeProposal['files']=[];
  for(const f of changed){
+  if(!filePath.safeParse(f.path).success)throw new AppError(400,`${String(f.path).slice(0,200)} is not a valid repository path.`);
   if(credentialFile(f.path))throw new AppError(400,`${f.path} is a credential file. It cannot be changed by the agent.`);
   const after=f.content===null?null:Buffer.from(f.content,'base64').toString('utf8');
   if(after!==null){if(after.includes('\0')||Buffer.byteLength(after)>fileLimit)throw new AppError(400,`${f.path} is binary or larger than 1 MB.`);assertNoCredentials(store,after);}

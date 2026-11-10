@@ -16,7 +16,8 @@ export function assertNoCredentials(store:Store,text:string){
 /** True for paths of credential files, which the agent may not change. */
 export const credentialFile=(p:string)=>/(^|\/)(\.env(?:\..*)?|id_rsa|id_ed25519|kubeconfig|credentials)(\/|$)|\.(pem|key)$/i.test(p);
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
-const filePath=z.string().min(1).max(300).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f\x7f]/.test(p)&&p.split('/').every(s=>s&&s!=='.'&&s!=='..'&&s!=='.git'),'Use a relative file path without traversal.');
+/** Relative repository path without traversal, control characters or .git segments. */
+export const filePath=z.string().min(1).max(300).refine(p=>!p.startsWith('/')&&!p.includes('\\')&&!/[\x00-\x1f\x7f]/.test(p)&&p.split('/').every(s=>s&&s!=='.'&&s!=='..'&&s!=='.git'),'Use a relative file path without traversal.');
 export const prepareSchema=z.object({project:projectPath,branch:z.string().trim().min(1).max(255).optional(),paths:z.array(filePath).min(1).max(10).optional(),proposalId:z.string().uuid().optional(),revision:z.number().int(),sourceUpdated:z.number()}).strict().refine(v=>!!v.paths!==!!v.proposalId,'Give either file paths or a proposal.');
 export const reviewSchema=z.object({title:z.string().trim().min(1).max(200),description:z.string().max(16000)}).strict();
 const generated=z.object({files:z.array(z.object({path:filePath,content:z.string().max(32000).nullable()}).strict()).min(1).max(10)}).strict();
