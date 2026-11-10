@@ -26,11 +26,20 @@ export function usageSeries(buckets:DashboardData['daily'],interval:'hour'|'day'
 }
 export function dashboard(store:Store,overview:AIOverview,days:number,interval:'hour'|'day'='day'){const config=store.snapshot().config;const result=dashboardSummary(overview,days,config.timezone,config.retentionDays,Date.now(),interval);pruneLogs(store);const since=interval==='hour'?Date.parse(result.daily[0].date):Date.now()-days*86400000;result.tools=store.db.prepare("SELECT tool AS name,count(*) AS requests,sum(CASE WHEN status='error' THEN 1 ELSE 0 END) AS errors FROM diagnostics WHERE at>=? GROUP BY tool ORDER BY requests DESC").all(new Date(since).toISOString()) as DashboardData['tools'];result.health=toolHealth(store);
  const tokens=usageSeries(result.daily,interval,config.timezone);
- const usage={responses:0,input:0,output:0,cacheRead:0,cacheReadReported:0,cacheWrite:0,limits:[] as import('../src/telemetry-model.js').RateLimit[],limitsAt:undefined as string|undefined};
- // Do not expose model bodies.
- for(const row of store.db.prepare("SELECT value FROM diagnostics WHERE tool='Model' ORDER BY seq DESC").iterate()){
-  const entry=JSON.parse(store.decrypt(String(row.value),store.key!)) as Diagnostic,t=entry.telemetry;if(!t)continue;
-  if(t.usage&&tokens.add(entry.at,t.usage)){usage.responses++;usage.input+=t.usage.input;usage.output+=t.usage.output;usage.cacheRead+=t.usage.cacheRead??0;usage.cacheWrite+=t.usage.cacheWrite??0;if(t.usage.cacheRead!==undefined)usage.cacheReadReported++;}
-  if(Date.parse(entry.at)>=since&&!usage.limitsAt&&t.limits.length&&t.provider===config.modelProvider&&t.auth===config.modelAuth&&t.model===config.connections.Model.scope){usage.limits=t.limits;usage.limitsAt=entry.at;}
+ backfillUsage(store);
+ const usage={responses:0,input:0,output:0,cacheRead:0,cacheReadReported:0,cacheWrite:0,webSearches:0,limits:[] as import('../src/telemetry-model.js').RateLimit[],limitsAt:undefined as string|undefined};
+ const rows=store.db.prepare('SELECT at,provider,auth,model,input,output,cache_read,cache_write,web_searches,limits FROM model_usage WHERE at>=? ORDER BY at DESC').all(new Date(Math.min(since,Date.parse(result.daily[0].date)||since)).toISOString()) as {at:string;provider:string;auth:string;model:string;input:number;output:number;cache_read:number|null;cache_write:number|null;web_searches:number;limits:string}[];
+ for(const r of rows){
+  if(tokens.add(r.at,{input:r.input,output:r.output})){usage.responses++;usage.input+=r.input;usage.output+=r.output;usage.cacheRead+=r.cache_read??0;usage.cacheWrite+=r.cache_write??0;usage.webSearches+=r.web_searches;if(r.cache_read!==null)usage.cacheReadReported++;}
+  if(Date.parse(r.at)>=since&&!usage.limitsAt&&r.provider===config.modelProvider&&r.auth===config.modelAuth&&r.model===config.connections.Model.scope){const limits=JSON.parse(r.limits) as typeof usage.limits;if(limits.length){usage.limits=limits;usage.limitsAt=r.at;}}
  }
  result.usage=usage;result.tokenSeries=tokens.series;return result;}
+
+/** Copies token usage from Model log entries recorded before the usage table existed. Runs once per database. */
+export function backfillUsage(store:Store){
+ if(!store.key||store.get('modelUsageBackfilled'))return;
+ for(const row of store.db.prepare("SELECT id,value FROM diagnostics WHERE tool='Model'").iterate()){
+  try{const entry=JSON.parse(store.open(String(row.value))) as Diagnostic,t=entry.telemetry;if(t?.usage)store.recordUsage({id:String(row.id),at:entry.at,provider:t.provider,auth:t.auth,model:t.model,...t.usage,limits:t.limits});}catch{}
+ }
+ store.put('modelUsageBackfilled',true);
+}

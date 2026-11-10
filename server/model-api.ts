@@ -5,6 +5,7 @@ import {recordDiagnostic} from './diagnostics.js';
 import {responseFailure,readFailureBody,type ResponseFailure} from './model-errors.js';
 import {chatGPT} from './chatgpt.js';
 import {z} from 'zod';
+import {randomUUID} from 'node:crypto';
 import {Store,AppError} from './store.js';
 export type ModelProvider='anthropic'|'openai';
 export async function modelKey(store:Store){
@@ -68,8 +69,12 @@ export function modelFetch(provider:ModelProvider,fetcher:typeof fetch=fetch,sub
 }
 
 export function configuredModelFetch(store:Store,fetcher:typeof fetch=fetch):typeof fetch{
- const snapshot=store.snapshot(),c=snapshot.config,epoch=store.vaultEpoch,credentialEpoch=store.credentialEpoch,secrets=store.secretValues();
- const onUsage=(usage:TokenUsage|undefined,limits:RateLimit[])=>{if(store.vaultEpoch!==epoch||store.credentialEpoch!==credentialEpoch||store.snapshot().configRevision!==snapshot.configRevision)return;recordDiagnostic(store,{tool:'Model',operation:'Model usage',status:'ok',durationMs:0,output:usage?'Provider-reported token counts. No prompt or response text retained.':'Token usage not reported.',telemetry:{usage,limits,provider:c.modelProvider,auth:c.modelAuth,model:c.connections.Model.scope}},secrets);};
+ const snapshot=store.snapshot(),c=snapshot.config,epoch=store.vaultEpoch,secrets=store.secretValues();
+ const onUsage=(usage:TokenUsage|undefined,limits:RateLimit[])=>{
+  // Tokens are spent even when settings change during the call, so usage is always recorded.
+  const id=randomUUID();
+  if(usage)try{store.recordUsage({id,provider:c.modelProvider,auth:c.modelAuth,model:c.connections.Model.scope,...usage,limits});}catch{}
+  if(store.vaultEpoch!==epoch)return;recordDiagnostic(store,{id,tool:'Model',operation:'Model usage',status:'ok',durationMs:0,output:usage?'Provider-reported token counts. No prompt or response text retained.':'Token usage not reported.',telemetry:{usage,limits,provider:c.modelProvider,auth:c.modelAuth,model:c.connections.Model.scope}},secrets);};
  if(c.modelAuth==='claude_cli'){if(c.modelProvider!=='anthropic')throw new AppError(400,'Local Claude requires the Claude provider.');const transport=claudeCliFetch(c.connections.Model.path,undefined,secrets,usage=>{onUsage(usage,[]);});return async(url,init)=>{try{return await transport(url,init)}catch(e){if(store.vaultEpoch===epoch)recordDiagnostic(store,{tool:'Model',operation:'Claude CLI failure',status:'error',durationMs:0,output:e instanceof AppError?e.message:'Local Claude request failed.'},secrets);throw e;}};}
  return modelFetch(c.modelProvider,fetcher,c.modelAuth==='chatgpt',{secrets,onUsage,onFailure:failure=>{
   if(store.vaultEpoch===epoch)recordDiagnostic(store,{tool:'Model',operation:c.modelProvider==='anthropic'?'Claude API failure':'Responses failure',status:'error',durationMs:0,code:failure.httpStatus,output:JSON.stringify(failure)},secrets);

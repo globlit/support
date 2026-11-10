@@ -1,3 +1,4 @@
+import {clearListCache} from './list-cache';
 import {useWorkspace} from './use-workspace';
 import {ProfileMenu} from './ProfileMenu';
 import {AgentConsole} from './AgentConsole';
@@ -33,7 +34,7 @@ export default function App(){
  const {data,setData,reload,loadError}=useWorkspace();
  useBrowserNotifications(!!data?.vault.unlocked);
  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
- useEffect(()=>{if(data?.vault.unlocked)resumeAfterVaultUnlock();else if(data){setError('');setMessage('');}},[data?.vault.unlocked,route.page,route.section]);
+ useEffect(()=>{if(data?.vault.unlocked)resumeAfterVaultUnlock();else if(data){clearListCache();setError('');setMessage('');}},[data?.vault.unlocked,route.page,route.section]);
  const toast=useToast();
  // Action results appear as toasts. The page-level error stays in state for the startup screen only.
  useEffect(()=>{if(message){toast({tone:'success',message});setMessage('');}},[message,toast]);

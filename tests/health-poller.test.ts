@@ -8,7 +8,7 @@ import {defaults,type ConnectionName} from '../src/model.js';
 import {HealthPoller,outlineCollectionRef,serviceProbe,testConnection} from '../server/health-poller.js';
 import {toolHealth,healthTimeouts,type HealthResult} from '../server/tool-health.js';
 import {loggedFetch,readLogs} from '../server/diagnostics.js';
-function fixture(names:ConnectionName[]=['YouTrack']){const dir=mkdtempSync(join(tmpdir(),'support-health-')),store=new Store(dir);store.unlock('an isolated health passphrase',true);const config=structuredClone(defaults);for(const name of names){config.connections[name].enabled=true;config.connections[name].endpoint='https://'+name.toLowerCase()+'.internal';config.connections[name].scope='model';}store.config(config,1);return {store,config,close(){store.close();rmSync(dir,{recursive:true,force:true})}}}
+function fixture(names:ConnectionName[]=['YouTrack']){const dir=mkdtempSync(join(tmpdir(),'support-health-')),store=new Store(dir);store.unlock('an isolated health passphrase',true);const config=structuredClone(defaults);for(const name of names){config.connections[name].enabled=true;config.connections[name].endpoint='https://'+name.toLowerCase()+'.internal';config.connections[name].scope='model';}store.config(config,1);const saved=store.snapshot().config;config.prometheusSources=saved.prometheusSources;config.connections.Prometheus=saved.connections.Prometheus;return {store,config,close(){store.close();rmSync(dir,{recursive:true,force:true})}}}
 const state=(store:Store,name:ConnectionName='YouTrack')=>toolHealth(store).find(t=>t.name===name)!;
 test('scheduled checks count consecutive failures, recover and do not depend on activity',async()=>{
  const f=fixture();let now=Date.now(),calls=0,ok=false;const p=new HealthPoller(f.store,async()=>{calls++;return {ok,detail:ok?'Available':'Unavailable'}},()=>now);
@@ -93,4 +93,14 @@ test('Outline collection references accept a name, an ID, a URL slug or a collec
  assert.deepEqual(outlineCollectionRef('devops-AbC123xyz9'),{ref:'devops-AbC123xyz9',urlId:'AbC123xyz9'});
  assert.deepEqual(outlineCollectionRef('https://outline.example.com/collection/dev-ops-AbC123xyz9/recent'),{ref:'dev-ops-AbC123xyz9',urlId:'AbC123xyz9'});
  assert.equal(outlineCollectionRef('AbC123xyz9').urlId,'AbC123xyz9');
+});
+
+test('the Prometheus check names the failing server',async()=>{
+ const f=fixture([]);
+ try{
+  f.config.connections.Prometheus.enabled=true;f.config.prometheusSources=[{id:'a',name:'cluster-a',kind:'url',endpoint:'https://a.internal'},{id:'b',name:'cluster-b',kind:'url',endpoint:'https://b.internal'}];
+  const probe=serviceProbe(f.store,async input=>new URL(String(input)).hostname==='a.internal'?Response.json({status:'success'}):new Response('no',{status:401}));
+  const r=await probe('Prometheus',f.config,new AbortController().signal);
+  assert.equal(r.ok,false);assert.match(r.detail,/^cluster-b: authentication or access denied/);
+ }finally{f.close()}
 });

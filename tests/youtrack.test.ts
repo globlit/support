@@ -50,3 +50,7 @@ test('plan annotations queue without a run, survive reads, and can be deleted wi
   d=await yt.action(issue.id,{action:'delete-note',text:d.session.notes[0].id,revision:d.session.revision,sourceUpdated:1000});assert.equal(d.session.notes.length,0);assert.equal(d.session.pendingRevision,false);assert.equal(d.session.approval,null);assert.equal(d.session.plans.length,1);
  }finally{f.done()}
 });
+
+test('the ticket list requests no descriptions or comments',async()=>{const f=setup();try{let fields='';const yt=new YouTrack(f.s,(async(url:RequestInfo|URL)=>{fields=new URL(String(url)).searchParams.get('fields')??'';return Response.json([{id:'2-1',idReadable:'INFRA-1',summary:'Disk',updated:1,resolved:null,customFields:[]}]);}) as typeof fetch);
+ const page=await yt.list(0,true);assert.ok(!fields.includes('comments')&&!fields.includes('description'));assert.equal(page.issues[0].key,'INFRA-1');assert.equal(page.issues[0].sourceFingerprint,undefined);
+ await yt.list(0);assert.ok(fields.includes('comments('),'the intake queue keeps the full fields');}finally{f.done()}});

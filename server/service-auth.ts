@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import type {Store} from './store.js';
-import {connectionNames} from '../src/model.js';
+import {connectionNames,prometheusCredential} from '../src/model.js';
 import {toolboxCredentialSchema} from './toolbox-config.js';
 
 export const serviceAuthConnections=['Alertmanager','Prometheus','Grafana'] as const;
@@ -42,6 +42,14 @@ export function serviceAuthHeaders(store:Store,name:ServiceAuthConnection):Recor
  return {Authorization:authorizationHeader(parseServiceAuth(store.readCredential(name)))};
 }
 
+/** Returns request headers for a Prometheus server. Empty when no credential is saved for it. */
+export function serverAuthHeaders(store:Store,id:string):Record<string,string>{
+ const name=prometheusCredential(id);
+ if(!store.vaultStatus().credentials.includes(name))return {};
+ return {Authorization:authorizationHeader(parseServiceAuth(store.readCredential(name)))};
+}
+/** Vault name of a Prometheus server credential: Prometheus/<id>. */
+export const serverCredentialName=z.string().regex(/^Prometheus\/[a-z0-9]{1,16}$/);
 /** Returns the values to redact for a stored credential. */
 export function serviceAuthSecrets(raw:string){
  const auth=parseServiceAuth(raw);
@@ -59,9 +67,12 @@ export const credentialInput=z.union([
  z.object({name:serviceName,basic:basicCredentialSchema}).strict(),
  z.object({name:z.literal('Toolbox'),toolbox:toolboxCredentialSchema}).strict(),
  z.object({name:z.enum(removableCredentials),remove:z.literal(true)}).strict(),
+ z.object({name:serverCredentialName,value:z.string().min(1).max(16384)}).strict(),
+ z.object({name:serverCredentialName,basic:basicCredentialSchema}).strict(),
+ z.object({name:serverCredentialName,remove:z.literal(true)}).strict(),
 ]);
 /** Returns the value to store for a save request. */
 export function storedCredential(v:Exclude<z.infer<typeof credentialInput>,{remove:true}|{toolbox:unknown}>){
  if('basic' in v)return basicCredential(v.basic);
- return isServiceAuthConnection(v.name)?bearerCredential(v.value):v.value;
+ return isServiceAuthConnection(v.name)||v.name.startsWith('Prometheus/')?bearerCredential(v.value):v.value;
 }

@@ -18,20 +18,22 @@ export function redactDiagnostic(text:string,secrets:string[]=[]):string{
  try{const value=JSON.parse(text);const clean=(v:unknown):unknown=>Array.isArray(v)?v.map(clean):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,sensitive.test(k)?'[redacted]':clean(x)])):typeof v==='string'?plain(v):v;return JSON.stringify(clean(value),null,2);}catch{return plain(text);}
 }
 function plain(text:string){return text.replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/-]+=*/gi,'$1 [redacted]').replace(/\b(password|token|secret|authorization|api[_-]?key|private[_-]?key)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;&]+)/gi,'$1=[redacted]').replace(/\b(?:sk-[A-Za-z0-9_-]+|glpat-[A-Za-z0-9_-]+|perm:[A-Za-z0-9:._-]+)\b/g,'[redacted]');}
-export function pruneLogs(store:Store){store.db.prepare('DELETE FROM diagnostics WHERE at < ?').run(new Date(Date.now()-store.snapshot().config.retentionDays*86400000).toISOString());store.db.exec('DELETE FROM diagnostics WHERE seq NOT IN (SELECT seq FROM diagnostics ORDER BY seq DESC LIMIT 2000)');}
+const pruned=new WeakMap<Store,number>();
+/** Deletes log entries older than the retention period and keeps the newest 2,000. Runs at most once per minute unless `force` is set. */
+export function pruneLogs(store:Store,force=false){const last=pruned.get(store)??0;if(!force&&Date.now()-last<60000)return;pruned.set(store,Date.now());store.db.prepare('DELETE FROM diagnostics WHERE at < ?').run(new Date(Date.now()-store.snapshot().config.retentionDays*86400000).toISOString());store.db.exec('DELETE FROM diagnostics WHERE seq NOT IN (SELECT seq FROM diagnostics ORDER BY seq DESC LIMIT 2000)');}
 export function recordDiagnostic(store:Store,entry:Omit<Diagnostic,'id'|'at'>&Partial<Pick<Diagnostic,'id'|'at'>>,secrets?:string[]){
  if(!store.key)return;
  try{const clean=(s:string)=>{const v=redactDiagnostic(s,secrets??store.secretValues());return Buffer.byteLength(v)>captureLimit?truncatedText(v):v;};const value:Diagnostic={...entry,id:entry.id??randomUUID(),at:entry.at??new Date().toISOString(),operation:clean(entry.operation),request:entry.request?clean(entry.request):undefined,output:clean(entry.output)};
  store.db.prepare('INSERT OR IGNORE INTO diagnostics(id,at,tool,status,value) VALUES (?,?,?,?,?)').run(value.id,value.at,value.tool,value.status,store.encrypt(JSON.stringify(value),store.key));pruneLogs(store);}catch{/* Diagnostics must not change the result of an operation. */}
 }
 export function readLogs(store:Store,{tool,status,before,limit=50,query='',time,duration,from,to,zone}:{tool?:string;status?:string;before?:number;limit?:number;query?:string;time?:'hour'|'day'|'week';duration?:'fast'|'normal'|'slow';from?:string;to?:string;zone?:string}={}):LogPage{
- if(!store.key)throw new AppError(423,'Unlock the Vault to view logs.');pruneLogs(store);
+ if(!store.key)throw new AppError(423,'Unlock the Vault to view logs.');pruneLogs(store,true);
  const clauses:string[]=[],args:(string|number)[]=[];if(tool){clauses.push('tool=?');args.push(tool)}if(status){clauses.push('status=?');args.push(status)}
  if(time){clauses.push('at>=?');args.push(new Date(Date.now()-({hour:3600000,day:86400000,week:604800000}[time])).toISOString());}
  const where=clauses.length?' WHERE '+clauses.join(' AND '):'';limit=Math.max(1,Math.min(100,limit));
  const rows=store.db.prepare('SELECT seq,value FROM diagnostics'+where+' ORDER BY seq DESC').iterate(...args);
  const entries:Diagnostic[]=[];let total=0,next:number|undefined,last:number|undefined;
- for(const row of rows){const entry=JSON.parse(store.decrypt(String(row.value),store.key)) as Diagnostic;
+ for(const row of rows){const entry=JSON.parse(store.open(String(row.value))) as Diagnostic;
   if(!inRunWindow(entry.at,{page:'logs',from,to,zone}))continue;
   if(query&&!entry.operation.toLowerCase().includes(query.toLowerCase()))continue;
   if(duration==='fast'&&entry.durationMs>=100||duration==='normal'&&(entry.durationMs<100||entry.durationMs>=1000)||duration==='slow'&&entry.durationMs<1000)continue;
@@ -46,7 +48,9 @@ export function loggedFetch(store:Store,fetcher:typeof fetch=fetch):typeof fetch
   // Never capture OAuth exchanges.
   if(url.hostname==='auth.openai.com')return fetcher(input,init);
   const config=store.snapshot().config;
-  const tool=(['Model','YouTrack','GitLab','Alertmanager','Prometheus','Grafana','Slack'] as const).find(name=>{try{const base=new URL(config.connections[name].endpoint);return base.origin===url.origin&&url.pathname.startsWith(base.pathname.replace(/\/$/,''));}catch{return false;}});
+  const named=(['Model','YouTrack','GitLab','Alertmanager','Prometheus','Grafana','Slack'] as const).find(name=>{try{const base=new URL(config.connections[name].endpoint);return base.origin===url.origin&&url.pathname.startsWith(base.pathname.replace(/\/$/,''));}catch{return false;}});
+  const prometheus=config.prometheusSources.some(s=>{if(s.kind!=='url')return false;try{return new URL(s.endpoint).origin===url.origin;}catch{return false;}})||(url.hostname==='127.0.0.1'&&url.pathname.includes('/api/v1/'));
+  const tool=named??(prometheus?'Prometheus' as const:undefined);
   if(!tool||!store.key)return fetcher(input,init);
   const revision=store.snapshot().configRevision,credentialEpoch=store.credentialEpoch,epoch=store.vaultEpoch,secrets=store.secretValues(),start=Date.now();
   const path=url.pathname;const query=Object.fromEntries([...url.searchParams].map(([k,v])=>[k,sensitive.test(k)?'[redacted]':v]));

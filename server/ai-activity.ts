@@ -54,11 +54,18 @@ export function workflowState(session:SessionSummary|undefined,change:ChangeSumm
  if(session?.planVersion)return state('waiting','Plan approval',`Review plan v${session.planVersion}.`);
  return state('waiting','Investigation','Start an investigation to prepare a plan.');
 }
+const finishedSummaries=new Map<string,AIRunSummary>();
 export function aiOverview(store:Store,claude:Claude,now=Date.now()):AIOverview{
  if(!store.key)throw new AppError(423,'Unlock the Vault to view AI activity.');
  store.pruneInvestigations();
  const historyLimit=200;
- const runs=(store.db.prepare('SELECT id FROM investigations ORDER BY started DESC LIMIT ?').all(historyLimit) as {id:string}[]).map(({id})=>summarizeRun(claude.status(id),now));
+ const runs=(store.db.prepare('SELECT id,value FROM investigations ORDER BY started DESC LIMIT ?').all(historyLimit) as {id:string;value:string}[]).map(({id,value})=>{
+  // A finished run's summary changes only when the stored row is rewritten, which gives it a new encryption tag.
+  const tag=value.match(/"tag":"([^"]+)"/)?.[1],hit=tag?finishedSummaries.get(tag):undefined;if(hit)return {...hit};
+  const summary=summarizeRun(claude.status(id),now);
+  if(tag&&summary.state!=='running'){if(finishedSummaries.size>=1000)finishedSummaries.delete(finishedSummaries.keys().next().value!);finishedSummaries.set(tag,{...summary});}
+  return summary;
+ });
  const sessions=store.db.prepare(`SELECT connection,issue_id AS issueId,json_extract(value,'$.sourceKey') AS sourceKey,json_extract(value,'$.updatedAt') AS updatedAt,json_extract(value,'$.sourceChangedAt') AS sourceChangedAt,json_extract(value,'$.pendingRevision') AS pendingRevision,json_extract(value,'$.plans[#-1].version') AS planVersion,json_extract(value,'$.plans[#-1].at') AS planAt,json_extract(value,'$.approval.at') AS approval,json_extract(value,'$.notes[#-1].at') AS noteAt FROM work_sessions`).all() as SessionSummary[];
  // Load metadata only.
  const changes=store.db.prepare(`SELECT json_extract(value,'$.connection') AS connection,json_extract(value,'$.issueId') AS issueId,json_extract(value,'$.state') AS state,json_extract(value,'$.message') AS message,json_extract(value,'$.updatedAt') AS updatedAt,json_extract(value,'$.planVersion') AS planVersion,json_extract(value,'$.resolution.state') AS resolution,json_extract(value,'$.resolution.message') AS resolutionMessage,json_extract(value,'$.fixes[#-1].state') AS fix,json_extract(value,'$.fixes[#-1].message') AS fixMessage,json_extract(value,'$.tracking.state') AS trackingState,json_extract(value,'$.tracking.pipeline.status') AS pipeline,json_extract(value,'$.tracking.error') AS trackingError,json_extract(value,'$.tracking.checkedAt') AS checkedAt FROM changes ORDER BY updatedAt DESC`).all() as ChangeSummary[];

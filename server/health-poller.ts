@@ -7,7 +7,7 @@ import {connectionNames,type Config,type ConnectionName} from '../src/model.js';
 import {logTools} from '../src/diagnostics-model.js';
 import {Store,AppError} from './store.js';
 import {serviceBase} from './gitlab.js';
-import {serviceAuthHeaders} from './service-auth.js';
+import {serviceAuthHeaders,serverAuthHeaders} from './service-auth.js';
 import {probeToolboxContexts,toolboxFiles} from './toolbox.js';
 import {modelKey} from './model-api.js';
 import {claudeCliStatus} from './claude-cli.js';
@@ -58,6 +58,19 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
  if(name==='Model'&&config.modelAuth==='claude_cli'){
   const status=await claudeCliStatus(c.path,undefined,signal);return {ok:status.connected,detail:status.connected?'Local Claude CLI responds and is signed in. No generation or remote model request performed.':'Local Claude CLI is not signed in with a subscription.'};
  }
+ if(name==='Prometheus'){
+  const servers=config.prometheusSources.filter(s=>s.kind==='url');
+  if(!servers.length)return {ok:true,detail:'No Prometheus server reached by URL. Servers through Kubernetes are checked with Test.'};
+  for(const s of servers){
+   let response:Response;
+   try{response=await fetcher(new URL('api/v1/status/buildinfo',serviceBase(s.endpoint)),{method:'GET',headers:{Accept:'application/json',...serverAuthHeaders(store,s.id)},redirect:'manual',signal});}
+   catch(e){if(signal.aborted)throw e;return {ok:false,detail:`${s.name}: connection failed. Check the URL, VPN and TLS settings.`};}
+   if(!response.ok){void response.body?.cancel().catch(()=>{});return {ok:false,code:response.status,detail:`${s.name}: ${response.status===401||response.status===403?'authentication or access denied':`HTTP ${response.status}`}.`};}
+   let value:unknown;try{value=JSON.parse(await readResponse(response,signal,131072));}catch{value=undefined;}
+   if((value as {status?:unknown})?.status!=='success')return {ok:false,detail:`${s.name}: the endpoint is not a Prometheus API.`};
+  }
+  return {ok:true,detail:`${servers.length===1?servers[0].name+' responds':`${servers.length} Prometheus servers respond`} and accept${servers.length===1?'s':''} the configured authentication.`};
+ }
  const base=serviceBase(c.endpoint),headers:Record<string,string>={Accept:'application/json'};
  const optionalToken=()=>store.vaultStatus().credentials.includes(name)?store.readCredential(name):undefined;
  if(name==='Outline'&&store.vaultStatus().credentials.includes('Outline'))return await probeOutline(base,store.readCredential('Outline'),c.scope,fetcher,signal);
@@ -66,7 +79,6 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
   case 'YouTrack':path='api/users/me?fields=id';headers.Authorization='Bearer '+store.readCredential(name);check=v=>typeof v.id==='string';detail='YouTrack API responds and accepts the saved token.';break;
   case 'GitLab':{path='api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=v=>Array.isArray(v);detail='GitLab project API responds and accepts the saved token.';break;}
   case 'Alertmanager':path='api/v2/status';check=v=>typeof v?.versionInfo==='object';detail='Alertmanager API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
-  case 'Prometheus':path='api/v1/status/buildinfo';check=v=>v?.status==='success';detail='Prometheus API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Grafana':path='api/user';check=v=>typeof v?.login==='string';detail='Grafana API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Outline':path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline responds. No token saved, so only availability is checked.';break;
   case 'Slack':path=base.pathname.replace(/\/$/,'').endsWith('/api')?'auth.test':'api/auth.test';method='POST';headers.Authorization='Bearer '+store.readCredential(name);check=v=>v?.ok===true;detail='Slack API accepts the saved token. Channel permissions are checked when a request is opened.';break;

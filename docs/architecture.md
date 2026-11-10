@@ -16,7 +16,7 @@ The model reads with tools and returns a plan. Writes to GitLab, YouTrack and Sl
 - `run_command` runs in the command sandbox, which has no credentials.
 - `repo_checkout` clones a GitLab repository with its history in the sandbox, through a read-only Git proxy in Support that adds the Vault token. The proxy refuses pushes, and its URLs stop working when the run ends. Without `SUPPORT_RELAY_BIND`, Support uploads an archive without history instead.
 - `propose_change` saves the edited files as a proposal. A branch and merge request are created from a proposal only after plan approval and diff review.
-- Prometheus tools query any configured source: the direct server, Grafana datasources, or a per-cluster server through a Toolbox tunnel. See [Connections](connections.md#prometheus-sources).
+- Prometheus tools query any configured server, reached by URL or through a Toolbox tunnel, and any Grafana Prometheus datasource. See [Connections](connections.md#prometheus-servers).
 - **Settings → Model → Agent instructions** is added to the system prompt after fixed rules: untrusted tool output, no writes, no secrets, and the plan format.
 - With a Claude API key, the agent can also use the provider's web search and fetch tools.
 - The engineer can message a running investigation. The agent reads each message before its next step. `ask_engineer` questions do not pause the run. Unanswered questions are listed in the plan.

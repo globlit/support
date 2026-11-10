@@ -1,3 +1,4 @@
+import {cachedList,rememberList} from './list-cache';
 import {ErrorNotice} from './ErrorNotice';
 import {workflowStep} from './workflow-step';
 import {RecoveryState,vaultRecovery} from './RecoveryState';
@@ -18,7 +19,7 @@ const kinds={investigation:'Investigation',changes:'Change preparation',diagnosi
 function since(at:string,now:number){const s=Math.max(0,Math.floor((now-Date.parse(at))/1000));return s<60?`${s}s`:s<3600?`${Math.floor(s/60)}m`:`${Math.floor(s/3600)}h`}
 function pretty(text?:string){try{return JSON.stringify(JSON.parse(text??''),null,2)}catch{return text??'Not recorded'}}
 export function AIOverview({data,openTicket,openAlert}:{data:Snapshot;openTicket:(target:{id:string;connection:string;step?:string})=>void;openAlert:(id:string,step?:string)=>void}){const api=useWorkspaceApi();const {navigate,readRoute}=useWorkspaceNavigation();
- const [overview,setOverview]=useState<Overview|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[filter,setFilter]=useRouteChoice('step',['all','running','waiting','blocked','stopped','completed','finished','repeating','resolved','dropped'],'all'),[source,setSource]=useRouteChoice('tool',['all','youtrack','alert','slack'],'all'),[search,setSearch]=useSavedFilter<string>('ai.search',''),[view,setView]=useRouteChoice('section',['workflows','runs'] as const,'workflows');
+ const [overview,setOverview]=useState<Overview|null>(()=>data.vault.unlocked?cachedList<Overview>('ai')??null:null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[filter,setFilter]=useRouteChoice('step',['all','running','waiting','blocked','stopped','completed','finished','repeating','resolved','dropped'],'all'),[source,setSource]=useRouteChoice('tool',['all','youtrack','alert','slack'],'all'),[search,setSearch]=useSavedFilter<string>('ai.search',''),[view,setView]=useRouteChoice('section',['workflows','runs'] as const,'workflows');
  const [titles,setTitles]=useState<Record<string,{key:string;title:string}>>({}),[selected,setSelected]=useState<string|null>(null),[run,setRun]=useState<AnalysisRun|null>(null),[runError,setRunError]=useState('');
  const [checked,setChecked]=useState<{id:string;signature?:string}[]>([]),[applying,setApplying]=useState(false);
  const route=readRoute();
@@ -29,7 +30,7 @@ export function AIOverview({data,openTicket,openAlert}:{data:Snapshot;openTicket
   if(!data.vault.unlocked){setOverview(null);setRun(null);setTitles({});setError('');setBusy(false);refreshRef.current=()=>{};return}
   async function refresh(){
    if(loading.current)return;loading.current=true;setBusy(true);
-   try{const next=await api<Overview>('/ai/activity');if(alive){setOverview(next);setError('')}}catch(e){if(alive){setError((e as Error).message);if((e as Error).message.includes('Unlock')){setOverview(null);setRun(null);setTitles({})}}}finally{if(alive){loading.current=false;setBusy(false)}}
+   try{const next=await api<Overview>('/ai/activity');rememberList('ai',next);if(alive){setOverview(next);setError('')}}catch(e){if(alive){setError((e as Error).message);if((e as Error).message.includes('Unlock')){setOverview(null);setRun(null);setTitles({})}}}finally{if(alive){loading.current=false;setBusy(false)}}
    if(data.config.connections.YouTrack.enabled&&Date.now()-titleRead.current>60000){titleRead.current=Date.now();try{const page=await api<{issues:SourceIssue[]}>('/youtrack/issues?offset=0');if(alive)setTitles(Object.fromEntries(page.issues.map(i=>[i.connection+':'+i.id,{key:i.key,title:i.title}])))}catch{/* Activity remains available when the source cannot be read. */}}
   }
   refreshRef.current=()=>void refresh();void refresh();const tick=()=>{if(document.visibilityState==='visible')void refresh()};const timer=setInterval(tick,5000);document.addEventListener('visibilitychange',tick);

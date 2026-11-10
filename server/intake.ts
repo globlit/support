@@ -27,7 +27,7 @@ export function assertAgentWork(store:Store,issue:Pick<SourceIssue,'connection'|
 export function rules(store:Store){return store.get<IgnoreRule[]>('ignoreRules')??[];}
 export function matchedRules(store:Store,source:'alert'|'slack',kind:string,labels:Record<string,string>){const endpoint=store.snapshot().config.connections[source==='alert'?'Alertmanager':'Slack'].endpoint.replace(/\/+$/,'');return rules(store).filter(r=>ruleMatches(r,source,endpoint,kind,labels));}
 export function isIgnored(store:Store,issue:Pick<SourceIssue,'connection'|'id'>){
- const kind=sourceKind(issue.connection);if(kind==='alert'){const c=store.alertCases().find(c=>c.id===issue.id);return !!c?.members.length&&c.members.every(m=>matchedRules(store,'alert',m.labels.alertname??c.title,m.labels).length>0);}
+ const kind=sourceKind(issue.connection);if(kind==='alert'){let c:AlertCase|undefined;try{c=store.alert(issue.id);}catch{c=undefined;}return !!c?.members.length&&c.members.every(m=>matchedRules(store,'alert',m.labels.alertname??c.title,m.labels).length>0);}
  if(kind==='slack'){const c=store.get<AlertCase>('slack:'+issue.id);return !!c&&matchedRules(store,'slack',c.threadTs!,{channel:c.channel!}).length>0;}return false;
 }
 export function setHandling(store:Store,issue:SourceIssue,input:z.infer<typeof handlingInput>){

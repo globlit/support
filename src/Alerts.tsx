@@ -1,3 +1,4 @@
+import {cachedList,rememberList} from './list-cache';
 import {SafeLink} from './SafeLink';
 import {RecoveryState,vaultRecovery} from './RecoveryState';
 import {IncomingWorkspace} from './IncomingWorkspace';
@@ -31,12 +32,12 @@ export function Alerts({data,openTicket,initialAlert}:{initialAlert?:string;data
  const filterScope='alerts:'+data.config.connections.Alertmanager.endpoint+':'+data.config.alerting.groupBy;
  const [titleFilter,setTitleFilter]=useSavedFilter<string>(filterScope+'.title',''),[instances,setInstances]=useSavedFilter<string[]>(filterScope+'.instances',[]),[links,setLinks]=useSavedFilter<string[]>(filterScope+'.links',[]);
  const ticketLabel=(c:AlertQueue['cases'][number])=>c.ticket?.key??(c.ticketCreation?.state==='pending'?'Checking creation':c.ticketCreation?.state==='draft'?'Draft to review':'Not linked');
- const [queue,setQueue]=useState<AlertQueue|null>(null),[detail,setDetail]=useState<AlertDetail|null>(null);
+ const [queue,setQueue]=useState<AlertQueue|null>(()=>data.vault.unlocked?cachedList<AlertQueue>('alerts:'+data.configRevision)??null:null),[detail,setDetail]=useState<AlertDetail|null>(null);
  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[search,setSearch]=useSavedFilter<string>(filterScope+'.search',''),[severity,setSeverity]=useSavedFilter<string>(filterScope+'.severity','all'),[state,setState]=useSavedFilter<string>(filterScope+'.state','all'),[view,setView]=useRouteChoice('section',['list','board','rules'],'list');
  useEffect(()=>{const sync=()=>{if(!readRoute().issue)setDetail(null)};window.addEventListener('support:navigate',sync);window.addEventListener('popstate',sync);return()=>{window.removeEventListener('support:navigate',sync);window.removeEventListener('popstate',sync)}},[]);
  const seq=useRef(0);
- async function refreshQueue(){setQueue(await api<AlertQueue>('/alerts'));}
- useEffect(()=>{setError('');setDetail(null);if(!data.vault.unlocked){setQueue(null);return;}let stopped=false;async function read(){try{const q=await api<AlertQueue>('/alerts');if(!stopped){setQueue(q);setError('');}}catch(e){if(!stopped)setError((e as Error).message);}}void read();const timer=setInterval(()=>void read(),5000);setDetail(null);return()=>{stopped=true;clearInterval(timer);seq.current++;};},[data.configRevision,data.vault.unlocked]);
+ async function refreshQueue(){const q=await api<AlertQueue>('/alerts');rememberList('alerts:'+data.configRevision,q);setQueue(q);}
+ useEffect(()=>{setError('');setDetail(null);if(!data.vault.unlocked){setQueue(null);return;}let stopped=false;setQueue(q=>q??cachedList<AlertQueue>('alerts:'+data.configRevision)??null);async function read(){try{const q=await api<AlertQueue>('/alerts');rememberList('alerts:'+data.configRevision,q);if(!stopped){setQueue(q);setError('');}}catch(e){if(!stopped)setError((e as Error).message);}}void read();const timer=setInterval(()=>void read(),5000);setDetail(null);return()=>{stopped=true;clearInterval(timer);seq.current++;};},[data.configRevision,data.vault.unlocked]);
  async function run(fn:()=>Promise<void>){setBusy(true);setError('');try{await fn();await refreshQueue();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
  async function open(id:string){const n=++seq.current;const d=await api<AlertDetail>('/alerts/'+id);if(n===seq.current){setDetail(d);const route=readRoute();if(route.issue!==id)navigate({page:'alerts',issue:id});}}
 

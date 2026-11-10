@@ -8,7 +8,8 @@ export function tokenUsage(value:unknown,provider:'openai'|'anthropic'):TokenUsa
  const write=provider==='openai'?count((v.input_tokens_details as Record<string,unknown>|undefined)?.cache_write_tokens):count(v.cache_creation_input_tokens);
  const totalInput=provider==='anthropic'?input+(read??0)+(write??0):input;
  if(!Number.isSafeInteger(totalInput))return;
- return {input:totalInput,output,cacheRead:read,cacheWrite:write};
+ const searches=provider==='anthropic'?count((v.server_tool_use as Record<string,unknown>|undefined)?.web_search_requests):undefined;
+ return {input:totalInput,output,cacheRead:read,cacheWrite:write,...(searches?{webSearches:searches}:{})};
 }
 export function rateLimits(headers:Headers,provider:'openai'|'anthropic'):RateLimit[]{
  const names=provider==='openai'?['requests','tokens','project-tokens']:['requests','input-tokens','output-tokens'];

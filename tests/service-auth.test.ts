@@ -58,7 +58,7 @@ test('Basic auth secrets are redacted and removal clears the credential',()=>{
 test('Alertmanager polling and API health checks send the saved Basic auth header',async()=>{
  const f=fixture();try{
   f.save({name:'Alertmanager',basic:{username:'support',password:'proxy-password-123'}});
-  f.save({name:'Prometheus',basic:{username:'metrics',password:'other-password'}});
+  f.save({name:'Prometheus/legacy',basic:{username:'metrics',password:'other-password'}});
   const seen:Record<string,string|undefined>={};
   const fetcher=(async(url,options)=>{const u=new URL(String(url));seen[u.hostname+u.pathname]=(options?.headers as Record<string,string>).Authorization;return u.pathname.endsWith('/alerts')?Response.json([]):u.pathname==='/api/v2/status'?Response.json({versionInfo:{}}):u.pathname==='/api/v1/status/buildinfo'?Response.json({status:'success'}):new Response('OK');}) as typeof fetch;
   await new Alertmanager(f.store,fetcher).poll();

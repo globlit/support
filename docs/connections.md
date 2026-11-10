@@ -8,7 +8,8 @@ Unlock the Vault, then open **Settings → Connections → `<connection>`**. The
 | GitLab | Fine-grained or legacy access token. |
 | Slack | Bot token (`xoxb-`). |
 | Outline | API key. |
-| Alertmanager, Prometheus | None, Basic auth or bearer token. |
+| Alertmanager | None, Basic auth or bearer token. |
+| Prometheus | Per server: none, Basic auth or bearer token. See [Prometheus servers](#prometheus-servers). |
 | Grafana | Username and password, or service account token. Viewer role with query access to the Prometheus datasources. |
 | Toolbox | kubeconfig. |
 | Model | API key, Claude Code login or ChatGPT sign-in, in **Settings → Model**. |
@@ -51,14 +52,17 @@ Generation lists each cluster's namespaces and allows every namespace that match
 
 Generate again after namespaces are created.
 
-## Prometheus sources
+## Prometheus servers
 
-The agent can query several Prometheus servers. Each one is a source:
+**Settings → Connections → Prometheus** lists the Prometheus servers the agent can query. **Allow metric queries** enables or disables all of them.
 
-| Source | Configured in |
-| --- | --- |
-| `prometheus` | The Service URL of the Prometheus connection. |
-| `grafana/<datasource>` | Each Prometheus datasource of the Grafana connection. Requests go through the Grafana datasource proxy. |
-| `<name>` | **Sources through Kubernetes** in the Prometheus connection. Support opens a Toolbox tunnel to the service or StatefulSet on first use. Requires Toolbox port forwarding. |
+| Kind | Use for | Credential |
+| --- | --- | --- |
+| URL | A server exposed through an ingress. | None, Basic auth or bearer token, per server. |
+| Through Kubernetes | A server that is not exposed. Support opens a Toolbox tunnel to its service or StatefulSet on first use. Requires Toolbox port forwarding. | The Toolbox kubeconfig. |
 
-Example for a federation Prometheus deployed by kube-prometheus-stack: context `monitoring`, namespace `monitoring-federation`, target `service/prometheus-operated`, port `9090`. Click **Test** to open a tunnel and read the Prometheus build information.
+Each Prometheus datasource of the Grafana connection is also available, as `grafana/<datasource>`.
+
+Example for a federation Prometheus deployed by kube-prometheus-stack, through Kubernetes: context `monitoring`, namespace `monitoring-federation`, target `service/prometheus-operated`, port `9090`. Save the settings, then click **Test** to read the Prometheus build information.
+
+The Prometheus URL of earlier versions becomes a URL server named `prometheus`, with its saved credential.

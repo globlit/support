@@ -40,7 +40,7 @@ import { AlertTickets,alertDraftInput } from './alert-tickets.js';
 import { Alertmanager } from './alertmanager.js';
 import { Claude } from './claude.js';
 import { YouTrack } from './youtrack.js';
-import { connectionNames,configSchema ,toolboxSettingsSchema,prometheusSourceSchema} from '../src/model.js';
+import { connectionNames,configSchema ,toolboxSettingsSchema} from '../src/model.js';
 import {credentialInput,storedCredential} from './service-auth.js';
 process.umask(0o077);
 const runtime=deployment(),{port}=runtime,origin=runtime.publicOrigin;
@@ -237,7 +237,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  const historyMatch=path.match(/^\/api\/youtrack\/issues\/([a-zA-Z0-9_-]+)\/investigations$/);if(historyMatch&&req.method==='GET')return send(res,await claude.history(historyMatch[1]));
  const analyzeMatch=path.match(/^\/api\/youtrack\/issues\/([a-zA-Z0-9_-]+)\/analyze$/);
  if(analyzeMatch&&req.method==='POST'){const input=z.object({revision:z.number().int(),sourceUpdated:z.number()}).strict().parse(await body(req));return send(res,await claude.start(analyzeMatch[1],input),202);}
- if(path==='/api/youtrack/issues'&&req.method==='GET'){const offset=z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('offset')??0);return send(res,await youtrack.list(offset));}
+ if(path==='/api/youtrack/issues'&&req.method==='GET'){const offset=z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('offset')??0);return send(res,await youtrack.list(offset,true));}
  const ytMatch=path.match(/^\/api\/youtrack\/issues\/([a-zA-Z0-9_-]+)(\/action)?$/);
  if(ytMatch&&req.method==='GET'&&!ytMatch[2])return send(res,await youtrack.work(ytMatch[1]));
  if(ytMatch&&req.method==='POST'&&ytMatch[2]){const input=z.object({action:z.enum(['note','draft','plan','approve','revise','delete-note']),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional(),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional()}).strict().parse(await body(req));return send(res,await youtrack.action(ytMatch[1],input));}
@@ -251,13 +251,15 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(path==='/api/toolbox/generate'&&req.method==='POST'){const v=z.object({kubeconfig:z.string().min(1).max(maxKubeconfigBytes),contexts:z.array(z.string().min(1).max(253)).min(1).max(100),settings:toolboxSettingsSchema}).strict().parse(await body(req,kubeconfigBodyLimit));return send(res,await generateToolboxSetup(v.kubeconfig,v.contexts,v.settings));}
  if(path==='/api/prometheus/sources'&&req.method==='GET'){const sources=await PrometheusSources.create(store,store.snapshot().config,transport);return send(res,sources.describe());}
  if(path==='/api/prometheus/test'&&req.method==='POST'){
-  const source=prometheusSourceSchema.parse((z.object({source:z.unknown()}).strict().parse(await body(req))).source),config=store.snapshot().config;
-  const sources=await PrometheusSources.create(store,{...config,connections:{...config.connections,Grafana:{...config.connections.Grafana,enabled:false}},prometheusSources:[source]},transport);
+  const {id}=z.object({id:z.string().max(16)}).strict().parse(await body(req)),config=store.snapshot().config,server=config.prometheusSources.find(s=>s.id===id);
+  if(!server)throw new AppError(404,'Save the server first, then test it.');
+  const sources=await PrometheusSources.create(store,{...config,connections:{...config.connections,Prometheus:{...config.connections.Prometheus,enabled:true},Grafana:{...config.connections.Grafana,enabled:false}},prometheusSources:[server]},transport);
   try{
-   if(!sources.names().includes(source.name))return send(res,{ok:false,detail:'Enable Toolbox and its port forwarding in Settings → Connections → Toolbox, then save.'});
-   const v=await sources.buildInfo(source.name,AbortSignal.timeout(30000)) as {data?:{version?:string}};
-   return send(res,{ok:true,detail:`Prometheus ${v.data?.version??''} responds through a tunnel to ${source.target} in ${source.context}/${source.namespace}.`.replace('  ',' ')});
-  }catch(e){return send(res,{ok:false,detail:e instanceof AppError?e.message:'The tunnel or the query failed.'});}
+   if(!sources.names().includes(server.name))return send(res,{ok:false,detail:'Enable Toolbox and its port forwarding in Settings → Connections → Toolbox, then save.'});
+   const v=await sources.buildInfo(server.name,AbortSignal.timeout(30000)) as {data?:{version?:string}};
+   const version=v.data?.version?`Prometheus ${v.data.version}`:'Prometheus';
+   return send(res,{ok:true,detail:server.kind==='url'?`${version} responds at ${server.endpoint}.`:`${version} responds through a tunnel to ${server.target} in ${server.context}/${server.namespace}.`});
+  }catch(e){return send(res,{ok:false,detail:e instanceof AppError?e.message:'The query failed.'});}
   finally{sources.close();}
  }
  if(path==='/api/toolbox/status'&&req.method==='GET'){const files=toolboxFiles(store),c=store.snapshot().config;if(!files)return send(res,{source:c.connections.Toolbox.path?'path':'none'});if(files.v===1)return send(res,{source:'custom'});return send(res,{source:'generated',contexts:files.contexts,generatedAt:files.generatedAt,stale:setupHash(c.toolbox,files.contexts.map(x=>x.name))!==files.settingsHash});}

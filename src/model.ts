@@ -23,16 +23,26 @@ export const toolboxSettingsSchema=z.object({
  redactionPatterns:z.array(z.string().min(1).max(500)).max(100),
 }).strict();
 export const toolboxDefaults:z.infer<typeof toolboxSettingsSchema>={excludedNamespaces:['kube-*','*gitlab*','*linkerd*'],allowConfigMaps:false,allowClusterScoped:false,allowPortForward:false,timeoutSeconds:30,maxOutputMiB:1,portForwardMaxSeconds:300,redactionLiterals:[],redactionPatterns:[]};
+const serverName=z.string().trim().min(1).max(60).regex(/^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$/,'Use lower-case letters, digits, "-", "_" or ".".').refine(v=>!v.startsWith('grafana'),'Names starting with grafana are reserved.');
+const serverId=z.string().regex(/^[a-z0-9]{1,16}$/);
+/** Prometheus server exposed over HTTP(S), such as through an ingress. Its credential is saved in the Vault as Prometheus/<id>. */
+export const prometheusUrlSchema=z.object({id:serverId,name:serverName,kind:z.literal('url'),endpoint:endpoint.refine(v=>!!v,'Enter the Prometheus URL.')}).strict();
 /** Prometheus server reached through a Toolbox tunnel that Support opens on first use. */
-export const prometheusSourceSchema=z.object({
- name:z.string().trim().min(1).max(60).regex(/^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$/,'Use lower-case letters, digits, "-", "_" or ".".').refine(v=>v!=='prometheus'&&!v.startsWith('grafana'),'This name is reserved.'),
+export const prometheusTunnelSchema=z.object({
+ id:serverId,name:serverName,kind:z.literal('tunnel'),
  context:z.string().trim().min(1).max(253),
  namespace:z.string().trim().min(1).max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/,'Use a namespace name.'),
  target:z.string().trim().max(253).regex(/^((pod|service|svc|deployment|statefulset)\/)?[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/,'Use service/NAME, statefulset/NAME, deployment/NAME or a pod name.'),
  port:z.number().int().min(1).max(65535),
  pathPrefix:z.string().trim().max(200).regex(/^(\/[A-Za-z0-9._~-]+)*\/?$/,'Use a path such as /prometheus, or leave empty.').default(''),
 }).strict();
+export const prometheusSourceSchema=z.discriminatedUnion('kind',[prometheusUrlSchema,prometheusTunnelSchema]);
 export type PrometheusSource=z.infer<typeof prometheusSourceSchema>;
+/** Vault credential name of a Prometheus server. */
+export const prometheusCredential=(id:string)=>'Prometheus/'+id;
+/** Returns a short ID for a new Prometheus server. */
+export const newServerId=()=>Math.random().toString(36).slice(2,10).padEnd(8,'0');
+const nameId=(name:string)=>{let h=5381;for(const c of name)h=((h*33)^c.charCodeAt(0))>>>0;return 'm'+h.toString(36);};
 /** Default agent instructions shown in Settings → Model. The engineer can edit them. */
 export const defaultAgentInstructions=[
  'Combine every useful source before concluding: Kubernetes resources, events and pod logs through Toolbox, metrics from every Prometheus source, alerts, GitLab pipelines and code, YouTrack tickets, Outline documents and vendor documentation on the web.',
@@ -45,7 +55,7 @@ export const defaultAgentInstructions=[
  'Use the latest ticket priority, description and comments as the source of truth. Previous plans and notes may be outdated. Explain material changes to the previous plan.',
  'In the plan, state what was checked, what is uncertain, exact targets, proposed steps, validation and rollback. Cite the resources, queries, files and URLs actually read. Name unavailable integrations as unchecked.',
 ].join('\n');
-const configObject=z.object({modelAuth:z.enum(['api_key','chatgpt','claude_cli']).default('api_key'),modelProvider:z.enum(['anthropic','openai']).default('anthropic'),alerting:alertingSchema.default(alertingDefaults),engineer:z.string().trim().min(1).max(80),timezone:z.string().refine(v=>{try{new Intl.DateTimeFormat('en',{timeZone:v});return true;}catch{return false;}},'Unknown timezone'),theme:z.enum(['auto','light','dark']),hoursStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),hoursEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),connections:z.record(z.enum(connectionNames),connectionSchema),toolbox:toolboxSettingsSchema.default(toolboxDefaults),retentionDays:z.number().int().min(1).max(30),maxRuns:z.number().int().min(1).max(4).default(2),agentCommands:z.boolean().default(true),parallelReview:z.boolean().default(true),agentWebSearch:z.boolean().default(true),agentLimits:z.object({maxTurns:z.number().int().min(5).max(100),maxToolCalls:z.number().int().min(10).max(200),runMinutes:z.number().int().min(5).max(120),commandSeconds:z.number().int().min(5).max(600)}).default({maxTurns:40,maxToolCalls:80,runMinutes:30,commandSeconds:120}),prometheusSources:z.array(prometheusSourceSchema).max(30).default([]),agentInstructions:z.string().max(16000).default(defaultAgentInstructions),autoInvestigate:z.boolean().default(true),notifications:z.object({reviews:z.boolean(),blocked:z.boolean(),reopened:z.boolean(),completion:z.boolean(),privatePreview:z.boolean()}).strict(),onboardingStep:z.number().int().min(0).max(6),onboardingComplete:z.boolean()}).strict();
+const configObject=z.object({modelAuth:z.enum(['api_key','chatgpt','claude_cli']).default('api_key'),modelProvider:z.enum(['anthropic','openai']).default('anthropic'),alerting:alertingSchema.default(alertingDefaults),engineer:z.string().trim().min(1).max(80),timezone:z.string().refine(v=>{try{new Intl.DateTimeFormat('en',{timeZone:v});return true;}catch{return false;}},'Unknown timezone'),theme:z.enum(['auto','light','dark']),hoursStart:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),hoursEnd:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),connections:z.record(z.enum(connectionNames),connectionSchema),toolbox:toolboxSettingsSchema.default(toolboxDefaults),retentionDays:z.number().int().min(1).max(30),maxRuns:z.number().int().min(1).max(4).default(2),agentCommands:z.boolean().default(true),parallelReview:z.boolean().default(true),agentWebSearch:z.boolean().default(true),agentLimits:z.object({maxTurns:z.number().int().min(5).max(100),maxToolCalls:z.number().int().min(10).max(200),runMinutes:z.number().int().min(5).max(120),commandSeconds:z.number().int().min(5).max(600)}).default({maxTurns:40,maxToolCalls:80,runMinutes:30,commandSeconds:120}),prometheusSources:z.array(prometheusSourceSchema).max(30).default([]).refine(v=>new Set(v.map(s=>s.name)).size===v.length,'Each Prometheus server needs a unique name.').refine(v=>new Set(v.map(s=>s.id)).size===v.length,'Duplicate Prometheus server ID.'),agentInstructions:z.string().max(16000).default(defaultAgentInstructions),autoInvestigate:z.boolean().default(true),notifications:z.object({reviews:z.boolean(),blocked:z.boolean(),reopened:z.boolean(),completion:z.boolean(),privatePreview:z.boolean()}).strict(),onboardingStep:z.number().int().min(0).max(6),onboardingComplete:z.boolean()}).strict();
 /** Settings removed in earlier versions. Stored configurations and imports that still contain them load without them. */
 const removedSettings=['repositoryRoot','repositories'];
 /** Converts settings from earlier versions: drops removed settings, adds connections added later, and moves the comma-separated excludedNamespaces string into toolbox.excludedNamespaces. */
@@ -53,6 +63,10 @@ function migrateSettings(value:unknown){
  if(!value||typeof value!=='object'||Array.isArray(value))return value;
  const {excludedNamespaces,...rest}=Object.fromEntries(Object.entries(value).filter(([key])=>!removedSettings.includes(key))) as Record<string,unknown>;
  if(rest.connections&&typeof rest.connections==='object'){const c={...rest.connections as Record<string,unknown>};for(const n of connectionNames)c[n]??={endpoint:'',scope:'',path:'',enabled:false};rest.connections=c;}
+ // Prometheus servers: earlier tunnel sources had no kind and no ID; the single Prometheus URL becomes a server named "prometheus".
+ if(Array.isArray(rest.prometheusSources))rest.prometheusSources=rest.prometheusSources.map(v=>v&&typeof v==='object'&&!('kind' in v)?{id:nameId(String((v as {name?:unknown}).name??'')),kind:'tunnel',...v}:v);
+ const prom=(rest.connections as Record<string,{endpoint?:string}>|undefined)?.Prometheus;
+ if(prom?.endpoint){const list=Array.isArray(rest.prometheusSources)?rest.prometheusSources as {id?:string;name?:string}[]:[];if(!list.some(v=>v.id==='legacy'))rest.prometheusSources=[{id:'legacy',name:list.some(v=>v.name==='prometheus')?'prometheus-main':'prometheus',kind:'url',endpoint:prom.endpoint},...list];rest.connections={...rest.connections as object,Prometheus:{...prom,endpoint:''}};}
  if(typeof excludedNamespaces==='string'&&rest.toolbox===undefined)rest.toolbox={...toolboxDefaults,excludedNamespaces:excludedNamespaces.split(',').map(v=>v.trim()).filter(Boolean).slice(0,100)};
  return rest;
 }
@@ -64,7 +78,7 @@ export type Status=typeof stages[number];
 export type Step={id:string;title:string;body:string};
 export type Plan={version:number;steps:Step[];scope:string;createdAt:string;change:string};
 export type Ticket={id:string;title:string;source:string;severity:string;environment:string;target:string;status:Status;next:string;needsYou:boolean;reopened:boolean;sample:true;revision:number;plans:Plan[];notes:{text:string;stepId?:string;version:number;at:string}[];events:{at:string;title:string;detail:string}[];approval:null|{version:number;configRevision:number;hash:string;actor:string;actorId?:string;workspaceId?:string;at:string};draft:string;updatedAt:string};
-export type Snapshot={config:Config;configRevision:number;tickets:Ticket[];vault:{initialized:boolean;unlocked:boolean;credentials:string[];authSchemes?:Partial<Record<'Alertmanager'|'Prometheus'|'Grafana','bearer'|'basic'>>};runtime:{mode:string;platform:string;liveExecution:false}};
+export type Snapshot={config:Config;configRevision:number;tickets:Ticket[];vault:{initialized:boolean;unlocked:boolean;credentials:string[];authSchemes?:Record<string,'bearer'|'basic'>};runtime:{mode:string;platform:string;liveExecution:false}};
 export type SourceIssue={comments?:{id:string;text:string;updated:number}[];sourceFingerprint?:string;id:string;key:string;title:string;description:string;updated:number;resolved:boolean;status:string;severity:string;assignee:string;project:string;fields:Record<string,string>;url:string;connection:string};
 /** Code change proposed by the agent from a sandbox checkout. Becomes a branch only after plan approval. */
 export type ChangeProposal={id:string;project:string;commit:string;title:string;summary:string;at:string;files:{path:string;before:string|null;after:string|null}[]};
