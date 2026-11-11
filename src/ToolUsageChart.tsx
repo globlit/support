@@ -9,12 +9,12 @@ import type {ToolCount} from './tool-usage';
 export function ToolUsageChart({counts,title='Tool calls',compact=false}:{counts:ToolCount[];title?:string;compact?:boolean}){
  const [hover,setHover]=useState<string|null>(null);
  const total=counts.reduce((n,c)=>n+c.total,0);
- if(!total)return <section className={'chart-panel tool-chart'+(compact?' compact':'')}><header><h2>{title}</h2></header><p className="small muted">No tool calls recorded.</p></section>;
+ if(!total)return <section className={'chart-panel tool-usage-chart'+(compact?' compact':'')}><header><h2>{title}</h2></header><p className="small muted">No tool calls recorded.</p></section>;
  const top=counts.slice(0,10),rest=counts.slice(10);
  const rows=rest.length?[...top,{label:`other (${rest.length})`,total:rest.reduce((n,c)=>n+c.total,0),failed:rest.reduce((n,c)=>n+c.failed,0)}]:top;
  const max=Math.max(...rows.map(r=>r.total));
  const failed=counts.reduce((n,c)=>n+c.failed,0);
- return <section className={'chart-panel tool-chart'+(compact?' compact':'')}>
+ return <section className={'chart-panel tool-usage-chart'+(compact?' compact':'')}>
   <header><h2>{title}</h2><span className="small muted">{total.toLocaleString()} calls{failed?` · ${failed} failed`:''}</span></header>
   <ul className="tool-bars" aria-label={`${title}, by tool`}>
    {rows.map(r=>{const share=Math.round(r.total/total*100),detail=`${r.label}: ${r.total} call${r.total===1?'':'s'}${r.failed?`, ${r.failed} failed`:''}, ${share}% of calls`;
