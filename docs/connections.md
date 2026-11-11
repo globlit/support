@@ -48,7 +48,7 @@ With a legacy token, use the `api` scope. `read_api` allows investigations only.
 | Scope | Needed for |
 | --- | --- |
 | `documents:read` | Searching and reading documents. |
-| `collections:read` | Listing collections, and finding the collection by name or URL. Not needed when **Allowed collection** is the collection ID. |
+| `collections:read` | Listing collections, and finding the collection by name or URL. |
 
 Leave **Allowed collection** empty to let the agent search every collection the API key can read.
 

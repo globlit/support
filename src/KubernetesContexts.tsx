@@ -1,6 +1,7 @@
 import {useRef,useState} from 'react';
 import {api} from './api';
 import {Field} from './Field';
+import {Switch} from './Toggle';
 import {openVaultSettings} from './navigation';
 import {useFeedback} from './Toasts';
 import {kubernetesContextSchema,kubernetesCredential,type KubernetesContext,type Snapshot} from './model';
@@ -47,6 +48,8 @@ export function KubernetesContexts({contexts,onChange,data,busy,pending,setPendi
  }
  const remove=(name:string)=>{onChange(contexts.filter(c=>c.name!==name));setPending(credential(name),undefined);};
  const toggle=(name:string,enabled:boolean)=>onChange(contexts.map(c=>c.name===name?{...c,enabled}:c));
+ const allEnabled=contexts.length>0&&contexts.every(c=>c.enabled);
+ const toggleAll=(enabled:boolean)=>onChange(contexts.map(c=>({...c,enabled})));
  async function test(name:string){
   setChecks(c=>({...c,[name]:'running'}));
   try{const r=await api<Check>('/kubernetes/test','POST',{name});setChecks(c=>({...c,[name]:r}));}
@@ -62,10 +65,11 @@ export function KubernetesContexts({contexts,onChange,data,busy,pending,setPendi
   {status&&<p className="small muted" role="status">{status}</p>}
   {skipped.length>0&&<details className="kube-skipped"><summary className="small">{skipped.length} context{skipped.length===1?'':'s'} not imported</summary><ul>{skipped.map(c=><li key={c.name} className="small"><code>{c.name}</code> <span className="muted">{c.unsupported}</span></li>)}</ul></details>}
   {form&&!form.edit&&<ContextForm taken={contexts.map(c=>c.name)} onCancel={()=>setForm(null)} onSubmit={e=>{upsert([e],true);setForm(null);}}/>}
+  {contexts.length>1&&<div className="kube-all"><Switch label="Let the agent read all contexts" checked={allEnabled} onChange={toggleAll}/><span className="small">{allEnabled?'All contexts enabled':`${contexts.filter(c=>c.enabled).length} of ${contexts.length} enabled`}. Click Save settings to apply.</span></div>}
   {contexts.length?<ul className="kube-list">{contexts.map(c=>{
    const check=checks[c.name],unchanged=JSON.stringify(saved.find(x=>x.name===c.name))===JSON.stringify(c)&&tokenSaved(c.name)&&!tokenPending(c.name),issue=kubernetesContextSchema.safeParse(c);
    return <li key={c.name} className="kube-row">
-    <input type="checkbox" checked={c.enabled} aria-label={`Let the agent read ${c.name}`} onChange={e=>toggle(c.name,e.target.checked)}/>
+    <Switch label={`Let the agent read ${c.name}`} checked={c.enabled} onChange={on=>toggle(c.name,on)}/>
     <div className="kube-main"><code className="kube-name">{c.name}</code><span className="kube-server">{c.server}</span>
      <span className="small"><i className={'credential-dot'+(tokenSaved(c.name)||tokenPending(c.name)?' saved':'')} aria-hidden="true"/>{tokenPending(c.name)?'Token saved when you click Save settings':tokenSaved(c.name)?'Token saved':'No token: add one'}</span></div>
     <div className="actions">

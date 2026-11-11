@@ -39,7 +39,7 @@ Sandbox properties:
 
 In **Settings → Model**, choose Claude and **Claude subscription · sandbox login**. Claude Code signs in inside the sandbox. Support does not store the login and has no `claude` binary.
 
-1. Run `docker compose exec -u admin -e CLAUDE_CONFIG_DIR=/home/admin/agent/.claude sandbox claude auth login`. Choose your Claude subscription.
+1. Run `docker compose exec -u admin sandbox claude auth login`. Choose your Claude subscription. The sandbox container sets `CLAUDE_CONFIG_DIR=/home/admin/agent/.claude`, so the login lands where Support reads it. Recreate the container with `docker compose up -d` after pulling this setting.
 2. In **Settings → Model**, click **Test Model**. Support runs `claude auth status` in the sandbox. The Model card on the Agent work page shows the result.
 
 Claude Code writes the login to `/home/admin/agent/.claude` in the `sandbox-data` volume and sends model requests to Anthropic directly. Support does not read or relay those requests. This mode needs **Let the agent run commands** on, with the sandbox and gateway available. The built-in agent loop refuses to start otherwise.

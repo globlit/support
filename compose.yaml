@@ -41,6 +41,8 @@ services:
     environment:
       SANDBOX_BIND: 172.31.251.20:7070
       SANDBOX_AGENT_ROOT: /home/admin/agent
+      # Where Support reads the Claude login. Applies to `docker compose exec` too, so `claude auth login` writes there.
+      CLAUDE_CONFIG_DIR: /home/admin/agent/.claude
       # Only HTTPS to the allowlist leaves the sandbox. Support (Git proxy, agent gateway) is reached directly.
       HTTPS_PROXY: http://172.31.251.30:3128
       HTTP_PROXY: http://172.31.251.30:3128

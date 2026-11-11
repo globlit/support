@@ -16,7 +16,10 @@ const tunnelDefaults={target:'service/prometheus-operated',port:9090,pathPrefix:
 export function PrometheusSources({sources,onChange,data,busy,dirty,pending,setPending,run,reload}:{sources:PrometheusSource[];onChange:(sources:PrometheusSource[])=>void;data:Snapshot;busy:boolean;dirty:boolean;pending:Partial<Record<CredentialName,unknown>>;setPending:(name:CredentialName,body:unknown)=>void;run:(f:()=>Promise<void>)=>Promise<void>;reload:()=>Promise<Snapshot>}){
  const unlocked=data.vault.unlocked;
  const contexts=data.config.kubernetesContexts.map(c=>c.name),[listed,setListed]=useState<Listed|null>(null),[checks,setChecks]=useState<Record<string,Check|'running'>>({});
- const list=useId(),saved=data.config.prometheusSources;
+ const list=useId(),saved=data.config.prometheusSources,[open,setOpen]=useState<Record<string,boolean>>({});
+ /** A server is open when the engineer chose so. Otherwise it is open only while it is new or invalid. */
+ const isOpen=(s:PrometheusSource)=>open[s.id]??(!saved.some(x=>x.id===s.id)||!prometheusSourceSchema.safeParse(s).success);
+ const setAll=(value:boolean)=>setOpen(Object.fromEntries(sources.map(s=>[s.id,value])));
  useEffect(()=>{
   if(!unlocked)return;
   void api<Listed>('/prometheus/sources').then(setListed).catch(()=>setListed(null));
@@ -32,14 +35,28 @@ export function PrometheusSources({sources,onChange,data,busy,dirty,pending,setP
  return <div className="prom-sources">
   <p className="small muted">Use <strong>URL</strong> for Prometheus servers behind an ingress. Use <strong>Through Kubernetes</strong>, or the Grafana connection, for servers that are not exposed.</p>
   <datalist id={list}>{contexts.map(c=><option key={c} value={c}/>)}</datalist>
+  {sources.length>1&&<div className="prom-bulk"><span className="small muted">{sources.length} servers</span><button type="button" className="text-button" onClick={()=>setAll(false)}>Collapse all</button><button type="button" className="text-button" onClick={()=>setAll(true)}>Expand all</button></div>}
   {sources.map(s=>{const issues=prometheusSourceSchema.safeParse(s),duplicate=sources.filter(x=>x.name===s.name).length>1,check=checks[s.id];
    const unchanged=JSON.stringify(saved.find(x=>x.id===s.id))===JSON.stringify(s);
-   return <fieldset key={s.id} className="prom-source">
+   const expanded=isOpen(s),bodyId=`prom-${s.id}`,summary=s.kind==='url'?s.endpoint:`${s.context}/${s.namespace}/${s.target}:${s.port}`;
+   return <fieldset key={s.id} className={'prom-source'+(expanded?'':' collapsed')}>
+    <div className="prom-source-bar">
+     <button type="button" className="prom-toggle" aria-expanded={expanded} aria-controls={bodyId} onClick={()=>setOpen(o=>({...o,[s.id]:!expanded}))}>
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
+      <code className="prom-name">{s.name||'unnamed'}</code>
+      <span className="prom-summary small muted" title={summary}>{summary||'Not configured'}</span>
+     </button>
+     {(!issues.success||duplicate)&&<span className="badge prom-warn">Needs attention</span>}
+     {check&&check!=='running'&&<i className={'credential-dot'+(check.ok?' saved':'')} title={check.detail} aria-label={check.ok?'Test passed':'Test failed'}/>}
+    </div>
+    <div id={bodyId} className="prom-source-body" hidden={!expanded}>
     <div className="prom-source-head">
      <Field label="Name" hint="Shown to the agent, for example cluster-a."><input value={s.name} spellCheck={false} onChange={e=>set(s.id,{...s,name:e.target.value.toLowerCase()})}/></Field>
-     <div className="segmented" role="group" aria-label="How Support reaches this server">
-      <button type="button" aria-pressed={s.kind==='url'} onClick={()=>kind(s,'url')}>URL</button>
-      <button type="button" aria-pressed={s.kind==='tunnel'} onClick={()=>kind(s,'tunnel')}>Through Kubernetes</button>
+     <div className="prom-kind"><span className="prom-kind-label">Connection</span>
+      <div className="segmented" role="group" aria-label="How Support reaches this server">
+       <button type="button" aria-pressed={s.kind==='url'} onClick={()=>kind(s,'url')}>URL</button>
+       <button type="button" aria-pressed={s.kind==='tunnel'} onClick={()=>kind(s,'tunnel')}>Through Kubernetes</button>
+      </div>
      </div>
     </div>
     {s.kind==='url'?<>
@@ -59,6 +76,7 @@ export function PrometheusSources({sources,onChange,data,busy,dirty,pending,setP
      <button type="button" disabled={!unlocked||!unchanged||check==='running'} title={unchanged?'Uses the saved settings and credentials.':'Save settings first.'} onClick={()=>void test(s.id)}>{check==='running'?'Testing…':'Test'}</button>
      {!unchanged&&<span className="small muted">Save settings to test.</span>}
      <button type="button" className="text-button" onClick={()=>remove(s.id)}>Remove</button>
+    </div>
     </div>
    </fieldset>;})}
   <button type="button" disabled={sources.length>=30} onClick={()=>onChange([...sources,{id:newServerId(),name:sources.length?'':'prometheus',kind:'url',endpoint:''}])}>Add server</button>
