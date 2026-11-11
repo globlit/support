@@ -590,3 +590,33 @@ summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; bo
 .conversation-steps .tool-result dd{margin:0}
 .conversation-tools .chart-panel{border:0;padding:6px 0}
 .plan-card a.button{display:inline-flex;align-items:center;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;border:1px solid var(--solid);background:var(--solid);color:var(--inverse)}.plan-card a.button:hover{opacity:.87}
+/* Long commands and outputs stay inside the conversation: every level may shrink below its content width. */
+.conversation-view,.conversation-scroll{min-width:0;max-width:100%}
+.conversation-scroll{grid-template-columns:minmax(0,1fr);overflow-x:hidden}
+.conversation-run,.conversation-block,.conversation-block-body,.conversation-steps,.conversation-result,.plan-card,.outcome-card,.conversation-steps .investigation-trace,.conversation-steps details,.conversation-steps summary,.conversation-steps .investigation-check-heading{min-width:0;max-width:100%}
+.conversation-steps summary{display:block}
+.conversation-turn p{min-width:0}
+.conversation-steps .tool-result,.conversation-steps .tool-result dd{min-width:0;overflow-x:auto}
+.conversation-steps pre,.plan-card-text pre,.outcome-card pre{max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.plan-card-text,.outcome-card .plan-card-text{overflow-wrap:anywhere}
+.plan-card-text code,.outcome-card code,.conversation-messages li{overflow-wrap:anywhere}
+.conversation-block-head{min-width:0}.conversation-block-head .small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Running is purple: orange is for warnings, red for errors, green for done. */
+:root{--purple:light-dark(#6250d6,#9085e9)}
+.case-dot.live{background:var(--purple);border-color:var(--purple);box-shadow:0 0 0 3px color-mix(in srgb,var(--purple) 15%,transparent)}
+.selected .case-dot.live{background:var(--purple);border-color:var(--purple)}
+.conversation-dot.running{background:var(--purple)}
+.investigation-trace .investigation-marker.running{background:var(--purple)}
+.conversation-block-head{display:flex;align-items:center;gap:8px;padding:6px 8px;margin-left:-8px;border-radius:6px;cursor:pointer}
+.conversation-block-head:hover{background:var(--surface)}.conversation-block-head:hover strong{text-decoration:none}
+.conversation-block-head .conversation-chevron{margin-left:0;order:0}
+.conversation-toggle{margin-left:auto;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.conversation-block-head:hover .conversation-toggle{color:var(--text);border-color:var(--muted)}
+.conversation-steps .investigation-timeline>li{padding-bottom:8px}
+.conversation-steps .investigation-check-heading{min-height:26px}
+.agent-questions{display:grid;gap:10px}.agent-questions ol{margin:0;padding-left:20px;display:grid;gap:12px;font-size:13px}.agent-questions li p{margin:0}.agent-questions li.answered>p:first-child{color:var(--muted)}
+.agent-answer{font-size:12px;margin-top:4px!important}.agent-answer span{font-weight:600;color:var(--muted);margin-right:6px}
+.answer-options{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.answer-options button[aria-pressed=true]{background:var(--solid);color:var(--inverse);border-color:var(--solid)}
+.answer-write{display:grid;gap:6px;margin-top:6px}.answer-write textarea{min-height:56px}.answer-write>button:not(.text-button){justify-self:start}
+.conversation-run>.agent-questions{border:1px solid var(--purple);border-radius:10px;padding:10px 14px}

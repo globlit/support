@@ -86,16 +86,20 @@ async function startRun(connection:string,issueId:string,basis:RunBasis){
 }
 /**
  * Continues the session of a run with the engineer's text (`continue`), or rechecks the request in it (`recheck`).
- * A running session receives the text as a message instead. A continuation answers the run's open questions.
+ * A running session receives the text as a message instead. `answers` answer given questions of the run; without them, a
+ * continuation answers all of the run's open questions with the text.
  */
-async function continueRun(runId:string,text:string,by:string,kind:'continue'|'recheck'='continue'){
+async function continueRun(runId:string,text:string,by:string,kind:'continue'|'recheck'='continue',answers:{questionId:string;text:string}[]=[]){
  if(claude.isActive(runId))return {message:claude.message(runId,{text},by)};
  const parent=claude.status(runId);
  if(!parent.connection||!parent.sessionId)throw new AppError(409,'This run has no agent session to continue. Start over instead.');
  const open=(parent.questions??[]).filter(q=>!q.answer);
+ if(answers.length){const lines=answers.map(a=>{const q=parent.questions?.find(x=>x.id===a.questionId);if(!q)throw new AppError(404,'Question not found in this run.');return `- ${q.text}\n  Answer: ${a.text}`;});const extra=text.trim()?`\n\nThe engineer adds:\n${text}`:'';
+  const run=await startRun(parent.connection,parent.issueId,{kind:'continue',runId,text:answers.map(a=>a.text).join(' · ')+(text.trim()?` · ${text}`:''),prompt:`The engineer answered your questions:\n${lines.join('\n')}${extra}`,by});
+  claude.answerQuestions(runId,answers,by);return {run};}
  const prompt=kind==='recheck'?text:open.length?`The engineer answered your questions:\n${open.map(q=>`- ${q.text}`).join('\n')}\n\nAnswer:\n${text}`:`Message from the engineer:\n${text}`;
  const run=await startRun(parent.connection,parent.issueId,{kind,runId,text,...(kind==='continue'?{prompt}:{}),by});
- if(kind==='continue')claude.answerQuestions(runId,text,by);
+ if(kind==='continue')claude.answerQuestions(runId,open.map(q=>({questionId:q.id,text})),by);
  return {run};
 }
 claude.onResume((run,prompt)=>continueRun(run.id,prompt,'Support'));
@@ -162,7 +166,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   return send(res,{run:await startRun(v.connection,v.issueId,{kind:'over',text:v.text||undefined,by:session.principal.name})});
  }
  const agentContinue=path.match(/^\/api\/agent\/runs\/([0-9a-f-]{36})\/continue$/);
- if(agentContinue&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(16000),kind:z.enum(['continue','recheck']).optional()}).strict().parse(await body(req));return send(res,await continueRun(agentContinue[1],v.text,session.principal.name,v.kind));}
+ if(agentContinue&&req.method==='POST'){const v=z.object({text:z.string().trim().max(16000).default(''),kind:z.enum(['continue','recheck']).optional(),answers:z.array(z.object({questionId:z.string().uuid(),text:z.string().trim().min(1).max(4000)}).strict()).max(20).optional()}).strict().refine(v=>!!v.text||!!v.answers?.length,'Write a message or answer a question.').parse(await body(req));return send(res,await continueRun(agentContinue[1],v.text,session.principal.name,v.kind,v.answers));}
  if(agentMessage&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(4000),replyTo:z.string().uuid().optional()}).strict().parse(await body(req));return send(res,claude.message(agentMessage[1],v,session.principal.name));}
  const agentRunStop=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/stop$/);
  if(agentRunStop&&req.method==='POST'){await body(req);claude.cancel(agentRunStop[1]);return send(res,await agentState());}

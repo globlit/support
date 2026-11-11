@@ -11,7 +11,8 @@ import type {Config,ChangeProposal} from '../src/model.js';
 
 export const outcomes=['diagnosis','plan','needs_input','inconclusive'] as const;
 export type Outcome=typeof outcomes[number];
-export type AgentResult={outcome:Outcome;report:string;questions:string[];replyDraft?:string};
+export type AgentQuestionInput={text:string;options?:string[]};
+export type AgentResult={outcome:Outcome;report:string;questions:AgentQuestionInput[];replyDraft?:string};
 const str={type:'string'};
 
 /**
@@ -19,7 +20,7 @@ const str={type:'string'};
  * back to the agent: a review reminder the first time, a confirmation afterwards.
  */
 export type ToolsetHooks={
- question(text:string):void;
+ question(q:AgentQuestionInput):void;
  proposal(p:ChangeProposal):void;
  result(r:AgentResult):string;
  cloneUrl?(project:string):string;
@@ -67,11 +68,12 @@ export async function agentToolset(store:Store,config:Config,youtrack:YouTrack,f
   if(hooks.cloneUrl)add(toolDefinition('gitlab_clone_url','Return a URL to git clone or fetch a GitLab project with its history, without credentials. Valid during this session. Pushing is refused.',{project:str}),async input=>{const {project}=z.object({project:projectPath}).strict().parse(input);return {url:hooks.cloneUrl!(project)};});
   add(toolDefinition('propose_change','Submit edits made in a Git folder as a code change proposal for the engineer. dir is the absolute path of the folder; base is the commit SHA the edits started from, which must exist on GitLab. A branch and merge request are created only after the engineer approves.',{project:str,dir:str,base:str,title:str,summary:str}),async input=>{const p=await proposeFromFolder(store,input,fetcher);hooks.proposal(p);return {proposal:p.id,files:p.files.map(f=>({path:f.path,change:f.before===null?'added':f.after===null?'deleted':'modified'})),note:'Saved for engineer review. Nothing was written to GitLab.'};});
  }
- add(toolDefinition('ask_engineer','Ask the engineer a question. Does not wait: continue working. The answer arrives as a user message.',{question:str}),async input=>{const {question}=z.object({question:z.string().trim().min(3).max(2000)}).strict().parse(input);hooks.question(question);return {sent:true};});
- add(toolDefinition('submit_result','Report the result of this session to the engineer. outcome: diagnosis (cause found), plan (a change to make), needs_input (questions block progress), or inconclusive. report: Markdown in your own structure, with what you checked and found. questions: what the engineer must answer. replyDraft: optional answer to the requester.',{outcome:{type:'string',enum:[...outcomes]},report:str,questions:{type:'array',items:str,maxItems:20},replyDraft:str},['outcome','report']),async input=>{
-  const r=z.object({outcome:z.enum(outcomes),report:z.string().trim().min(1).max(60000),questions:z.array(z.string().trim().min(1).max(2000)).max(20).optional(),replyDraft:z.string().max(16000).optional()}).strict().parse(input);
+ const options={type:'array',items:str,maxItems:6,description:'Optional ready-made answers the engineer can pick with one click. They can still write their own.'};
+ add(toolDefinition('ask_engineer','Ask the engineer a question. Does not wait: continue working. The answer arrives as a user message. Give options when the likely answers are known.',{question:str,options},['question']),async input=>{const {question,options}=z.object({question:z.string().trim().min(3).max(2000),options:z.array(z.string().trim().min(1).max(300)).max(6).optional()}).strict().parse(input);hooks.question({text:question,options});return {sent:true};});
+ add(toolDefinition('submit_result','Report the result of this session to the engineer. outcome: diagnosis (cause found), plan (a change to make), needs_input (questions block progress), or inconclusive. report: Markdown in your own structure, with what you checked and found. questions: what the engineer must answer, each a string or {question, options} with ready-made answers to pick from. replyDraft: optional answer to the requester.',{outcome:{type:'string',enum:[...outcomes]},report:str,questions:{type:'array',maxItems:20,items:{anyOf:[str,{type:'object',properties:{question:str,options},required:['question'],additionalProperties:false}]}},replyDraft:str},['outcome','report']),async input=>{
+  const r=z.object({outcome:z.enum(outcomes),report:z.string().trim().min(1).max(60000),questions:z.array(z.union([z.string().trim().min(1).max(2000),z.object({question:z.string().trim().min(1).max(2000),options:z.array(z.string().trim().min(1).max(300)).max(6).optional()}).strict()])).max(20).optional(),replyDraft:z.string().max(16000).optional()}).strict().parse(input);
   if(r.outcome==='needs_input'&&!r.questions?.length)throw new AppError(400,'needs_input requires at least one question.');
-  return {message:hooks.result({outcome:r.outcome,report:r.report,questions:r.questions??[],replyDraft:r.replyDraft})};
+  return {message:hooks.result({outcome:r.outcome,report:r.report,questions:(r.questions??[]).map(q=>typeof q==='string'?{text:q}:{text:q.question,options:q.options}),replyDraft:r.replyDraft})};
  });
  return {
   definitions,

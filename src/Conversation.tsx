@@ -73,11 +73,12 @@ export function Conversation({detail,run,running,error,disabled,start,cancel,ref
     return <article key={r.id} className="conversation-run">
      <div className="conversation-turn"><span className="conversation-who">{r.basedOn?.by??'Support'}</span><p>{turnText(r)}</p><time dateTime={r.startedAt}>{day(r.startedAt)} {clock(r.startedAt)}</time></div>
      <div className={'conversation-block '+r.state}>
-      <button type="button" className="conversation-block-head" aria-expanded={isOpen} onClick={()=>setOpen(o=>({...o,[r.id]:!isOpen}))}>
+      <button type="button" className="conversation-block-head" aria-expanded={isOpen} title={isOpen?'Hide the steps of this run':'Show the steps of this run'} onClick={()=>setOpen(o=>({...o,[r.id]:!isOpen}))}>
+       <svg className="conversation-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
        <span className={'conversation-dot '+r.state} aria-hidden="true"/>
        <strong>{r.state==='running'?'Working':r.state==='failed'?'Stopped on an error':r.state==='cancelled'?'Stopped':'Worked'} {duration(r)}</strong>
        <span className="small muted">{full[r.id]?`${checks.length} step${checks.length===1?'':'s'}`:''}{r.model?` · ${r.model}`:''}</span>
-       <svg className="conversation-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>
+       <span className="conversation-toggle">{isOpen?'Hide steps':'Show steps'}</span>
       </button>
       {isOpen&&<div className="conversation-block-body">
        {full[r.id]?<>{checks.length>0&&<details className="conversation-tools"><summary>Tool usage</summary><ToolUsageChart compact counts={countTools(f.events)} title="Tool calls in this run"/></details>}
@@ -85,6 +86,7 @@ export function Conversation({detail,run,running,error,disabled,start,cancel,ref
         {(f.messages??[]).length>0&&<ul className="conversation-messages">{f.messages!.map(m=><li key={m.id}><span className="conversation-who">{m.by}</span> {m.text}<small>{m.delivered?`delivered ${clock(m.delivered)}`:'queued'}</small></li>)}</ul>}</>:<p className="small muted">Loading the steps…</p>}
       </div>}
      </div>
+     {r.state==='running'&&(f.questions??[]).length>0&&<Questions run={f} live answerable={!disabled} onSent={refresh}/>}
      {r.error&&<ErrorNotice message={r.error} context="Model"/>}
      {r.state!=='running'&&(r.outcome||plan)&&<div className="conversation-result">
       {plan?<div className={'plan-card'+(plan.version===current?.version?' current':'')}>
@@ -97,7 +99,7 @@ export function Conversation({detail,run,running,error,disabled,start,cancel,ref
        </div>:<div className={'outcome-card '+(r.outcome??'')}>
         <header><span className="badge">{outcomeLabel[r.outcome!]??r.outcome}</span>{r.basedOn?.kind==='implement'&&<span className="small muted">{r.proposals?.length?`${r.proposals.length} proposal${r.proposals.length===1?'':'s'} in the implementation step`:'No proposal submitted'}</span>}</header>
         {r.report&&<div className="plan-card-text"><Markdown>{r.report}</Markdown></div>}
-        {(r.questions??[]).length>0&&<ol className="outcome-questions">{r.questions!.map(q=><li key={q.id} className={q.answer?'answered':''}>{q.text}{q.answer&&<small>Answered: {q.answer.text.slice(0,200)}</small>}</li>)}</ol>}
+        {(r.questions??[]).length>0&&<Questions run={full[r.id]??r} answerable={r.id===last?.id&&!!r.sessionId&&!disabled} onSent={refresh}/>}
        </div>}
      </div>}
     </article>;})}
@@ -114,7 +116,7 @@ export function Conversation({detail,run,running,error,disabled,start,cancel,ref
 function Composer({detail,last,live,disabled,start,running,onSent}:{detail:LiveDetail;last?:AnalysisRun;live?:AnalysisRun;disabled:boolean;start:()=>void;running:boolean;onSent:()=>void}){
  const api=useWorkspaceApi(),feedback=useFeedback();
  const [text,setText]=useState(''),[sending,setSending]=useState(false),[menu,setMenu]=useState(false);
- const canContinue=!!last?.sessionId,open=(last?.questions??[]).filter(q=>!q.answer).length;
+ const canContinue=!!last?.sessionId;
  async function send(kind:'continue'|'recheck'|'over'){
   const value=text.trim();if(sending)return;if(kind==='continue'&&!value)return;setSending(true);setMenu(false);
   try{
@@ -128,10 +130,10 @@ function Composer({detail,last,live,disabled,start,running,onSent}:{detail:LiveD
  if(!last)return <div className="conversation-composer"><p className="small muted">The agent reads the request, the clusters, the code and the documentation, then reports a diagnosis, a plan or questions.</p><button className="primary" disabled={disabled||running||detail.issue.resolved} onClick={start}>{running?'Starting…':'Start investigation'}</button></div>;
  return <div className="conversation-composer">
   <textarea rows={2} value={text} maxLength={16000} disabled={disabled||sending} aria-label="Message the agent"
-   placeholder={live?'Message the running agent…':open?'Answer the agent\'s questions…':canContinue?'Answer, comment, or ask the agent to check something else…':'This run has no session to continue. Use Start over in the menu.'}
+   placeholder={live?'Message the running agent…':canContinue?'Message the agent: a comment, a hint, or something else to check…':'This run has no session to continue. Use Start over in the menu.'}
    onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send('continue');}}}/>
   <div className="conversation-composer-actions">
-   <button className="primary" disabled={disabled||sending||!text.trim()||(!live&&!canContinue)} onClick={()=>void send('continue')}>{live?'Send to the agent':open?'Send answers':'Send'}</button>
+   <button className="primary" disabled={disabled||sending||!text.trim()||(!live&&!canContinue)} onClick={()=>void send('continue')}>{live?'Send to the agent':'Send'}</button>
    {!live&&<div className="composer-menu"><button type="button" aria-haspopup="menu" aria-expanded={menu} disabled={disabled||sending} onClick={()=>setMenu(m=>!m)}>More ▾</button>
     {menu&&<div role="menu" className="composer-menu-panel">
      <button role="menuitem" disabled={!canContinue} onClick={()=>void send('recheck')}><strong>Recheck the request</strong><small>Same session, with the current ticket data. Your text is added as a note.</small></button>
@@ -140,5 +142,41 @@ function Composer({detail,last,live,disabled,start,running,onSent}:{detail:LiveD
    </div>}
    <span className="small muted">Enter to send · Shift+Enter for a new line</span>
   </div>
+ </div>;
+}
+
+/**
+ * Questions of the agent with their answers. Prepared answers are buttons; "Something else" opens a text field.
+ * During a run, each answer is sent at once to the running session. After a run, answers are collected and sent
+ * together, which continues the session. Questions of older runs are read-only.
+ */
+function Questions({run,live=false,answerable,onSent}:{run:AnalysisRun;live?:boolean;answerable:boolean;onSent:()=>void}){
+ const api=useWorkspaceApi(),feedback=useFeedback();
+ const [answers,setAnswers]=useState<Record<string,string>>({}),[writing,setWriting]=useState<Record<string,boolean>>({}),[sending,setSending]=useState(false);
+ const pending=(run.messages??[]).filter(m=>m.replyTo&&!m.delivered).map(m=>m.replyTo);
+ const ready=Object.entries(answers).filter(([,v])=>v.trim());
+ async function reply(questionId:string,text:string){
+  if(!text.trim())return;setSending(true);
+  try{await api(`/agent/runs/${run.id}/message`,'POST',{text,replyTo:questionId});setAnswers(a=>({...a,[questionId]:''}));setWriting(w=>({...w,[questionId]:false}));feedback.success('Answer sent to the running agent.');onSent();}
+  catch(e){feedback.error(e);}finally{setSending(false);}
+ }
+ async function sendAll(){
+  setSending(true);
+  try{await api(`/agent/runs/${run.id}/continue`,'POST',{answers:ready.map(([questionId,text])=>({questionId,text}))});setAnswers({});setWriting({});feedback.success('Answers sent. The agent continues.');onSent();}
+  catch(e){feedback.error(e);}finally{setSending(false);}
+ }
+ return <div className="agent-questions">
+  <ol>{(run.questions??[]).map(q=>{const value=answers[q.id]??'',queued=pending.includes(q.id);
+   return <li key={q.id} className={q.answer?'answered':''}>
+    <p>{q.text}</p>
+    {q.answer?<p className="agent-answer"><span>Your answer</span>{q.answer.text}</p>:queued?<p className="agent-answer"><span>Your answer</span>queued for the agent</p>:answerable&&<>
+     {(q.options?.length??0)>0&&<div className="answer-options" role="group" aria-label="Prepared answers">{q.options!.map(o=><button key={o} type="button" aria-pressed={value===o&&!writing[q.id]} disabled={sending} onClick={()=>{if(live)void reply(q.id,o);else{setWriting(w=>({...w,[q.id]:false}));setAnswers(a=>({...a,[q.id]:a[q.id]===o?'':o}));}}}>{o}</button>)}
+      <button type="button" className="text-button" aria-pressed={!!writing[q.id]} onClick={()=>{setWriting(w=>({...w,[q.id]:!w[q.id]}));setAnswers(a=>({...a,[q.id]:''}));}}>Something else…</button></div>}
+     {((q.options?.length??0)===0||writing[q.id])&&<div className="answer-write">{(q.options?.length??0)===0&&!writing[q.id]?<button type="button" className="text-button" onClick={()=>setWriting(w=>({...w,[q.id]:true}))}>Answer this question</button>:<>
+      <textarea rows={2} maxLength={4000} value={value} placeholder="Your answer" aria-label={`Answer to: ${q.text}`} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&live){e.preventDefault();void reply(q.id,value);}}}/>
+      {live&&<button type="button" disabled={sending||!value.trim()} onClick={()=>void reply(q.id,value)}>Send</button>}</>}</div>}
+    </>}
+   </li>;})}</ol>
+  {!live&&answerable&&ready.length>0&&<div className="actions"><button className="primary" disabled={sending} onClick={()=>void sendAll()}>{sending?'Sending…':`Send ${ready.length} answer${ready.length===1?'':'s'} and continue`}</button><span className="small muted">Unanswered questions stay open. The agent continues with everything it already found.</span></div>}
  </div>;
 }

@@ -57,11 +57,11 @@ export async function runClaudeCode(ctx:Ctx){
  const end=async()=>{if(closed)return;closed=true;await agentInput(run.id,{end:true},ctx.fetcher).catch(()=>{});};
  const event=(e:AnalysisRun['events'][number])=>{run.events.push(e);if(run.events.length>3000)run.events.splice(0,run.events.length-3000);ctx.persist();};
  const toolset=await agentToolset(store,config,ctx.youtrack,ctx.fetcher,ctx.signal,{
-  question:text=>{const q={id:randomUUID(),text:ctx.redact(text),at:new Date().toISOString()};run.questions=[...(run.questions??[]),q];ctx.persist();agentFeed.publish(run.id,'question',q.text,q.id);ctx.onQuestion(q);agentFeed.setQuestions(run.id,run.questions.filter(x=>!x.answer).length);},
+  question:input=>{const q={id:randomUUID(),text:ctx.redact(input.text),at:new Date().toISOString(),...(input.options?.length?{options:input.options.map(ctx.redact)}:{})};run.questions=[...(run.questions??[]),q];ctx.persist();agentFeed.publish(run.id,'question',q.text,q.id);ctx.onQuestion(q);agentFeed.setQuestions(run.id,run.questions.filter(x=>!x.answer).length);},
   proposal:p=>{run.proposals=[...(run.proposals??[]).filter(x=>x.project!==p.project),p];ctx.persist();agentFeed.publish(run.id,'result',`Proposal "${p.title}": ${p.files.map(f=>f.path).join(', ')}`);},
   result:r=>{
    if(!reviewed){reviewed=true;return 'Before this is final, check: Is every hypothesis you relied on verified by a command or tool result? Did you search each keyword of the request, and its variants, in the cluster, the repositories, Outline and the web? Did a failed tool leave a gap that another tool or a script could fill? If something is left, do it now. Then call submit_result again, with the same or an updated report.';}
-   accepted={...r,report:ctx.redact(r.report),questions:r.questions.map(ctx.redact),replyDraft:r.replyDraft?ctx.redact(r.replyDraft):undefined};
+   accepted={...r,report:ctx.redact(r.report),questions:r.questions.map(q=>({text:ctx.redact(q.text),...(q.options?.length?{options:q.options.map(ctx.redact)}:{})})),replyDraft:r.replyDraft?ctx.redact(r.replyDraft):undefined};
    agentFeed.publish(run.id,'result',`Result: ${r.outcome}`);
    return 'Recorded for the engineer. End your turn now with a one-line summary.';
   },

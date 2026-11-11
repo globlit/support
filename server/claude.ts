@@ -81,10 +81,10 @@ export class Claude {
   run.events.push({at:m.at,text:`Engineer message: ${m.text}`});this.store.saveInvestigation(run);agentFeed.publish(runId,'engineer',m.text,m.id);
   return m;
  }
- /** Records `text` as the answer to the unanswered questions of a finished run. */
- answerQuestions(runId:string,text:string,by:string){
+ /** Records answers to questions of a finished run. */
+ answerQuestions(runId:string,answers:{questionId:string;text:string}[],by:string){
   const run=this.runs.get(runId)??this.store.investigation(runId);const at=new Date().toISOString();let changed=false;
-  for(const q of run.questions??[])if(!q.answer){q.answer={text,at,by};changed=true;}
+  for(const a of answers){const q=run.questions?.find(x=>x.id===a.questionId);if(q&&!q.answer){q.answer={text:a.text,at,by};changed=true;}}
   if(changed)this.store.saveInvestigation(run);
  }
  private runListeners:{started(r:{runId:string;connection:string;id:string;title:string;fingerprint?:string}):void;finished(runId:string,state:'ready'|'failed'|'cancelled',error?:string):void}[]=[];
@@ -177,7 +177,7 @@ export class Claude {
    const r=outcome.result;
    if(!r)throw new AppError(502,'The agent ended without a result. Its notes are in the timeline.');
    run.outcome=r.outcome;run.report=r.report;
-   for(const text of r.questions){if(!run.questions?.some(q=>q.text===text)){const q={id:randomUUID(),text,at:new Date().toISOString()};run.questions=[...(run.questions??[]),q];for(const l of this.questionListeners)l(run,q);}}
+   for(const input of r.questions){if(!run.questions?.some(q=>q.text===input.text)){const q={id:randomUUID(),text:input.text,at:new Date().toISOString(),...(input.options?.length?{options:input.options}:{})};run.questions=[...(run.questions??[]),q];for(const l of this.questionListeners)l(run,q);}}
    if(basis.kind==='implement'){event(run.proposals?.length?`${run.proposals.length} change proposal${run.proposals.length===1?'':'s'} ready for review`:'No change proposal was submitted');}
    else if(r.outcome==='plan'&&outcome.checks>0){
     const fresh=await source.issue(issue.id);check();

@@ -82,7 +82,8 @@ export type Snapshot={config:Config;configRevision:number;tickets:Ticket[];vault
 export type SourceIssue={comments?:{id:string;text:string;updated:number}[];sourceFingerprint?:string;id:string;key:string;title:string;description:string;updated:number;resolved:boolean;status:string;severity:string;assignee:string;project:string;fields:Record<string,string>;url:string;connection:string};
 /** Code change proposed by the agent from a sandbox checkout. Becomes a branch only after plan approval. */
 export type ChangeProposal={id:string;project:string;commit:string;title:string;summary:string;at:string;files:{path:string;before:string|null;after:string|null}[]};
-export type AgentQuestion={id:string;text:string;at:string;answer?:{text:string;at:string;by:string}};
+/** Question of the agent to the engineer. `options` are answers the agent prepared; the engineer may also write one. */
+export type AgentQuestion={id:string;text:string;at:string;options?:string[];answer?:{text:string;at:string;by:string}};
 export type EngineerMessage={id:string;text:string;at:string;by:string;replyTo?:string;delivered?:string};
 /**
  * What started a run: the first investigation, a continuation of a run's session (an answer or comment), a recheck of
