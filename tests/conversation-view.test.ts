@@ -18,6 +18,13 @@ test('the conversation shows the engineer turn, the work block and a plan card w
  const run:AnalysisRun={id:'r1',issueId:'1',connection:'yt',state:'ready',startedAt:'2026-11-11T10:00:00.000Z',finishedAt:'2026-11-11T10:04:00.000Z',events:[],basedOn:{kind:'start',by:'Engineer'},planVersion:1,outcome:'plan',sessionId:'s'};
  const detail={issue:{id:'1',key:'INFRA-1',title:'t',description:'',updated:1,resolved:false,status:'',severity:'',assignee:'',project:'',fields:{},url:'',connection:'yt'},session:{connection:'yt',issueId:'1',revision:3,sourceUpdated:1,updatedAt:'',notes:[],draft:'',plans:[{version:1,text:'## Fix\nAllow ingress.',at:'',runId:'r1'}],approval:null}} as unknown as LiveDetail;
  const html=renderToStaticMarkup(createElement(Conversation,{detail,run,running:false,error:'',disabled:false,start:()=>{},cancel:()=>{},refresh:()=>{}}));
- assert.match(html,/Investigation started/);assert.match(html,/Worked 4 min/);assert.match(html,/Plan v1/);assert.match(html,/Approve/);assert.match(html,/Message the agent/);
+ assert.match(html,/Investigation started/);assert.match(html,/Worked 4 min/);assert.match(html,/Plan v1/);assert.match(html,/Review plan →/);assert.doesNotMatch(html,/>Approve</);assert.match(html,/Message the agent/);
  assert.doesNotMatch(html,/Restart from this version/,'the current version offers no restart');
+});
+
+test('steps render closed, with a one-line preview of what ran',async()=>{
+ const {InvestigationTimeline}=await import('../src/InvestigationTimeline.js');
+ const html=renderToStaticMarkup(createElement(InvestigationTimeline,{events:[{at:'2026-11-11T10:00:00.000Z',text:'Bash',tool:'Bash',input:JSON.stringify({command:'kubectl get netpol -n app'}),result:'ok',status:'complete'},{at:'2026-11-11T10:00:01.000Z',text:'Agent note',tool:'note',result:'The policy blocks ingress.',status:'complete'}],run:null}));
+ assert.doesNotMatch(html,/<details open/);
+ assert.match(html,/\$ kubectl get netpol -n app/);assert.match(html,/The policy blocks ingress\./);
 });

@@ -569,3 +569,24 @@ summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; bo
 .conversation-composer{border-top:1px solid var(--line);padding:10px 14px;display:grid;gap:8px;background:var(--sidebar)}.conversation-composer textarea{min-height:52px;max-height:200px;resize:vertical}
 .conversation-composer-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.conversation-composer-actions>.small{margin-left:auto}
 .composer-menu{position:relative}.composer-menu-panel{position:absolute;bottom:calc(100% + 6px);left:0;z-index:10;width:320px;display:grid;gap:2px;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--bg);box-shadow:0 8px 24px #0000002a}.composer-menu-panel button{border:0;text-align:left;display:grid;gap:2px;padding:8px 10px}.composer-menu-panel button:hover{background:var(--surface)}.composer-menu-panel small{color:var(--muted);font-weight:400}
+/* Conversation: one level of framing. Only result cards keep a border. */
+.conversation-view{border:0;border-radius:0;background:transparent}
+.conversation-head{padding:4px 0 10px}
+.conversation-scroll{padding:14px 4px 20px;gap:14px}
+.conversation-composer{padding:10px 0 0;background:transparent}
+.conversation-turn{background:transparent;padding:2px 0;border-radius:0}
+.conversation-block{border:0}
+.conversation-block-head{padding:4px 0;border-radius:0}.conversation-block-head:hover{background:none}.conversation-block-head:hover strong{text-decoration:underline}
+.conversation-block-body{border-top:0;margin-left:3px;padding:2px 0 4px 16px;border-left:1px solid var(--line)}
+.conversation-block-body .investigation-trace{margin:2px 0 0}
+.conversation-steps .investigation-timeline>li{padding-bottom:2px}
+.conversation-steps .investigation-check-heading{flex-wrap:nowrap;gap:10px;min-height:24px}
+.conversation-steps .investigation-check-heading strong{flex:none;font-size:12px}
+.investigation-check-preview{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);background:none;padding:0}
+.conversation-steps .investigation-check-heading .investigation-chevron{position:static}
+.conversation-steps .investigation-conclusion-preview{display:none}
+.conversation-steps .tool-result{background:none;border:0;border-left:2px solid var(--line);border-radius:0;padding:4px 0 4px 12px;margin:6px 0 10px}
+.conversation-steps .tool-result dl{grid-template-columns:70px minmax(0,1fr);gap:6px 12px}
+.conversation-steps .tool-result dd{margin:0}
+.conversation-tools .chart-panel{border:0;padding:6px 0}
+.plan-card a.button{display:inline-flex;align-items:center;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;border:1px solid var(--solid);background:var(--solid);color:var(--inverse)}.plan-card a.button:hover{opacity:.87}

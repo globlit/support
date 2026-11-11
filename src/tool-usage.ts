@@ -69,3 +69,26 @@ export function countTools(events:{tool?:string;input?:string;status?:string}[])
 }
 /** Adds `more` into `into`, by label. */
 export function mergeCounts(into:Map<string,ToolCount>,more:ToolCount[]){for(const c of more){const t=into.get(c.label)??{label:c.label,total:0,failed:0};t.total+=c.total;t.failed+=c.failed;into.set(c.label,t);}return into;}
+
+const previewKeys=['context','resource','namespace','name','pod','selector','source','endpoint','query','project','path','ref','id','uid','question','outcome','title','target'];
+/**
+ * Returns a one-line summary of what a step ran, at most `max` characters: the command of a shell step, the first line
+ * of an agent note, the file, pattern, URL or query of a Claude Code tool, or the main input values of a Support tool.
+ */
+export function stepPreview(tool:string,input?:string,result?:string,max=160){
+ const cut=(v:string)=>{const line=v.replace(/\s+/g,' ').trim();return line.length>max?line.slice(0,max-1)+'…':line;};
+ if(tool==='note')return cut((result??'').split('\n').find(l=>l.trim())??'');
+ let v:Record<string,unknown>={};try{const parsed=JSON.parse(input??'{}');if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))v=parsed;else return cut(String(input??''));}catch{return cut(input??'');}
+ const s=(k:string)=>typeof v[k]==='string'||typeof v[k]==='number'?String(v[k]):'';
+ const name=tool.replace(/^mcp__support__/,'');
+ if(name==='Bash'||name==='run_command')return cut('$ '+(s('command').split('\n')[0]??''));
+ if(['Read','Write','Edit','MultiEdit','NotebookEdit'].includes(name))return cut(s('file_path')||s('notebook_path')||s('path'));
+ if(name==='Grep'||name==='Glob')return cut([s('pattern'),s('path')].filter(Boolean).join(' in '));
+ if(name==='WebFetch')return cut(s('url'));
+ if(name==='WebSearch')return cut(s('query'));
+ if(name==='Task'||name==='Agent')return cut(s('description')||s('prompt'));
+ if(name==='TodoWrite'){const todos=Array.isArray(v.todos)?v.todos as {content?:string;status?:string}[]:[];return cut(`${todos.length} items${todos.find(t=>t.status==='in_progress')?.content?` · now: ${todos.find(t=>t.status==='in_progress')!.content}`:''}`);}
+ const parts=previewKeys.map(s).filter(Boolean);
+ if(Array.isArray(v.args))parts.push((v.args as unknown[]).join(' '));
+ return cut(parts.length?parts.join(' · '):JSON.stringify(v));
+}

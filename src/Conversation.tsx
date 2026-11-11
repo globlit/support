@@ -56,7 +56,8 @@ export function Conversation({detail,run,running,error,disabled,start,cancel,ref
  const current=detail.session.plans.at(-1),approval=detail.session.approval;
  // The conversation fills the window below its top edge, so that the page itself never scrolls.
  const root=useRef<HTMLElement>(null),[height,setHeight]=useState<number>();
- useLayoutEffect(()=>{const fit=()=>{const el=root.current;if(!el||!el.offsetParent)return;setHeight(Math.max(420,window.innerHeight-el.getBoundingClientRect().top-16));};fit();window.addEventListener('resize',fit);const t=setInterval(fit,1000);return()=>{window.removeEventListener('resize',fit);clearInterval(t);};},[]);
+ // The height uses the position in the document, not in the viewport, so scrolling the page never changes it.
+ useLayoutEffect(()=>{const fit=()=>{const el=root.current;if(!el||!el.offsetParent)return;const top=el.getBoundingClientRect().top+window.scrollY;const next=Math.max(420,Math.round(window.innerHeight-top-16));setHeight(h=>h===next?h:next);};fit();window.addEventListener('resize',fit);const observer=new ResizeObserver(fit);observer.observe(document.body);return()=>{window.removeEventListener('resize',fit);observer.disconnect();};},[]);
  return <section ref={root} className="conversation-view" aria-label="Investigation" style={height?{height}:undefined}>
   <header className="conversation-head">
    <div><h2>Investigation</h2><span className="small muted">{all.length?`${all.length} run${all.length===1?'':'s'}${tree.length>1?` · ${tree.length} branches`:''}`:automatic?`Queued for automatic investigation · up to ${maxRuns} at a time`:'No run yet'}</span></div>
@@ -90,9 +91,7 @@ export function Conversation({detail,run,running,error,disabled,start,cancel,ref
         <header><strong>Plan v{plan.version}</strong>{plan.version===current?.version&&<span className="badge">Current</span>}{approval?.version===plan.version&&<span className="badge green">Approved</span>}</header>
         <div className="plan-card-text"><Markdown>{plan.text.split('\n').slice(0,8).join('\n')}</Markdown></div>
         <div className="actions">
-         <SafeLink href={planHref()}>Review the full plan →</SafeLink>
-         {plan.version===current?.version&&!approval&&<button className="primary" disabled={disabled} onClick={()=>void act(sourcePath+'/'+detail.issue.id+'/action',{action:'approve',revision:detail.session.revision,sourceUpdated:detail.issue.updated},`Plan v${plan.version} approved.`)}>Approve</button>}
-         {approval?.version===plan.version&&<button className="text-button" disabled={disabled} onClick={()=>{if(window.confirm(`Cancel the approval of plan v${plan.version}?`))void act(sourcePath+'/'+detail.issue.id+'/action',{action:'unapprove',revision:detail.session.revision,sourceUpdated:detail.issue.updated},'Approval cancelled.');}}>Cancel approval</button>}
+         <SafeLink className="button primary" href={planHref()}>Review plan →</SafeLink>
          {plan.version!==current?.version&&<button disabled={disabled||!!live} title="Starts a new branch from this version. Later versions stay readable in their branch." onClick={()=>void act('/agent/restart',{connection:detail.issue.connection,issueId:detail.issue.id,planVersion:plan.version},`Restarting from plan v${plan.version}.`)}>Restart from this version</button>}
         </div>
        </div>:<div className={'outcome-card '+(r.outcome??'')}>
