@@ -620,3 +620,4 @@ summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; bo
 .answer-options{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.answer-options button[aria-pressed=true]{background:var(--solid);color:var(--inverse);border-color:var(--solid)}
 .answer-write{display:grid;gap:6px;margin-top:6px}.answer-write textarea{min-height:56px}.answer-write>button:not(.text-button){justify-self:start}
 .conversation-run>.agent-questions{border:1px solid var(--purple);border-radius:10px;padding:10px 14px}
+.answer-write>.answer-open{justify-self:start;padding:5px 10px;font-size:12px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}.answer-write>.answer-open:hover{background:var(--surface);border-color:var(--muted)}

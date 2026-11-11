@@ -172,7 +172,7 @@ function Questions({run,live=false,answerable,onSent}:{run:AnalysisRun;live?:boo
     {q.answer?<p className="agent-answer"><span>Your answer</span>{q.answer.text}</p>:queued?<p className="agent-answer"><span>Your answer</span>queued for the agent</p>:answerable&&<>
      {(q.options?.length??0)>0&&<div className="answer-options" role="group" aria-label="Prepared answers">{q.options!.map(o=><button key={o} type="button" aria-pressed={value===o&&!writing[q.id]} disabled={sending} onClick={()=>{if(live)void reply(q.id,o);else{setWriting(w=>({...w,[q.id]:false}));setAnswers(a=>({...a,[q.id]:a[q.id]===o?'':o}));}}}>{o}</button>)}
       <button type="button" className="text-button" aria-pressed={!!writing[q.id]} onClick={()=>{setWriting(w=>({...w,[q.id]:!w[q.id]}));setAnswers(a=>({...a,[q.id]:''}));}}>Something else…</button></div>}
-     {((q.options?.length??0)===0||writing[q.id])&&<div className="answer-write">{(q.options?.length??0)===0&&!writing[q.id]?<button type="button" className="text-button" onClick={()=>setWriting(w=>({...w,[q.id]:true}))}>Answer this question</button>:<>
+     {((q.options?.length??0)===0||writing[q.id])&&<div className="answer-write">{(q.options?.length??0)===0&&!writing[q.id]?<button type="button" className="answer-open" onClick={()=>setWriting(w=>({...w,[q.id]:true}))}>Answer this question</button>:<>
       <textarea rows={2} maxLength={4000} value={value} placeholder="Your answer" aria-label={`Answer to: ${q.text}`} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&live){e.preventDefault();void reply(q.id,value);}}}/>
       {live&&<button type="button" disabled={sending||!value.trim()} onClick={()=>void reply(q.id,value)}>Send</button>}</>}</div>}
     </>}
