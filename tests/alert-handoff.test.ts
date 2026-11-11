@@ -15,9 +15,9 @@ async function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'support-handoff-'));let store=new Store(dir);store.unlock('temporary test passphrase',true);
  for(const name of ['YouTrack','GitLab','Model'])store.credential(name,'fixture-key-'+name);
  const s=store.snapshot();store.config({...s.config,connections:{...s.config.connections,Alertmanager:{endpoint:'https://am.internal',scope:'',path:'',enabled:true},YouTrack:{endpoint:'https://yt.internal',scope:'project: INFRA',path:'',enabled:true},GitLab:{endpoint:'https://git.internal',scope:'',path:'',enabled:true},Model:{endpoint:'https://model.internal',scope:'fixture-model',path:'',enabled:true}}},s.configRevision);
- const remote={updated:1000,resolved:false,present:true,summary:'Restart detected',gitReads:0,ytHook:undefined as undefined|(()=>void)};
+ const remote={updated:1000,resolved:false,present:true,summary:'Restart detected',severity:'warning',gitReads:0,ytHook:undefined as undefined|(()=>void)};
  const fetcher=(async(url,opts)=>{assert.equal(opts?.method,'GET');const u=new URL(String(url));
-  if(u.hostname==='am.internal')return Response.json(remote.present?[{fingerprint:'abc',labels:{alertname:'Payments restarts',cluster:'dev',severity:'warning'},annotations:{summary:remote.summary},startsAt:'2026-11-07T10:00:00Z',status:{state:'active'}}]:[]);
+  if(u.hostname==='am.internal')return Response.json(remote.present?[{fingerprint:'abc',labels:{alertname:'Payments restarts',cluster:'dev',severity:remote.severity},annotations:{summary:remote.summary},startsAt:'2026-11-07T10:00:00Z',status:{state:'active'}}]:[]);
   if(u.hostname==='git.internal'){remote.gitReads++;return Response.json({}, {status:404});}
   assert.equal(u.hostname,'yt.internal');remote.ytHook?.();return Response.json({id:'2-42',idReadable:'INFRA-42',summary:'Investigate payments deployment',description:'Use the development Flux repository.',updated:remote.updated,resolved:remote.resolved?2000:null});
  }) as typeof fetch;
@@ -59,7 +59,7 @@ test('GitLab preparation stays blocked until the current YouTrack plan receives 
 });
 for(const changed of ['alert','source-note','source-plan','ticket','target-note','settings','vault','resolved','revision'] as const)test(`stale ${changed} handoff cannot append a plan`,async()=>{
  const f=await fixture();try{const preview=await f.handoff.preview(f.id);
-  if(changed==='alert')f.remote.summary='New termination reason';
+  if(changed==='alert')f.remote.severity='critical';
   if(changed==='source-note')await f.sourceAction('note','New source constraint');
   if(changed==='source-plan')await f.sourceAction('plan','Revised alert plan');
   if(changed==='ticket')f.remote.updated++;

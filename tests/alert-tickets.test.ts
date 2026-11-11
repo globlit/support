@@ -63,9 +63,9 @@ test('resolved tickets remain linked across absence, recurrence and restart with
 });
 for(const change of ['alert','feedback','settings','project','archive','vault'] as const)test(`creation refuses stale ${change} review`,async()=>{
  const f=await fixture();try{const d=await f.draft();
-  if(change==='alert')f.remote.alerts[0].annotations.summary='New failure information';
+  if(change==='alert')f.remote.alerts[0].labels.severity='critical';
   if(change==='feedback'){const w=await f.am.work(f.id);await f.am.action(f.id,{action:'note',text:'Wait for owner confirmation',revision:w.session.revision,sourceUpdated:w.issue.updated});}
-  if(change==='settings'){const s=f.store.snapshot();f.store.config({...s.config,engineer:'Another engineer'},s.configRevision);}
+  if(change==='settings'){const s=f.store.snapshot();f.store.config({...s.config,connections:{...s.config.connections,YouTrack:{...s.config.connections.YouTrack,endpoint:'https://yt.internal/other'}}},s.configRevision);}
   if(change==='project')f.remote.project.name='Changed project';if(change==='archive')f.remote.project.archived=true;if(change==='vault')f.store.lock();
   await assert.rejects(f.tickets.approve(f.id,d.hash));assert.equal(f.remote.posts,0);
  }finally{f.done();}
@@ -135,5 +135,15 @@ test('the default project and its field defaults prefill a new draft',async()=>{
   const cache=await f.yt.cachedProjects();assert.equal(cache.projects[0].id,'0-1');
   const again=await f.yt.cachedProjects();assert.equal(again.at,cache.at,'served from the cache');
   const before=f.remote.project.name;f.remote.project.name='Renamed';assert.equal((await f.yt.cachedProjects()).projects[0].name,before,'the cache is reused');assert.equal((await f.yt.cachedProjects(true)).projects[0].name,'Renamed','refresh reads YouTrack again');
+ }finally{f.done()}
+});
+
+test('annotation updates and unrelated settings saves do not make a ticket draft stale',async()=>{
+ const f=await fixture();
+ try{
+  const d=await f.draft();
+  f.remote.alerts[0].annotations.summary='CPU at 97.3%';
+  const s=f.store.snapshot();f.store.config({...s.config,engineer:'Another engineer'},s.configRevision);
+  const c=await f.tickets.approve(f.id,d.hash);assert.equal(c.ticket?.key,'INFRA-42');assert.equal(f.remote.posts,1);
  }finally{f.done()}
 });

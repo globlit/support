@@ -88,7 +88,8 @@ export class Alertmanager {
    const old=this.store.alertCases().filter(c=>c.connection===ctx.connection);
    for(const [id,group] of groups){
     group.members.sort((a,b)=>a.fingerprint.localeCompare(b.fingerprint));
-    const content=digest(group),previous=old.find(c=>c.id===id),changed=!previous||!previous.active||previous.digest!==content;
+    // Annotations are left out: they often carry live values ("CPU at 93%") that change at every poll.
+    const content=digest({...group,members:group.members.map(({annotations:_,...m})=>m)}),previous=old.find(c=>c.id===id),changed=!previous||!previous.active||previous.digest!==content;
     const c:AlertCase={...previous,id,connection:ctx.connection,title:group.labels.alertname??group.members[0].labels.alertname??'Infrastructure alert',
      severity:group.members.some(m=>m.labels.severity?.toLowerCase()==='critical')?'critical':'warning',...group,
      active:true,suppressed:group.members.every(m=>m.state==='suppressed'),episodes:(previous?.episodes??0)+(!previous?.active||group.members.some(m=>previous.members.some(p=>p.fingerprint===m.fingerprint&&p.startsAt!==m.startsAt))?1:0),
@@ -112,12 +113,23 @@ export class Alertmanager {
    description:JSON.stringify({ignoredInstances:c.members.filter(m=>matchedRules(this.store,'alert',m.labels.alertname??c.title,m.labels).length).length,state:c.active?'Present in Alertmanager':'Not present in latest successful poll',episodes:c.episodes,group:c.labels,members:c.members.filter(m=>!matchedRules(this.store,'alert',m.labels.alertname??c.title,m.labels).length)}),
    sourceFingerprint:digest([c.digest,c.active,c.episodes,c.members.filter(m=>matchedRules(this.store,'alert',m.labels.alertname??c.title,m.labels).length).map(m=>m.fingerprint)]),updated:c.updated,resolved:!c.active,status:!c.active?'Not firing':c.suppressed?'Suppressed':'Firing',severity:c.severity,assignee:'Support engineer',project:'Alertmanager',fields:c.labels,url:''};
  }
- async issue(id:string){
-  await this.poll();const c=this.store.alert(id);
+ /**
+  * Returns the case as a source issue. Polls Alertmanager first, unless the last successful poll of the same
+  * connection is younger than `maxAgeMs`. Reads for display pass the poll interval; checks before writes poll.
+  */
+ async issue(id:string,maxAgeMs=0){
+  const connection=this.context().connection;
+  const recent=maxAgeMs>0&&this.pollConnection===connection&&!!this.lastSuccess&&Date.now()-Date.parse(this.lastSuccess)<maxAgeMs;
+  if(!recent)await this.poll();else if(this.pending)await this.pending.catch(()=>{});
+  const c=this.store.alert(id);
   if(c.connection!==this.context().connection)throw new AppError(409,'This case belongs to different Alertmanager settings.');
   return this.source(c);
  }
- async work(id:string):Promise<AlertDetail>{const issue=await this.issue(id),c=this.store.alert(id);return {issue,session:this.store.workSession(issue),alert:{...c,ignored:c.members.filter(m=>matchedRules(this.store,'alert',m.labels.alertname??c.title,m.labels).length).length}};}
+ /**
+  * Case, work session and ignore count. Uses the latest poll when it is younger than `maxAgeMs` (default: the poll
+  * interval); pass 0 before a write to poll first.
+  */
+ async work(id:string,maxAgeMs=this.store.snapshot().config.alerting.pollSeconds*1000):Promise<AlertDetail>{const issue=await this.issue(id,maxAgeMs),c=this.store.alert(id);return {issue,session:this.store.workSession(issue),alert:{...c,ignored:c.members.filter(m=>matchedRules(this.store,'alert',m.labels.alertname??c.title,m.labels).length).length}};}
  async action(id:string,input:Parameters<typeof localAction>[2]){
   const issue=await this.issue(id);return {...localAction(this.store,issue,input),alert:this.store.alert(id)};
  }

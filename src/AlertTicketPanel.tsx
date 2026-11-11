@@ -1,3 +1,4 @@
+import {useFeedback} from './Toasts';
 import {SafeLink} from './SafeLink';
 import {ErrorRecoveryAction} from './ErrorNotice';
 import {Select} from './Select';
@@ -18,7 +19,8 @@ export function AlertTicketPanel({alert,busy,run,changed,openTicket,sourcePath='
  useEffect(()=>{if(d){setProjectId(d.project.id);setFields(Object.fromEntries((d.fields??[]).map(f=>[f.name,f.value])));}setTitle(d?.title??'');setDescription(d?.description??'');},[d?.hash]);
  const dirty=!!d&&(projectId!==d.project.id||title!==d.title||description!==d.description||(d.fields??[]).some(f=>(fields[f.name]??'')!==f.value));
  const missing=(d?.fields??[]).filter(f=>f.issueType&&!(fields[f.name]??'').trim()).map(f=>f.name);
- const act=(action:string,body:unknown={})=>run(async()=>{changed(await api<AlertCase>(sourcePath+'/'+alert.id+'/ticket/'+action,'POST',body));});
+ const feedback=useFeedback();
+ const act=(action:string,body:unknown={})=>run(async()=>{try{changed(await api<AlertCase>(sourcePath+'/'+alert.id+'/ticket/'+action,'POST',body));}catch(e){feedback.error(e);throw e;}});
  if(alert.ticket)return <><div className="approval-box"><h2>Linked YouTrack ticket</h2><SafeLink href={alert.ticket.url} target="_blank" rel="noreferrer">{alert.ticket.key} ↗</SafeLink><p>{d?.message??'This link stays with recurring alerts.'}</p><p className="small muted">Retriggers reuse this ticket, including after it is closed. No automatic reopen, comment or new ticket.</p></div><button onClick={()=>openTicket(alert.ticket!)}>Continue in {alert.ticket.key} →</button>{sourcePath==='/alerts'&&hasPlan&&<AlertHandoffPanel alert={alert} busy={busy} run={run} openTicket={()=>openTicket(alert.ticket!)}/>}</>;
  return <section><div className="heading"><div><h2>Create a YouTrack ticket</h2><p className="subtitle">Review the destination and message before posting.</p></div><span className="badge">{d?.state==='pending'?'Checking creation':d?'Draft · Not posted':'Not linked'}</span></div>
  {d?.message&&<><p className={d.state==='pending'?'notice':'small muted'} role="status">{d.message}</p><ErrorRecoveryAction message={d.message} context="YouTrack"/></>}

@@ -36,12 +36,15 @@ export class AlertTickets {
   if(text.includes('\0'))throw new AppError(400,'Ticket text must not contain null characters.');
  }
  private async project(id:string,ctx:Context){const p=await this.youtrack.alertProject(id,ctx);if(p.id!==id||p.archived)throw new AppError(409,'Select an available, non-archived project.');return p;}
- private async fresh(id:string){const detail=await this.alerts.work(id);if(!detail.alert.active)throw new AppError(409,'This alert is no longer firing. Review it before creating a ticket.');return detail;}
+ private async fresh(id:string){const detail=await this.alerts.work(id,0);if(!detail.alert.active)throw new AppError(409,'This alert is no longer firing. Review it before creating a ticket.');return detail;}
  private guard(id:string,d:AlertTicketDraft,ctx:Context){
   this.youtrack.assertContext(ctx);this.editable(id);
   const c=this.case(id),w=this.store.getWorkSession(c.connection,id);
-  if(ctx.connection!==d.connection||ctx.base.href!==d.endpoint||ctx.revision!==d.configRevision||c.updated!==d.sourceUpdated||(w?.revision??1)!==d.sessionRevision||!c.active)
-   throw new AppError(409,'Alert, plan, feedback or settings changed. Prepare a fresh ticket draft.');
+  // Settings saves that keep the YouTrack connection do not affect a draft.
+  if(ctx.connection!==d.connection||ctx.base.href!==d.endpoint)throw new AppError(409,'The YouTrack connection changed since this draft. Prepare a fresh ticket draft.');
+  if(!c.active)throw new AppError(409,'The alert is no longer firing. Review it, then prepare a fresh ticket draft.');
+  if(c.updated!==d.sourceUpdated)throw new AppError(409,'The alert changed since this draft (instances, labels or state). Prepare a fresh ticket draft.');
+  if((w?.revision??1)!==d.sessionRevision)throw new AppError(409,'The plan or its feedback changed since this draft. Prepare a fresh ticket draft.');
  }
  private persist(id:string,d:AlertTicketDraft){const c=this.case(id);c.ticketCreation=d;this.saveCase(c);return c;}
  private link(id:string,issue:{id:string;idReadable:string},ctx:Context,message:string){

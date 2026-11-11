@@ -11,7 +11,7 @@ export class AlertHandoffs {
  constructor(private store:Store,private alerts:Alertmanager,private youtrack:YouTrack){}
  private async read(id:string){
   const configRevision=this.store.snapshot().configRevision,epoch=this.store.credentialEpoch;
-  const source=await this.alerts.work(id),link=source.alert.ticket;
+  const source=await this.alerts.work(id,0),link=source.alert.ticket;
   if(!link||source.alert.ticketCreation?.state==='pending')throw new AppError(409,'Confirm the linked YouTrack ticket first.');
   const ctx=this.youtrack.context();
   if(ctx.connection!==link.connection)throw new AppError(409,'Restore the linked YouTrack instance before carrying the plan.');

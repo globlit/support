@@ -118,3 +118,14 @@ test('network failures name the underlying cause',async()=>{
   assert.equal(calls,3);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('opening an alert reuses a recent poll, while a check before a write polls Alertmanager again',async()=>{
+ const f=fixture();
+ try{
+  await f.alerts.poll();const id=f.alerts.queue().cases[0].id,after=f.remote.calls;
+  await f.alerts.work(id);await f.alerts.work(id);
+  assert.equal(f.remote.calls,after,'display reads use the poll of the last interval');
+  await f.alerts.work(id,0);
+  assert.equal(f.remote.calls,after+1,'a read before a write polls first');
+ }finally{f.done()}
+});
