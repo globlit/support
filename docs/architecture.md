@@ -10,17 +10,15 @@ YouTrack is the source of truth for tickets. Support stores plans, approvals, wr
 
 ## Agent
 
-The model reads with tools and returns a plan. Writes to GitLab, YouTrack and Slack happen after engineer approval only.
+With the Claude provider and **Let the agent run commands** on, each investigation is a Claude Code session in the command sandbox. Otherwise, the built-in agent loop runs in the Support server.
 
-- Service tools run in the Support server with Vault credentials.
-- `run_command` runs in the command sandbox, which has no credentials.
-- `repo_checkout` clones a GitLab repository with its history in the sandbox, through a read-only Git proxy in Support that adds the Vault token. The proxy refuses pushes, and its URLs stop working when the run ends. Without `SUPPORT_RELAY_BIND`, Support uploads an archive without history instead.
-- `propose_change` saves the edited files as a proposal. A branch and merge request are created from a proposal only after plan approval and diff review.
-- Prometheus tools query any configured server, reached by URL or through a Toolbox tunnel, and any Grafana Prometheus datasource. See [Connections](connections.md#prometheus-servers).
-- **Settings → Model → Agent instructions** is added to the system prompt after fixed rules: untrusted tool output, no writes, no secrets, and the plan format.
-- With a Claude API key, the agent can also use the provider's web search and fetch tools.
-- The engineer can message a running investigation. The agent reads each message before its next step. `ask_engineer` questions do not pause the run. Unanswered questions are listed in the plan.
-- A failed tool call is returned to the model, which can adapt. Limits are set in **Settings → Agent**.
+- **Environment:** the session runs as `admin` in `~/claude_access/.support-agent/work/<source>-<key>`. Your `~/claude_access` is mounted at the same path and `CLAUDE_CONFIG_DIR` is `~/claude_access/.claude`, so the agent uses your CLAUDE.md files, settings, skills, plugins and memory.
+- **Tools:** all Claude Code tools (Bash, files, web, sub-agents), plus the Support tools over MCP: Toolbox, Prometheus, Grafana, Outline, GitLab, YouTrack, Alertmanager. In Bash and scripts, `kubectl` (read-only, through Toolbox) and `support <tool> '<json>'` call the same tools.
+- **Credentials:** the sandbox has a placeholder credential. The agent gateway in Support (port 7072 on the relay address) replaces it with the real one for model requests only. Gateway URLs contain a session token that expires with the session.
+- **Results:** the agent ends with `submit_result`: diagnosis, plan, questions or inconclusive. Only a plan from a session with successful checks becomes a plan version that can be approved. The first `submit_result` returns a review reminder.
+- **Conversation:** the Investigation step shows the runs of a request as one conversation. Each run is a work block between the engineer turn that started it and its result; plan versions appear where they were produced. The message box continues the latest session of the shown branch (answers, comments, queued plan comments). **Recheck the request** continues it with the current ticket data. **Start over** opens a new session. **Restart from this version** on an older plan card branches from the session that produced that version. Each run forks the session it builds on, so branches stay independent. **Implement with the agent**, after approval, continues the session of the run that produced the approved plan.
+- **Tool usage:** each run and the dashboard count tool calls: shell commands by their first program, Support tools by integration.
+- **Approvals:** **Cancel approval** returns a plan to review, except while a GitLab write for it needs verification. Writes to GitLab, YouTrack and Slack still need engineer approval.
 - **Stop all** in the agent console stops every run, command and tunnel. It blocks new runs until **Resume**.
 
 ## Investigation queue

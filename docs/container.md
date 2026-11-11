@@ -25,3 +25,16 @@ Mount `/home/node/.claude` to keep the login when the container is recreated.
 ## Command sandbox
 
 Set `SUPPORT_SANDBOX_URL` to let the agent run shell commands in a separate sandbox service. Set `SUPPORT_RELAY_BIND` to an address of Support that the sandbox can reach, so that sandbox commands can use port-forward tunnels and clone GitLab repositories through the Git proxy on port 7071 (`SUPPORT_GIT_PROXY_PORT`). The claude-jail compose file sets both.
+
+## Agent sessions
+
+The claude-jail compose file sets these for the Claude Code engine:
+
+| Variable | Service | Purpose |
+| --- | --- | --- |
+| `CLAUDE_ACCESS_PATH` | both | Host path of `~/claude_access`, mounted at the same path. Default: `$HOME/claude_access`. |
+| `SUPPORT_CLAUDE_TOKEN_FILE` | support | Claude subscription token added by the agent gateway. |
+| `SANDBOX_AGENT_ROOT` | support-sandbox | Folder under which agent sessions run. |
+
+The sandbox rejects traffic to private networks, except DNS, the Git proxy (7071), the agent gateway (7072) and tunnel relays. Commands run as `admin`; the sandbox server runs as `sandboxd` and cannot be signalled by them.
+

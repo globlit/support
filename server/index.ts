@@ -41,7 +41,7 @@ import { AlertTickets,alertDraftInput } from './alert-tickets.js';
 import { Alertmanager } from './alertmanager.js';
 import { Claude } from './claude.js';
 import { YouTrack } from './youtrack.js';
-import { connectionNames,configSchema ,toolboxSettingsSchema} from '../src/model.js';
+import { connectionNames,configSchema ,toolboxSettingsSchema,type RunBasis} from '../src/model.js';
 import {credentialInput,storedCredential} from './service-auth.js';
 process.umask(0o077);
 const runtime=deployment(),{port}=runtime,origin=runtime.publicOrigin;
@@ -77,21 +77,25 @@ const pipelines=new Pipelines(store,youtrack,transport,resolveSource);
 const resolutions=new Resolutions(store,youtrack,transport,resolveSource);
 const replies=new IncomingReplies(store,resolveSource,slack,resolutions,transport);
 const slackTimer=setInterval(()=>void slack.tick(agentQueue),5000);slackTimer.unref();
+/** Starts a run of a request on `basis`, through the source that owns the request (YouTrack, alerts or Slack). */
+async function startRun(connection:string,issueId:string,basis:RunBasis){
+ const kind=sourceKind(connection);
+ const detail=kind==='alert'?await alerts.work(issueId):kind==='slack'?await slack.work(issueId):await youtrack.work(issueId);
+ const expected={revision:detail.session.revision,sourceUpdated:detail.issue.updated};
+ return kind==='alert'?alerts.analyze(issueId,expected,claude,basis):claude.start(issueId,expected,kind==='slack'?slack:youtrack,basis);
+}
 /**
- * Continues a finished Claude Code session with the engineer's text, as a new run of the same request. Answers the
- * open questions of the earlier run. A running session receives the text as a message instead.
+ * Continues the session of a run with the engineer's text (`continue`), or rechecks the request in it (`recheck`).
+ * A running session receives the text as a message instead. A continuation answers the run's open questions.
  */
-async function continueRun(runId:string,text:string,by:string){
+async function continueRun(runId:string,text:string,by:string,kind:'continue'|'recheck'='continue'){
  if(claude.isActive(runId))return {message:claude.message(runId,{text},by)};
  const parent=claude.status(runId);
- if(!parent.connection||!parent.sessionId)throw new AppError(409,'This run has no agent session to continue. Start a new investigation.');
- const kind=sourceKind(parent.connection);
- const detail=kind==='alert'?await alerts.work(parent.issueId):kind==='slack'?await slack.work(parent.issueId):await youtrack.work(parent.issueId);
- const expected={revision:detail.session.revision,sourceUpdated:detail.issue.updated};
+ if(!parent.connection||!parent.sessionId)throw new AppError(409,'This run has no agent session to continue. Start over instead.');
  const open=(parent.questions??[]).filter(q=>!q.answer);
- const prompt=open.length?`The engineer answered your questions:\n${open.map(q=>`- ${q.text}`).join('\n')}\n\nAnswer:\n${text}`:`Message from the engineer:\n${text}`;
- const run=kind==='alert'?await alerts.analyze(parent.issueId,expected,claude,{prompt,parentRunId:runId}):await claude.start(parent.issueId,expected,kind==='slack'?slack:youtrack,{prompt,parentRunId:runId});
- claude.answerQuestions(runId,text,by);
+ const prompt=kind==='recheck'?text:open.length?`The engineer answered your questions:\n${open.map(q=>`- ${q.text}`).join('\n')}\n\nAnswer:\n${text}`:`Message from the engineer:\n${text}`;
+ const run=await startRun(parent.connection,parent.issueId,{kind,runId,text,...(kind==='continue'?{prompt}:{}),by});
+ if(kind==='continue')claude.answerQuestions(runId,text,by);
  return {run};
 }
 claude.onResume((run,prompt)=>continueRun(run.id,prompt,'Support'));
@@ -139,8 +143,26 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   return;
  }
  const agentMessage=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/message$/);
+ const requestInput=z.object({connection:z.string().min(1).max(300),issueId:z.string().min(1).max(300)});
+ if(path==='/api/agent/implement'&&req.method==='POST'){
+  const v=requestInput.strict().parse(await body(req));
+  const w=store.getWorkSession(v.connection,v.issueId);if(!w?.approval)throw new AppError(409,'Approve the plan before asking the agent to implement it.');
+  const plan=w.plans.find(p=>p.version===w.approval!.version);if(!plan)throw new AppError(409,'The approved plan version no longer exists.');
+  const from=(plan.runId&&store.investigations(v.connection,v.issueId).find(r=>r.id===plan.runId&&r.sessionId))??store.investigations(v.connection,v.issueId).find(r=>r.sessionId);
+  if(!from)throw new AppError(409,'No agent session exists for this request. Investigate it first.');
+  const text=['The engineer approved plan version '+plan.version+'. Implement it now.','Work in a git worktree of each repository you change, starting from the current default branch. Make the changes, then validate them as far as possible: lint, template, dry-run, tests. Fix what fails.','When a repository is ready, call propose_change with its folder and the commit you started from. Then call submit_result with outcome plan, and a report of the changes and of the validation you ran. If the plan cannot be implemented as written, explain why with needs_input.','Approved plan:','',plan.text].join('\n');
+  return send(res,{run:await startRun(v.connection,v.issueId,{kind:'implement',runId:from.id,planVersion:plan.version,prompt:text,by:session.principal.name})});
+ }
+ if(path==='/api/agent/restart'&&req.method==='POST'){
+  const v=requestInput.extend({planVersion:z.number().int().min(1),text:z.string().trim().max(16000).optional()}).strict().parse(await body(req));
+  return send(res,{run:await startRun(v.connection,v.issueId,{kind:'restart',planVersion:v.planVersion,text:v.text||undefined,by:session.principal.name})});
+ }
+ if(path==='/api/agent/start-over'&&req.method==='POST'){
+  const v=requestInput.extend({text:z.string().trim().max(16000).optional()}).strict().parse(await body(req));
+  return send(res,{run:await startRun(v.connection,v.issueId,{kind:'over',text:v.text||undefined,by:session.principal.name})});
+ }
  const agentContinue=path.match(/^\/api\/agent\/runs\/([0-9a-f-]{36})\/continue$/);
- if(agentContinue&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(16000)}).strict().parse(await body(req));return send(res,await continueRun(agentContinue[1],v.text,session.principal.name));}
+ if(agentContinue&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(16000),kind:z.enum(['continue','recheck']).optional()}).strict().parse(await body(req));return send(res,await continueRun(agentContinue[1],v.text,session.principal.name,v.kind));}
  if(agentMessage&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(4000),replyTo:z.string().uuid().optional()}).strict().parse(await body(req));return send(res,claude.message(agentMessage[1],v,session.principal.name));}
  const agentRunStop=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/stop$/);
  if(agentRunStop&&req.method==='POST'){await body(req);claude.cancel(agentRunStop[1]);return send(res,await agentState());}

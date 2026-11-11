@@ -103,7 +103,7 @@ test('a Claude Code session streams into the run, gets a review on its first res
   assert.ok(s.events.some(e=>e.tool==='Bash'&&e.status==='complete'&&e.result==='policy deny-all found'));
   assert.ok(!JSON.stringify(s.events).includes('never-send-this'));
   assert.deepEqual(inputs.at(-1),{end:true});
-  assert.deepEqual(f.store.get('agentSession:'+s.connection+':2-42'),{...f.store.get<object>('agentSession:'+s.connection+':2-42'),sessionId:'sess-1'});
+  assert.deepEqual(s.basedOn?.kind,'start');assert.equal(f.store.workSession({connection:s.connection!,id:'2-42',key:'INFRA-42',title:'',description:'',updated:1000,resolved:false,status:'',severity:'',assignee:'',project:'',fields:{},url:''}).plans.at(-1)?.runId,s.id);
  }finally{gw.close();f.done();Object.assign(process.env,env);for(const [k,v] of Object.entries(env))if(v===undefined)delete process.env[k];}
 });
 

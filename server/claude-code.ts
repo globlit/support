@@ -15,9 +15,6 @@ export const sharedFolder=()=>process.env.SUPPORT_CLAUDE_ACCESS_PATH?.trim()||un
 export function agentEngineReady(config:Config,gateway?:AgentGateway){
  return config.modelProvider==='anthropic'&&config.modelAuth!=='chatgpt'&&config.agentCommands&&!!sandboxUrl()&&!!gateway?.listening&&!!sharedFolder();
 }
-const sessionKey=(connection:string,id:string)=>`agentSession:${connection}:${id}`;
-/** Claude Code session of a request, kept so that later runs continue from it. */
-export function savedSession(store:Store,connection:string,id:string){return store.get<{sessionId:string;cwd:string;at:string}>(sessionKey(connection,id));}
 /** Working folder of a request: every run of the same ticket, alert or Slack thread uses it, so sessions can be resumed. */
 export function workFolder(issue:Pick<SourceIssue,'connection'|'id'|'key'>){
  const name=`${sourceKind(issue.connection)}-${(issue.key||issue.id).replace(/[^A-Za-z0-9._-]/g,'-')}`.slice(0,120);
@@ -82,12 +79,14 @@ export async function runClaudeCode(ctx:Ctx){
   '--mcp-config',JSON.stringify({mcpServers:{support:{type:'http',url:`${gw.url}/mcp`}}}),
   ...(ctx.resume?['--resume',ctx.resume.sessionId,...(ctx.resume.fork?['--fork-session']:[])]:[])];
  const env:Record<string,string>={ANTHROPIC_BASE_URL:gw.url,CLAUDE_CONFIG_DIR:`${shared}/.claude`,SUPPORT_TOOLS_URL:gw.url,SUPPORT_RUN_ID:run.id,PATH:pathEnv,DISABLE_AUTOUPDATER:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',
+  // Support tools are listed to the model from the first turn instead of behind tool search.
+  ENABLE_TOOL_SEARCH:'false',
   ...(config.modelAuth==='api_key'?{ANTHROPIC_API_KEY:'support-gateway'}:{CLAUDE_CODE_OAUTH_TOKEN:'support-gateway'})};
  const onLine=(line:{type:'stdout'|'stderr';data:string})=>{
   if(line.type==='stderr'){const t=ctx.redact(line.data).trim();if(t)agentFeed.publish(run.id,'output',t.slice(0,2000));return;}
   let m:{type?:string;subtype?:string;session_id?:string;message?:{content?:unknown[]};result?:string;is_error?:boolean;api_error_status?:number|null};
   try{m=JSON.parse(line.data);}catch{return;}
-  if(m.session_id&&run.sessionId!==m.session_id){run.sessionId=m.session_id;store.put(sessionKey(run.connection!,run.issueId),{sessionId:m.session_id,cwd:workFolder(ctx.issue),at:new Date().toISOString()});}
+  if(m.session_id&&run.sessionId!==m.session_id){run.sessionId=m.session_id;ctx.persist();}
   if(m.type==='assistant')for(const b of (m.message?.content??[]) as {type?:string;text?:string;id?:string;name?:string;input?:unknown}[]){
    if(b.type==='text'&&b.text?.trim()){lastText=b.text;const t=ctx.redact(b.text);event({at:new Date().toISOString(),text:'Agent note',tool:'note',result:t.slice(0,8000),status:'complete'});agentFeed.publish(run.id,'step',t.slice(0,600));}
    if(b.type==='tool_use'&&b.id&&b.name){

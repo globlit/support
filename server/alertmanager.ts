@@ -7,7 +7,7 @@ import {serviceAuthHeaders} from './service-auth.js';
 import {localAction,YouTrack} from './youtrack.js';
 import type {Claude} from './claude.js';
 import type {AgentQueue} from './agent-queue.js';
-import type {AlertCase,AlertMember,AlertQueue,SourceIssue,AlertDetail} from '../src/model.js';
+import type {AlertCase,AlertMember,AlertQueue,SourceIssue,AlertDetail,RunBasis} from '../src/model.js';
 
 const labels=z.record(z.string().max(200),z.string().max(16000)).refine(v=>Object.keys(v).length<=100);
 const alertSchema=z.object({fingerprint:z.string().min(1).max(128),labels,annotations:labels,
@@ -135,8 +135,8 @@ export class Alertmanager {
  }
  /** Records a failed automatic start on the alert case, as shown in the alert's investigation step. */
  recordStartFailure(id:string,error:unknown){const c=this.store.alert(id);c.autoAttempt=c.episodes;this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(c.connection+':'+c.id,this.source(c).sourceFingerprint??String(c.updated),new Date().toISOString());c.run={id:'',issueId:c.id,state:'failed',startedAt:new Date().toISOString(),events:[],error:error instanceof AppError?error.message:'Investigation could not start.'};this.store.saveAlert(c);}
- async analyze(id:string,expected:{revision:number;sourceUpdated:number},claude:Claude,resume?:{prompt:string;parentRunId:string}){
-  assertHandling(this.store,{connection:this.store.alert(id).connection,id});const run=await claude.start(id,expected,this,resume);
+ async analyze(id:string,expected:{revision:number;sourceUpdated:number},claude:Claude,basis?:RunBasis){
+  assertHandling(this.store,{connection:this.store.alert(id).connection,id});const run=await claude.start(id,expected,this,basis);
   const c=this.store.alert(id);c.autoAttempt=c.episodes;c.run=run;this.store.saveAlert(c);return run;
  }
  private syncRuns(claude:Claude){for(const c of this.store.alertCases())if(c.run?.state==='running'){

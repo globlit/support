@@ -3,6 +3,7 @@ import {sourceKind,handlingLabel} from '../src/intake-model.js';
 import {decorateDispositions} from './ai-dispositions.js';
 import {Store,AppError} from './store.js';
 import {Claude} from './claude.js';
+import {countTools} from '../src/tool-usage.js';
 import type {AnalysisRun} from '../src/model.js';
 import type {AIOverview,AIState,AIWorkflow,AIRunSummary} from '../src/ai-model.js';
 export type SessionSummary={connection:string;issueId:string;sourceKey?:string;updatedAt:string;sourceChangedAt?:string;pendingRevision?:number;planVersion?:number;planAt?:string;approval?:string;noteAt?:string};
@@ -17,7 +18,7 @@ export function summarizeRun(run:AnalysisRun,now=Date.now()):AIRunSummary{
  const checks=run.events.filter(e=>e.tool),last=checks.slice(-3);
  const repeating=last.length===3&&last.every(e=>e.tool===last[0].tool&&e.input===last[0].input)&&!!last[0].input;
  const updatedAt=run.finishedAt??run.events.at(-1)?.at??run.startedAt;
- return {activity:activityBuckets(run,now),id:run.id,connection:run.connection!,issueId:run.issueId,kind:run.kind??'investigation',state:run.state==='running'?'running':run.state==='failed'?'blocked':run.state==='cancelled'?'stopped':'completed',model:run.model,startedAt:run.startedAt,finishedAt:run.finishedAt,updatedAt,step:run.events.at(-1)?.text??(run.state==='running'?'Starting…':'Run finished'),error:run.error,checks:checks.length,repeating,quiet:run.state==='running'&&now-Date.parse(updatedAt)>60000};
+ return {tools:countTools(run.events),activity:activityBuckets(run,now),id:run.id,connection:run.connection!,issueId:run.issueId,kind:run.kind??'investigation',state:run.state==='running'?'running':run.state==='failed'?'blocked':run.state==='cancelled'?'stopped':'completed',model:run.model,startedAt:run.startedAt,finishedAt:run.finishedAt,updatedAt,step:run.events.at(-1)?.text??(run.state==='running'?'Starting…':'Run finished'),error:run.error,checks:checks.length,repeating,quiet:run.state==='running'&&now-Date.parse(updatedAt)>60000};
 }
 export function workflowState(session:SessionSummary|undefined,change:ChangeSummary|undefined,run:AIRunSummary|undefined):Pick<AIWorkflow,'state'|'stage'|'reason'>{
  const state=(state:AIState,stage:string,reason:string)=>({state,stage,reason});

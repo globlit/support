@@ -4,6 +4,7 @@ import type {AIOverview} from '../src/ai-model.js';
 import type {DashboardData} from '../src/dashboard-model.js';
 import type {Store} from './store.js';
 import {pruneLogs} from './diagnostics.js';
+import {mergeCounts,type ToolCount} from '../src/tool-usage.js';
 export function dashboardSummary(overview:AIOverview,days:number,timezone:string,retentionDays:number,now=Date.now(),interval:'hour'|'day'='day'):DashboardData{
  const date=(time:number)=>new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(time);
  const today=date(now),daily:DashboardData['daily']=[];const utc=new Date(today+'T12:00:00Z');
@@ -17,7 +18,8 @@ export function dashboardSummary(overview:AIOverview,days:number,timezone:string
  for(const run of runs){const bucket=map.get(bucketKey(Date.parse(run.startedAt)))!;bucket[run.state==='completed'?'completed':run.state==='blocked'?'failed':run.state==='stopped'?'stopped':'running']++;if(run.finishedAt){const seconds=(Date.parse(run.finishedAt)-Date.parse(run.startedAt))/1000;if(seconds>=0&&Number.isFinite(seconds))durations.push(seconds);}}
  durations.sort((a,b)=>a-b);const middle=Math.floor(durations.length/2);const completed=runs.filter(r=>r.state==='completed').length,failed=runs.filter(r=>r.state==='blocked').length,stopped=runs.filter(r=>r.state==='stopped').length,finished=completed+failed+stopped;
  const workflows:DashboardData['workflows']={running:0,waiting:0,blocked:0,stopped:0,completed:0};for(const w of overview.workflows)if(!w.disposition)workflows[w.state]++;
- return {interval,checks:runs.reduce((sum,r)=>sum+r.checks,0),repeatedRuns:runs.filter(r=>r.repeating).length,runSeconds:durations.reduce((sum,n)=>sum+n,0),loadedAt:new Date(now).toISOString(),days,timezone,sampleLimit:overview.historyLimit,retentionDays,totalRuns:runs.length,completedRuns:completed,failedRuns:failed,stoppedRuns:stopped,activeRuns:runs.filter(r=>r.state==='running').length,completionRate:finished?Math.round(completed/finished*100):null,medianSeconds:durations.length?(durations.length%2?durations[middle]:(durations[middle-1]+durations[middle])/2):null,workflows,daily,tools:[]};
+ const toolUsage=[...runs.reduce((m,r)=>mergeCounts(m,r.tools??[]),new Map<string,ToolCount>()).values()].sort((a,b)=>b.total-a.total||a.label.localeCompare(b.label));
+ return {toolUsage,interval,checks:runs.reduce((sum,r)=>sum+r.checks,0),repeatedRuns:runs.filter(r=>r.repeating).length,runSeconds:durations.reduce((sum,n)=>sum+n,0),loadedAt:new Date(now).toISOString(),days,timezone,sampleLimit:overview.historyLimit,retentionDays,totalRuns:runs.length,completedRuns:completed,failedRuns:failed,stoppedRuns:stopped,activeRuns:runs.filter(r=>r.state==='running').length,completionRate:finished?Math.round(completed/finished*100):null,medianSeconds:durations.length?(durations.length%2?durations[middle]:(durations[middle-1]+durations[middle])/2):null,workflows,daily,tools:[]};
 }
 export function usageSeries(buckets:DashboardData['daily'],interval:'hour'|'day',timezone:string){
  const series=buckets.map(b=>({date:b.date,label:b.label,input:0,output:0,responses:0}));

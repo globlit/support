@@ -13,10 +13,10 @@ import {readToolboxLogs} from './toolbox.js';
 import {repoCheckout,proposeChange} from './repo-tools.js';
 import type {GitProxy} from './git-proxy.js';
 import type {AgentGateway} from './agent-gateway.js';
-import {agentEngineReady,runClaudeCode,savedSession} from './claude-code.js';
+import {agentEngineReady,runClaudeCode} from './claude-code.js';
 import {sourcePage} from '../src/intake-model.js';
 import {PrometheusSources,prometheusEndpoints} from './prometheus-sources.js';
-import type {AnalysisRun,SourceIssue} from '../src/model.js';
+import type {AnalysisRun,RunBasis,SourceIssue} from '../src/model.js';
 
 /** Abort reason recorded as the run error, so that logs and the console show why a run stopped. */
 const stopReason=(message:string)=>new AppError(409,message);
@@ -97,10 +97,10 @@ export class Claude {
  cancelAll(){for(const c of this.active.values())c.abort(stopReason('Stopped by the kill switch (Stop all).'));return this.active.size;}
  private base(endpoint:string){const u=new URL(endpoint.replace(/\/+$/,'')+'/');if(u.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(u.hostname))throw new AppError(400,'Use HTTPS for model and tool connections.');return u}
  /**
-  * Starts an investigation. With `resume`, the run continues the Claude Code session of an earlier run with `prompt`
-  * instead of starting a new investigation of the request.
+  * Starts a run of a request. `basis` says what it builds on; see RunBasis. Without it, a request that already has an
+  * agent session is rechecked in its latest session, and other requests get a first investigation.
   */
- async start(id:string,expected:{revision:number;sourceUpdated:number},source:Pick<YouTrack,'work'|'issue'>=this.youtrack,resume?:{prompt:string;parentRunId:string}){
+ async start(id:string,expected:{revision:number;sourceUpdated:number},source:Pick<YouTrack,'work'|'issue'>=this.youtrack,basis?:RunBasis){
   assertAgentRunning(this.store);
   const config=this.store.snapshot().config;
   const model=config.connections.Model;
@@ -112,7 +112,7 @@ export class Claude {
   const release=this.store.claimAnalysis((source===this.youtrack?'youtrack:':'alert:')+id,run.id);
   const controller=new AbortController();this.active.set(run.id,controller);
   const agentEngine=agentEngineReady(this.store.snapshot().config,this.gateway);
-  if(resume&&!agentEngine)throw new AppError(409,'Continuing a session needs the Claude Code engine: Claude provider, agent commands on, and the sandbox and gateway available.');
+  if(basis&&!['start','over'].includes(basis.kind)&&!agentEngine)throw new AppError(409,'Continuing a session needs the Claude Code engine: Claude provider, agent commands on, and the sandbox and gateway available.');
   const check=()=>{if(agentEngine){if(controller.signal.aborted)throw new AppError(409,'Analysis cancelled.');if(!this.store.key)throw new AppError(409,'The Vault was locked.');if(run.connection)assertAgentWork(this.store,{connection:run.connection,id});return;}if(run.connection){assertAgentWork(this.store,{connection:run.connection,id});const w=this.store.getWorkSession(run.connection,id);if(w&&w.revision!==expected.revision)throw new AppError(409,'Handling or local work changed. Start a new investigation.');}if(controller.signal.aborted)throw new AppError(409,'Analysis cancelled.');if(revision!==this.store.snapshot().configRevision||epoch!==this.store.credentialEpoch||!this.store.key)throw new AppError(409,'Settings or vault changed. Start a new analysis.');};
   try {
    const key=agentEngine&&config.modelAuth==='claude_cli'?'':await modelKey(this.store);check();
@@ -123,18 +123,27 @@ export class Claude {
    this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(detail.issue.connection+':'+id,detail.issue.sourceFingerprint??String(detail.issue.updated),new Date().toISOString());
    // Tool traces are encrypted in the Vault.
    while(this.runs.size>50)this.runs.delete(this.runs.keys().next().value!);
-   if(resume)run.parentRunId=resume.parentRunId;
-   void (agentEngine?this.executeAgent(run,detail.issue,expected.revision,model.scope,config,controller,check,source,resume):this.execute(run,detail.issue,expected.revision,base,key,model.scope,config,controller,check,source)).finally(()=>{this.active.delete(run.id);release();});
+   if(!basis){
+    const latest=agentEngine?this.store.investigations(detail.issue.connection,id).find(r=>r.sessionId):undefined;
+    const plan=detail.session.plans.at(-1),comments=detail.session.notes.filter(n=>n.text.startsWith('Revision requested: ')&&n.at>=(plan?.at??''));
+    // Queued plan comments continue the session as a revision request; otherwise the request is rechecked.
+    basis=latest&&comments.length?{kind:'continue',runId:latest.id,text:`Revise plan v${plan?.version} with ${comments.length} comment${comments.length===1?'':'s'}`,prompt:['The engineer reviewed plan v'+plan?.version+' and asks for these changes. Check each one, investigate further where needed, and submit a revised plan.',...comments.map(n=>'- '+n.text.slice('Revision requested: '.length))].join('\n')}
+     :latest?{kind:'recheck',runId:latest.id,text:'Recheck the request with its current data.'}:{kind:'start'};
+   }
+   run.basedOn={...basis,at:basis.at??run.startedAt};if(basis.runId)run.parentRunId=basis.runId;this.store.saveInvestigation(run);
+   void (agentEngine?this.executeAgent(run,detail.issue,expected.revision,model.scope,config,controller,check,source,run.basedOn):this.execute(run,detail.issue,expected.revision,base,key,model.scope,config,controller,check,source)).finally(()=>{this.active.delete(run.id);release();});
    return this.status(run.id);
   } catch(e){this.active.delete(run.id);release();throw e;}
  }
  /**
-  * Runs an investigation as a Claude Code session in the sandbox. A new investigation of a request forks the
-  * request's earlier session, so that the agent keeps what it learned. A continuation resumes the session itself.
+  * Runs a request as a Claude Code session in the sandbox. The session forks the session of the run named by `basis`
+  * (or, for a restart, of the run that produced the chosen plan version), so that each run keeps its own session.
   * A result with outcome plan becomes a plan version for review only when the session had successful checks.
   */
- private async executeAgent(run:AnalysisRun,issue:SourceIssue,sessionRevision:number,model:string,config:ReturnType<Store['snapshot']>['config'],controller:AbortController,check:()=>void,source:Pick<YouTrack,'work'|'issue'>,resume?:{prompt:string;parentRunId:string}){
+ private async executeAgent(run:AnalysisRun,issue:SourceIssue,sessionRevision:number,model:string,config:ReturnType<Store['snapshot']>['config'],controller:AbortController,check:()=>void,source:Pick<YouTrack,'work'|'issue'>,basis:RunBasis){
   run.engine='claude-code';
+  // An implementation run attaches its proposals to the approved plan version and creates no new version.
+  if(basis.kind==='implement')run.planVersion=basis.planVersion;
   const timeout=setTimeout(()=>controller.abort(stopReason(`Stopped after the ${config.agentLimits.runMinutes}-minute run limit.`)),config.agentLimits.runMinutes*60_000+30_000);
   agentFeed.start({runId:run.id,title:`${issue.key??issue.id} · ${issue.title}`.slice(0,160),route:{page:sourcePage(issue.connection),issue:issue.id},startedAt:run.startedAt});
   const secrets=this.store.secretValues();
@@ -144,18 +153,23 @@ export class Claude {
   const event=(text:string)=>{run.events.push({at:new Date().toISOString(),text});persist();agentFeed.publish(run.id,'step',text);};
   let limitedUntil:string|undefined,limited=false;
   try{
-   const saved=savedSession(this.store,issue.connection,issue.id);
    const current=this.store.workSession(issue);
    const filteredJSON=(value:unknown)=>JSON.stringify(value,(key,value)=>/password|secret|token|authorization|api[_-]?key|private[_-]?key/i.test(key)?'[redacted]':typeof value==='string'?redact(value):value,1);
-   const prompt=resume?resume.prompt:[
-    saved?'A new investigation of the same request starts here. The request may have changed since your earlier work: use the current data below as the source of truth.':'Investigate this request.',
-    'Find the cause before proposing a change. Use every source available to you, keep notes in your working folder, and finish with submit_result.',
-    '```json',filteredJSON({request:issue,previousPlan:current.plans.at(-1)?.text,notes:current.notes.slice(-30),recentAlertHandoffs:current.alertHandoffs?.slice(-3)}),'```',
-   ].join('\n\n');
-   event(resume?'Continuing the agent session':saved?'Starting from the earlier session of this request':'Starting a new agent session');
+   const requestData=()=>['```json',filteredJSON({request:issue,latestPlan:current.plans.at(-1)?.text,notes:current.notes.slice(-30),recentAlertHandoffs:current.alertHandoffs?.slice(-3)}),'```'].join('\n');
+   // Every run forks the session it builds on, so that each run keeps its own session and branches stay independent.
+   const from=basis.kind==='restart'?current.plans.find(p=>p.version===basis.planVersion)?.runId:basis.runId;
+   const sessionId=from?this.store.investigation(from).sessionId:undefined;
+   if(['continue','recheck','implement','restart'].includes(basis.kind)&&!sessionId&&basis.kind!=='restart')throw new AppError(409,'The run to continue has no agent session. Start over instead.');
+   const restartPlan=basis.kind==='restart'?current.plans.find(p=>p.version===basis.planVersion):undefined;
+   if(basis.kind==='restart'&&!restartPlan)throw new AppError(409,`Plan version ${basis.planVersion} no longer exists.`);
+   const prompt=basis.kind==='continue'||basis.kind==='implement'?basis.prompt??basis.text??'':
+    basis.kind==='recheck'?['The engineer asks you to recheck this request with its current data. Re-verify your conclusion, look for what changed, and report.',basis.text&&basis.text!=='Recheck the request with its current data.'?`Engineer note: ${basis.text}`:'',requestData()].filter(Boolean).join('\n\n'):
+    basis.kind==='restart'?[`Restart from plan version ${basis.planVersion}, which the engineer chose as the starting point. Later work on other versions does not apply. Re-verify it against the current data and continue the investigation from there.`,basis.text?`Engineer note: ${basis.text}`:'','Plan version '+basis.planVersion+':','',restartPlan!.text,requestData()].filter(Boolean).join('\n\n'):
+    ['Investigate this request.','Find the cause before proposing a change. Use every source available to you, keep notes in your working folder, and finish with submit_result.',basis.text?`Engineer note: ${basis.text}`:'',requestData()].filter(Boolean).join('\n\n');
+   event({start:'Starting a new agent session',over:'Starting over in a new agent session',continue:'Continuing the agent session',recheck:'Rechecking the request in the agent session',restart:`Restarting from plan v${basis.planVersion}`,implement:`Implementing plan v${basis.planVersion}`}[basis.kind]);
    check();
    const outcome=await runClaudeCode({store:this.store,youtrack:this.youtrack,fetcher:this.fetcher,gateway:this.gateway!,gitProxy:this.gitProxy,run,issue,config,model,prompt,
-    resume:resume&&run.parentRunId?{sessionId:this.store.investigation(resume.parentRunId).sessionId??saved?.sessionId??'',fork:false}:saved?{sessionId:saved.sessionId,fork:true}:undefined,
+    resume:sessionId?{sessionId,fork:true}:undefined,
     signal:controller.signal,redact,persist,
     onQuestion:q=>{for(const l of this.questionListeners)l(run,q);},
     onLimit:resetAt=>{limited=true;limitedUntil=resetAt;}});
@@ -163,8 +177,9 @@ export class Claude {
    const r=outcome.result;
    if(!r)throw new AppError(502,'The agent ended without a result. Its notes are in the timeline.');
    run.outcome=r.outcome;run.report=r.report;
-   for(const text of r.questions){if(!run.questions?.some(q=>q.text===text))run.questions=[...(run.questions??[]),{id:randomUUID(),text,at:new Date().toISOString()}];}
-   if(r.outcome==='plan'&&outcome.checks>0){
+   for(const text of r.questions){if(!run.questions?.some(q=>q.text===text)){const q={id:randomUUID(),text,at:new Date().toISOString()};run.questions=[...(run.questions??[]),q];for(const l of this.questionListeners)l(run,q);}}
+   if(basis.kind==='implement'){event(run.proposals?.length?`${run.proposals.length} change proposal${run.proposals.length===1?'':'s'} ready for review`:'No change proposal was submitted');}
+   else if(r.outcome==='plan'&&outcome.checks>0){
     const fresh=await source.issue(issue.id);check();
     if(fresh.connection!==issue.connection||fresh.resolved)throw new AppError(409,'The request was closed or moved during the investigation.');
     const open=(run.questions??[]).filter(q=>!q.answer);
@@ -172,7 +187,7 @@ export class Claude {
     const text=[r.report,...(proposals.length?['## Proposed code changes',...proposals]:[]),...(open.length?['## Open questions',...open.map(q=>`- ${q.text}`)]:[])].join('\n\n');
     this.store.transaction(()=>{
      const session=this.store.workSession(fresh);
-     session.plans.push({version:session.plans.length+1,text:text.slice(0,60000),at:new Date().toISOString()});
+     session.plans.push({version:session.plans.length+1,text:text.slice(0,60000),at:new Date().toISOString(),runId:run.id});
      if(r.replyDraft)session.draft=r.replyDraft;delete session.sourceChangedAt;session.pendingRevision=false;session.approval=null;session.revision++;session.updatedAt=new Date().toISOString();session.analysis={model,events:run.events.filter(e=>e.tool!=='note').slice(-200).map(({at,text})=>({at,text}))};
      this.store.saveWorkSession(session);
     });
@@ -305,7 +320,7 @@ export class Claude {
      this.store.transaction(()=>{
       const session=this.store.workSession(fresh);if(session.revision!==sessionRevision)throw new AppError(409,'Local feedback or plan changed during analysis. Start a new analysis.');
       event('Plan ready for engineer review');
-      session.plans.push({version:session.plans.length+1,text:redact(plan.plan),at:new Date().toISOString()});
+      session.plans.push({version:session.plans.length+1,text:redact(plan.plan),at:new Date().toISOString(),runId:run.id});
       session.draft=redact(plan.replyDraft);delete session.sourceChangedAt;session.pendingRevision=false;session.approval=null;session.revision++;session.updatedAt=new Date().toISOString();session.analysis={model,events:run.events.map(({at,text})=>({at,text}))};
       this.store.saveWorkSession(session);
      });
