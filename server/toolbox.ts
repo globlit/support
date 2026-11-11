@@ -14,10 +14,23 @@ export function toolboxEnvironment(source:NodeJS.ProcessEnv=process.env){
  for(const key of ['HOME','PATH','LANG','LC_ALL','TMPDIR','SSL_CERT_FILE','SSL_CERT_DIR','NODE_EXTRA_CA_CERTS','HTTP_PROXY','HTTPS_PROXY','NO_PROXY','NODE_USE_ENV_PROXY'])if(source[key])env[key]=source[key];
  return env;
 }
-/** Namespaced resources of the Toolbox v0.4 catalog (docs/catalog.md). ConfigMaps are separate because a setting enables them. */
-export const namespacedResources=['pods','services','endpoints','events','persistentvolumeclaims','deployments','statefulsets','daemonsets','replicasets','jobs','cronjobs','endpointslices','ingresses','networkpolicies','horizontalpodautoscalers','poddisruptionbudgets','certificates','certificaterequests','issuers','orders','challenges','clusters.postgresql.cnpg.io','backups.postgresql.cnpg.io','scheduledbackups.postgresql.cnpg.io','poolers.postgresql.cnpg.io','databases.postgresql.cnpg.io','rabbitmqclusters','opensearchclusters','prometheuses','alertmanagers','servicemonitors','podmonitors','prometheusrules','probes','kustomizations','helmreleases','gitrepositories','helmrepositories','sealedsecrets','gateways','httproutes','grpcroutes','ciliumendpoints','ciliumnetworkpolicies','pods.metrics.k8s.io'] as const;
-/** Cluster-scoped resources of the Toolbox v0.4 catalog, readable when cluster-wide access is enabled. */
-export const clusterResources=['nodes','namespaces','persistentvolumes','storageclasses','clusterissuers','gatewayclasses','ciliumnodes','ciliumclusterwidenetworkpolicies','nodes.metrics.k8s.io'] as const;
+/**
+ * Namespaced resources of the Toolbox catalog (internal/integrations/kubectl/policy.go), by the exact name Toolbox
+ * accepts. Core resources use their plural, which Toolbox maps to the core API. ConfigMaps are separate because a
+ * setting enables them.
+ */
+export const namespacedResources=['pods','services','endpoints','events','persistentvolumeclaims','deployments.apps','statefulsets.apps','daemonsets.apps','replicasets.apps','jobs.batch','cronjobs.batch','endpointslices.discovery.k8s.io','ingresses.networking.k8s.io','networkpolicies.networking.k8s.io','horizontalpodautoscalers.autoscaling','poddisruptionbudgets.policy','certificates.cert-manager.io','certificaterequests.cert-manager.io','issuers.cert-manager.io','orders.acme.cert-manager.io','challenges.acme.cert-manager.io','clusters.postgresql.cnpg.io','backups.postgresql.cnpg.io','scheduledbackups.postgresql.cnpg.io','poolers.postgresql.cnpg.io','databases.postgresql.cnpg.io','databaseroles.postgresql.cnpg.io','imagecatalogs.postgresql.cnpg.io','publications.postgresql.cnpg.io','subscriptions.postgresql.cnpg.io','failoverquorums.postgresql.cnpg.io','rabbitmqclusters.rabbitmq.com','opensearchclusters.opensearch.opster.io','prometheuses.monitoring.coreos.com','alertmanagers.monitoring.coreos.com','servicemonitors.monitoring.coreos.com','podmonitors.monitoring.coreos.com','prometheusrules.monitoring.coreos.com','probes.monitoring.coreos.com','thanosrulers.monitoring.coreos.com','alertmanagerconfigs.monitoring.coreos.com','scrapeconfigs.monitoring.coreos.com','prometheusagents.monitoring.coreos.com','pods.metrics.k8s.io','fluentbits.fluentbit.fluent.io','fluentbitconfigs.fluentbit.fluent.io','collectors.fluentbit.fluent.io','filters.fluentbit.fluent.io','outputs.fluentbit.fluent.io','parsers.fluentbit.fluent.io','multilineparsers.fluentbit.fluent.io','fluentds.fluentd.fluent.io','fluentdconfigs.fluentd.fluent.io','filters.fluentd.fluent.io','inputs.fluentd.fluent.io','outputs.fluentd.fluent.io','kustomizations.kustomize.toolkit.fluxcd.io','helmreleases.helm.toolkit.fluxcd.io','gitrepositories.source.toolkit.fluxcd.io','helmrepositories.source.toolkit.fluxcd.io','sealedsecrets.bitnami.com','gateways.gateway.networking.k8s.io','httproutes.gateway.networking.k8s.io','grpcroutes.gateway.networking.k8s.io','ciliumendpoints.cilium.io','ciliumnetworkpolicies.cilium.io'] as const;
+/** Cluster-scoped resources of the Toolbox catalog, readable when cluster-wide access is enabled. */
+export const clusterResources=['nodes','namespaces','persistentvolumes','storageclasses.storage.k8s.io','clusterissuers.cert-manager.io','clusterimagecatalogs.postgresql.cnpg.io','nodes.metrics.k8s.io','clusterfilters.fluentbit.fluent.io','clusterfluentbitconfigs.fluentbit.fluent.io','clusterinputs.fluentbit.fluent.io','clustermultilineparsers.fluentbit.fluent.io','clusteroutputs.fluentbit.fluent.io','clusterparsers.fluentbit.fluent.io','clusterfilters.fluentd.fluent.io','clusterfluentdconfigs.fluentd.fluent.io','clusterinputs.fluentd.fluent.io','clusteroutputs.fluentd.fluent.io','gatewayclasses.gateway.networking.k8s.io','ciliumnodes.cilium.io','ciliumclusterwidenetworkpolicies.cilium.io'] as const;
+/**
+ * Returns the catalog name for a resource given by its full name or by its plural alone, such as "networkpolicies"
+ * for "networkpolicies.networking.k8s.io". A plural shared by several API groups is returned unchanged.
+ */
+export function catalogName(resource:string,catalog:readonly string[]){
+ if(catalog.includes(resource))return resource;
+ const matches=catalog.filter(r=>r.split('.')[0]===resource);
+ return matches.length===1?matches[0]:resource;
+}
 /** Returns the resources the agent may read with the saved Toolbox settings. */
 export function readableResources(config:Config):string[]{
  const t=config.toolbox;
@@ -34,8 +47,9 @@ export function toolboxContexts(config:Config,files:ToolboxFiles|null){
 const namespaceName=z.string().regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/).max(63);
 /** Returns Toolbox arguments for one read. Toolbox's configuration decides which namespaces are allowed. */
 export function toolboxArgs(config:Config,input:unknown,configPath:string,allowedContexts:string[]){
- const {context,namespace,resource,name,selector}=z.object({context:z.string().min(1).max(253),resource:z.string().min(1).max(100),namespace:namespaceName.optional(),name:z.string().max(253).regex(/^[a-z0-9]([-a-z0-9.:]*[a-z0-9])?$/,'Use a resource name.').optional(),selector:z.string().max(500).regex(/^[A-Za-z0-9_./!=, ()-]+$/,'Use a label selector such as app=web,tier!=cache.').optional()}).strict().parse(input);
+ const {context,namespace,resource:requested,name,selector}=z.object({context:z.string().min(1).max(253),resource:z.string().min(1).max(100),namespace:namespaceName.optional(),name:z.string().max(253).regex(/^[a-z0-9]([-a-z0-9.:]*[a-z0-9])?$/,'Use a resource name.').optional(),selector:z.string().max(500).regex(/^[A-Za-z0-9_./!=, ()-]+$/,'Use a label selector such as app=web,tier!=cache.').optional()}).strict().parse(input);
  if(!config.connections.Toolbox.enabled||!configPath||!isAbsolute(configPath)||!allowedContexts.includes(context))throw new AppError(403,'Toolbox context is not enabled in Settings.');
+ const resource=catalogName(requested,readableResources(config));
  if(!readableResources(config).includes(resource))throw new AppError(403,`Reading ${resource} is not enabled in Settings → Connections → Toolbox.`);
  const cluster=(clusterResources as readonly string[]).includes(resource);
  if(!cluster&&!namespace)throw new AppError(400,`Name a namespace to read ${resource}.`);

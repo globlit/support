@@ -132,3 +132,13 @@ test('a failed Toolbox read reports the reason Toolbox gave',async()=>{
  assert.match(toolboxFailure({code:'ENOENT'},'Toolbox read failed').message,/SUPPORT_TOOLBOX_BINARY/);
  const stopped=new AbortController();stopped.abort();assert.equal(toolboxFailure({},'x',stopped.signal).status,409);
 });
+
+test('Toolbox receives its exact catalog name, also when the agent gives only the plural',()=>{
+ const config=structuredClone(defaults);config.connections.Toolbox.enabled=true;config.toolbox.allowClusterScoped=true;
+ const args=(resource:string,namespace?:string)=>toolboxArgs(config,{context:'dev',resource,...(namespace?{namespace}:{})},'/t.json',['dev']).slice(4,5)[0];
+ assert.equal(args('networkpolicies','apps'),'networkpolicies.networking.k8s.io');
+ assert.equal(args('networkpolicies.networking.k8s.io','apps'),'networkpolicies.networking.k8s.io');
+ assert.equal(args('pods','apps'),'pods');assert.equal(args('deployments','apps'),'deployments.apps');assert.equal(args('nodes'),'nodes');
+ assert.throws(()=>args('filters','apps'),/not enabled/,'a plural shared by Fluent Bit and Fluentd stays ambiguous');
+ assert.throws(()=>args('secrets','apps'));
+});
