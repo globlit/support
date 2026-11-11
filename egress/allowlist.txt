@@ -1,0 +1,76 @@
+# Hostnames the sandbox can reach over HTTPS, through the egress proxy.
+# One entry per line. A name matches that host only. A name with a leading dot matches the domain and its subdomains.
+# Do not list a host and a parent domain with a leading dot together: Squid rejects the overlap.
+# Everything else is refused, including the internal services (Grafana, Outline, registry). The agent reaches
+# Support tools, Kubernetes and GitLab clones through the agent gateway and the Git proxy, not through this list.
+# After a change, run: docker compose restart egress
+
+# Model providers
+api.anthropic.com
+platform.claude.com
+claude.ai
+api.openai.com
+auth.openai.com
+chatgpt.com
+
+# Package and module registries
+pypi.org
+files.pythonhosted.org
+registry.npmjs.org
+proxy.golang.org
+sum.golang.org
+registry.terraform.io
+releases.hashicorp.com
+galaxy.ansible.com
+github.com
+codeload.github.com
+objects.githubusercontent.com
+raw.githubusercontent.com
+ghcr.io
+
+# Helm chart indexes used by the Flux repositories
+charts.jetstack.io
+prometheus-community.github.io
+charts.bitnami.com
+bitnami.github.io
+charts.gitlab.io
+fluent.github.io
+charts.enix.io
+kubernetes.github.io
+kubernetes-sigs.github.io
+runbooks.prometheus-operator.dev
+
+# Documentation: platform
+kubernetes.io
+fluxcd.io
+helm.sh
+docs.scaleway.com
+developer.hashicorp.com
+docs.ansible.com
+docs.gitlab.com
+cert-manager.io
+gateway.envoyproxy.io
+argo-cd.readthedocs.io
+argoproj.github.io
+
+# Documentation: services in the stack
+opensearch.org
+docs.opensearch.org
+rabbitmq.com
+prometheus.io
+grafana.com
+cloudnative-pg.io
+postgresql.org
+redis.io
+kvrocks.apache.org
+qdrant.tech
+docs.vllm.ai
+documentation.wazuh.com
+docs.opnsense.org
+docs.python.org
+nodejs.org
+
+# Vulnerability and lifecycle data
+nvd.nist.gov
+osv.dev
+endoflife.date

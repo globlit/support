@@ -24,7 +24,7 @@ export function pruneLogs(store:Store,force=false){const last=pruned.get(store)?
 export function recordDiagnostic(store:Store,entry:Omit<Diagnostic,'id'|'at'>&Partial<Pick<Diagnostic,'id'|'at'>>,secrets?:string[]){
  if(!store.key)return;
  try{const clean=(s:string)=>{const v=redactDiagnostic(s,secrets??store.secretValues());return Buffer.byteLength(v)>captureLimit?truncatedText(v):v;};const value:Diagnostic={...entry,id:entry.id??randomUUID(),at:entry.at??new Date().toISOString(),operation:clean(entry.operation),request:entry.request?clean(entry.request):undefined,output:clean(entry.output)};
- store.db.prepare('INSERT OR IGNORE INTO diagnostics(id,at,tool,status,value) VALUES (?,?,?,?,?)').run(value.id,value.at,value.tool,value.status,store.encrypt(JSON.stringify(value),store.key));pruneLogs(store);}catch{/* Diagnostics must not change the result of an operation. */}
+ store.db.prepare('INSERT OR IGNORE INTO diagnostics(id,at,tool,status,value) VALUES (?,?,?,?,?)').run(value.id,value.at,value.tool,value.status,JSON.stringify(value));pruneLogs(store);}catch{/* Diagnostics must not change the result of an operation. */}
 }
 export function readLogs(store:Store,{tool,status,before,limit=50,query='',time,duration,from,to,zone}:{tool?:string;status?:string;before?:number;limit?:number;query?:string;time?:'hour'|'day'|'week';duration?:'fast'|'normal'|'slow';from?:string;to?:string;zone?:string}={}):LogPage{
  if(!store.key)throw new AppError(423,'Unlock the Vault to view logs.');pruneLogs(store,true);
@@ -33,7 +33,7 @@ export function readLogs(store:Store,{tool,status,before,limit=50,query='',time,
  const where=clauses.length?' WHERE '+clauses.join(' AND '):'';limit=Math.max(1,Math.min(100,limit));
  const rows=store.db.prepare('SELECT seq,value FROM diagnostics'+where+' ORDER BY seq DESC').iterate(...args);
  const entries:Diagnostic[]=[];let total=0,next:number|undefined,last:number|undefined;
- for(const row of rows){const entry=JSON.parse(store.open(String(row.value))) as Diagnostic;
+ for(const row of rows){const entry=JSON.parse(String((row as {value:unknown}).value)) as Diagnostic;
   if(!inRunWindow(entry.at,{page:'logs',from,to,zone}))continue;
   if(query&&!entry.operation.toLowerCase().includes(query.toLowerCase()))continue;
   if(duration==='fast'&&entry.durationMs>=100||duration==='normal'&&(entry.durationMs<100||entry.durationMs>=1000)||duration==='slow'&&entry.durationMs<1000)continue;

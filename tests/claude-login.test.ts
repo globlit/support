@@ -15,7 +15,11 @@ test('the login status runs in the configured folder without loading its setting
  assert.match(seen,/^CLAUDE_CONFIG_DIR='\/data\/claude access\/\.claude' claude --safe-mode --restricted /);
  assert.match(seen,/auth status$/);
  assert.match(loginStatusCommand("/a'b"),/CLAUDE_CONFIG_DIR='\/a'\\''b'/);
- assert.equal(claudeConfigFolder('/x/'),'/x/.claude');assert.equal(claudeConfigFolder(''),undefined);
+ assert.equal(claudeConfigFolder('/x/'),'/x/.claude');
+});
+test('the Claude configuration folder is inside the agent volume',()=>{
+ assert.equal(claudeConfigFolder(),'/home/admin/agent/.claude');
+ assert.equal(claudeConfigFolder('/data/agent'),'/data/agent/.claude');
 });
 test('a signed-in subscription is connected and other states are not',async()=>{
  assert.deepEqual(await claudeLoginStatus(run('{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}'),undefined,'/f'),{connected:true,method:'claude.ai',plan:'max'});
@@ -26,7 +30,6 @@ test('warnings around the JSON are ignored, and output without a status is an er
  assert.equal((await claudeLoginStatus(run('warning\n{"loggedIn":true,"authMethod":"claude.ai"}\n'),undefined,'/f')).connected,true);
  await assert.rejects(claudeLoginStatus(run('bash: claude: command not found',127),undefined,'/f'),/did not report a login status/);
  await assert.rejects(claudeLoginStatus(run('{"x":1}'),undefined,'/f'),/unexpected login status/);
- await assert.rejects(claudeLoginStatus(run('{}'),undefined,''),/SUPPORT_CLAUDE_ACCESS_PATH/);
 });
 test('the model mode accepts the Claude subscription and rejects the removed claude_cli',()=>{
  assert.equal(configSchema.parse({...defaults,modelAuth:'claude_subscription'}).modelAuth,'claude_subscription');

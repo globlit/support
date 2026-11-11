@@ -104,8 +104,8 @@ test('preflight rechecks existing references immediately before POST and fails c
 });
 test('secret-bearing edits are rejected, and creation cannot be redirected by changing settings mid-request',async()=>{
  const f=await fixture();try{const d=await f.draft();await assert.rejects(f.tickets.save(f.id,{hash:d.hash,projectId:'0-1',title:d.title,description:'private-yt-token'}),/credential/);
-  f.remote.postHook=async()=>{f.store.lock();};const result=await f.tickets.approve(f.id,d.hash);assert.equal(result.ticketCreation?.state,'pending');assert.equal(result.ticket,undefined);
-  f.store.unlock('temporary test passphrase');const s=f.store.snapshot();f.store.config({...s.config,connections:{...s.config.connections,YouTrack:{...s.config.connections.YouTrack,endpoint:'https://other.internal'}}},s.configRevision);
+  f.remote.postHook=async()=>{f.store.lock();};await assert.rejects(f.tickets.approve(f.id,d.hash),/Unlock/);
+  f.store.unlock('temporary test passphrase');const result=f.store.alert(f.id);assert.equal(result.ticketCreation?.state,'pending');assert.equal(result.ticket,undefined);const s=f.store.snapshot();f.store.config({...s.config,connections:{...s.config.connections,YouTrack:{...s.config.connections.YouTrack,endpoint:'https://other.internal'}}},s.configRevision);
   const pending=await f.tickets.reconcile(f.id);assert.equal(pending.ticketCreation?.state,'pending');assert.match(pending.ticketCreation!.message,/original YouTrack/);assert.equal(f.remote.posts,1);
  }finally{f.done();}
 });

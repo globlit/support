@@ -11,7 +11,8 @@ Open `http://127.0.0.1:4173` and create the Vault passphrase. The Vault locks at
 
 - Publish the port on `127.0.0.1` only.
 - To use another host port, set both values: `-p 127.0.0.1:8080:4173 -e SUPPORT_PUBLIC_ORIGIN=http://127.0.0.1:8080`.
-- Back up the `support-data` volume. It contains the database, the Vault and the logs.
+- Back up the `support-data` volume. It contains the encrypted database (`support.sqlite`) and `vault.json`. `vault.json` holds the passphrase salt and a check value, and no secret. Without the passphrase, the database cannot be read.
+- A data directory saved by an earlier version is not converted. Start with an empty volume.
 
 ## Support with the command sandbox
 
@@ -23,26 +24,27 @@ Open `http://127.0.0.1:4173` and create the Vault passphrase. The Vault locks at
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CLAUDE_ACCESS_PATH` | `$HOME/claude_access` | Host folder shared with agent sessions. Mounted read-write in the sandbox and read-only in Support, at the same path. Agent sessions use its `.claude` folder as Claude Code configuration. |
+| `SUPPORT_AGENT_HOME` | `/home/admin/agent` | Agent folder inside the sandbox, a volume. Set on `support` only when the sandbox mounts it elsewhere. |
 
 Sandbox properties:
 
 - The image is built from `sandbox/Dockerfile`. It contains Claude Code, kubectl, Helm, Flux, kustomize, the Argo CD CLI, yq, jq, git, curl and Python.
 - Agent sessions get a kubeconfig with the enabled Kubernetes contexts. Each context points at the agent gateway, which adds the context token. See [Kubernetes access](kubernetes-access.md).
-- Outgoing traffic to private, shared and link-local IPv4 ranges is rejected. Exceptions: DNS, and Support's Git proxy (7071) and agent gateway (7072).
+- The sandbox has no direct internet access. HTTPS to the hostnames of `egress/allowlist.txt` goes through the `egress` proxy. Support's Git proxy (7071) and agent gateway (7072) are reached directly. See [Sandbox network access](architecture.md#sandbox-network-access).
+- The `sandbox-data` volume holds `~/agent`: Claude configuration, repository clones and run folders. It survives restarts. To reset it, stop the stack and delete the volume. The Claude configuration is copied from `sandbox/claude-seed/` on first start only.
 - `sandbox/server.py` runs as `sandboxd`. Commands and agent sessions run as `admin`, and cannot signal the server.
-- Only the `support` service reaches the sandbox, on the `agent` network (`172.31.251.0/24`).
+- Only the `support` service reaches the sandbox, on the internal `agent` network (`172.31.251.0/24`).
 
 ## Claude subscription login
 
 In **Settings → Model**, choose Claude and **Claude subscription · sandbox login**. Claude Code signs in inside the sandbox. Support does not store the login and has no `claude` binary.
 
-1. Run `docker compose exec -u admin -e CLAUDE_CONFIG_DIR=$CLAUDE_ACCESS_PATH/.claude sandbox claude auth login`. Choose your Claude subscription.
+1. Run `docker compose exec -u admin -e CLAUDE_CONFIG_DIR=/home/admin/agent/.claude sandbox claude auth login`. Choose your Claude subscription.
 2. In **Settings → Model**, click **Test Model**. Support runs `claude auth status` in the sandbox. The Model card on the Agent work page shows the result.
 
-Claude Code writes the login to `$CLAUDE_ACCESS_PATH/.claude` and sends model requests to Anthropic directly. Support does not read or relay those requests. This mode needs **Let the agent run commands** on, with the sandbox and gateway available. The built-in agent loop refuses to start otherwise.
+Claude Code writes the login to `/home/admin/agent/.claude` in the `sandbox-data` volume and sends model requests to Anthropic directly. Support does not read or relay those requests. This mode needs **Let the agent run commands** on, with the sandbox and gateway available. The built-in agent loop refuses to start otherwise.
 
-Risk: the agent can read the login file, and the sandbox can reach any public host. A malicious instruction in a ticket, alert or log can send the login out. Use a dedicated Claude account for Support, and sign it out if you suspect a leak. Anthropic restricts how subscription credentials may be used. Check the [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) before relying on this mode.
+Risk: the agent can read the login file, and the sandbox can reach the hosts of the egress allowlist. A malicious instruction in a ticket, alert or log can send the login out. Use a dedicated Claude account for Support, and sign it out if you suspect a leak. Anthropic restricts how subscription credentials may be used. Check the [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) before relying on this mode.
 
 To use an API key instead, choose **API key** and save it in the Vault. The gateway adds the key to model requests and the sandbox holds a placeholder.
 

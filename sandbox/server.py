@@ -790,8 +790,8 @@ def agent_input(handler, run_id):
 
 def list_changes(handler, query):
     directory = query.get('dir', [''])[0]
-    if not inside(directory, os.environ.get('CLAUDE_ACCESS_PATH'), AGENT_ROOT, RUNS_DIR):
-        return send_json(handler, 400, {'error': 'dir must be inside the shared folder, the agent root or a run folder.'})
+    if not inside(directory, AGENT_ROOT, RUNS_DIR):
+        return send_json(handler, 400, {'error': 'dir must be inside the agent root or a run folder.'})
     requested_base = query.get('base', [None])[0]
     return changes_in(handler, directory, requested_base)
 

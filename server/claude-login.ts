@@ -1,12 +1,12 @@
 import {z} from 'zod';
 import {AppError} from './store.js';
-import {cleanupSandboxRun,runSandboxCommand} from './sandbox.js';
+import {agentHome,cleanupSandboxRun,runSandboxCommand} from './sandbox.js';
 
 /** Runs a shell command in the sandbox and returns its combined output and exit code. */
 export type LoginRunner=(command:string,signal?:AbortSignal)=>Promise<{output:string;code:number|null}>;
 const quote=(value:string)=>`'${value.replace(/'/g,`'\\''`)}'`;
-/** Configuration folder of Claude Code sessions in the sandbox. Undefined when SUPPORT_CLAUDE_ACCESS_PATH is not set. */
-export const claudeConfigFolder=(access=process.env.SUPPORT_CLAUDE_ACCESS_PATH?.trim())=>access?`${access.replace(/\/+$/,'')}/.claude`:undefined;
+/** Configuration folder of Claude Code sessions in the sandbox, inside the agent volume. */
+export const claudeConfigFolder=(home=agentHome())=>`${home.replace(/\/+$/,'')}/.claude`;
 /** Shell command that prints the Claude Code login status as JSON. Settings, hooks and plugins of the folder are not loaded. */
 export const loginStatusCommand=(folder:string)=>`CLAUDE_CONFIG_DIR=${quote(folder)} claude --safe-mode --restricted --setting-sources '' --settings '{"disableAllHooks":true}' auth status`;
 const sandboxRunner:LoginRunner=async(command,signal)=>{
@@ -19,7 +19,6 @@ const status=z.object({loggedIn:z.boolean(),authMethod:z.string().optional(),sub
  * Throws when the sandbox is unreachable, `claude` is missing there, or its output is not a login status.
  */
 export async function claudeLoginStatus(runner:LoginRunner=sandboxRunner,signal?:AbortSignal,folder=claudeConfigFolder()){
- if(!folder)throw new AppError(400,'Set SUPPORT_CLAUDE_ACCESS_PATH so Support knows the Claude configuration folder of the sandbox.');
  const result=await runner(loginStatusCommand(folder),signal);
  // Combined output can carry warnings around the JSON object.
  const start=result.output.indexOf('{'),end=result.output.lastIndexOf('}');

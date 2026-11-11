@@ -9,8 +9,9 @@ export class InvestigationQueue {
  private busy=false;private next=0;private offset=0;private revision=0;
  constructor(private store:Store,private source:YouTrack,private queue:AgentQueue){}
  async tick(now=Date.now()){
+  if(this.busy||!this.store.key)return;
   const snapshot=this.store.snapshot(),config=snapshot.config;
-  if(this.busy||!this.store.key||agentHalted(this.store)||!config.autoInvestigate||!config.connections.YouTrack.enabled||!config.connections.Model.enabled)return;
+  if(agentHalted(this.store)||!config.autoInvestigate||!config.connections.YouTrack.enabled||!config.connections.Model.enabled)return;
   if(this.revision!==snapshot.configRevision){this.offset=0;this.next=0;this.revision=snapshot.configRevision;}
   if(now<this.next)return;
   this.busy=true;this.next=now+60000;

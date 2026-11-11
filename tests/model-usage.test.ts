@@ -33,13 +33,3 @@ test('web search requests are read from Claude usage',()=>{
  assert.equal(tokenUsage({input_tokens:1,output_tokens:1,server_tool_use:{web_search_requests:3}},'anthropic')?.webSearches,3);
  assert.equal(tokenUsage({input_tokens:1,output_tokens:1},'anthropic')?.webSearches,undefined);
 });
-
-test('log pages decrypt each entry once across requests',()=>{
- const f=fixture();
- try{
-  for(let i=0;i<300;i++)recordDiagnostic(f.store,{tool:'GitLab',operation:'read '+i,status:'ok',durationMs:1,output:'x'});
-  let calls=0;const original=f.store.decrypt.bind(f.store);f.store.decrypt=(v,k)=>{calls++;return original(v,k);};
-  readLogs(f.store);const first=calls;readLogs(f.store);
-  assert.ok(first>=300);assert.equal(calls,first,'the second page read uses cached plaintexts');
- }finally{f.close()}
-});

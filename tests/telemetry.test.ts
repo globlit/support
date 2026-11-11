@@ -4,6 +4,7 @@ import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Store} from '../server/store.js';
+import {onDisk} from './disk.js';
 import {defaults,type AnalysisRun} from '../src/model.js';
 import {activityBuckets} from '../server/ai-activity.js';
 import {tokenUsage,rateLimits} from '../server/model-telemetry.js';
@@ -29,7 +30,7 @@ test('usage is encrypted, bounded metadata and survives loading in the dashboard
  const transport=configuredModelFetch(f.store,async()=>Response.json({usage:{input_tokens:12,output_tokens:3,cache_read_input_tokens:5},content:[{type:'text',text:'private generated reply'}],stop_reason:'end_turn'}));
  const result=await (await transport('https://model.internal/v1/messages',request)).json();assert.equal(result.content[0].text,'private generated reply');
  const logs=readLogs(f.store);assert.equal(logs.entries[0].telemetry?.usage?.input,17);assert.doesNotMatch(JSON.stringify(logs),/private generated|private ticket|private-api-key/);
- assert.doesNotMatch(JSON.stringify(f.store.db.prepare('SELECT value FROM diagnostics').all()),/telemetry|input|generated reply/);
+ assert.ok(!onDisk(f.store).includes('generated reply'));
  const empty:AIOverview={workflows:[],runs:[],historyLimit:200,loadedAt:'',agent:{model:'test',active:false,step:''}};
  const d=dashboard(f.store,empty,7);assert.equal(d.usage?.responses,1);assert.equal(d.usage?.input,17);assert.equal(d.usage?.output,3);
  }finally{f.close()}

@@ -1,7 +1,7 @@
 import {createHash,randomBytes,timingSafeEqual} from 'node:crypto';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {AppError,type Store} from './store.js';
-import {localOwner,type Principal,workspaceIdentity} from './identity.js';
+import {localOwner,type Principal} from './identity.js';
 import type {Deployment} from './deployment.js';
 const token=()=>randomBytes(32).toString('base64url');
 const digest=(s:string)=>createHash('sha256').update(s).digest('hex');
@@ -9,7 +9,7 @@ type Session={principal:Principal;csrf:string;expires:number;epoch:number};
 /** Session secrets are never persisted. */
 export class Sessions{
  private entries=new Map<string,Session>();
- constructor(private store:Store,private config:Deployment,private clock=Date.now){workspaceIdentity(store);}
+ constructor(private store:Store,private config:Deployment,private clock=Date.now){}
  private cookie(req:IncomingMessage){const values=(req.headers.cookie??'').split(';').map(v=>v.trim()).filter(v=>v.startsWith(this.config.cookieName+'='));return values.length===1?values[0].slice(this.config.cookieName.length+1):'';}
  private prune(){for(const [id,s] of this.entries)if(this.clock()>=s.expires||s.epoch!==this.store.vaultEpoch||!this.store.key)this.entries.delete(id);}
  current(req:IncomingMessage){this.prune();const value=this.cookie(req);return /^[A-Za-z0-9_-]{43}$/.test(value)?this.entries.get(digest(value)):undefined;}

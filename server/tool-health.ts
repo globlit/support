@@ -14,6 +14,7 @@ export function recordHealthProbe(store:Store,name:ConnectionName,result:HealthR
  map.set(name,{result,failures,at:new Date(now).toISOString(),revision,epoch,durationMs});
 }
 export function toolHealth(store:Store,now=Date.now()):ToolHealth[]{
+ if(!store.key)return connectionNames.map(name=>({name,intervalSeconds:healthIntervalMs/1000,timeoutSeconds:healthTimeouts[name]/1000,state:'yellow' as const,label:'Paused',detail:'Unlock the Vault to resume scheduled checks.'}));
  const snapshot=store.snapshot();return connectionNames.map(name=>{
   const base={name,intervalSeconds:healthIntervalMs/1000,timeoutSeconds:healthTimeouts[name]/1000};
   if(!snapshot.config.connections[name].enabled)return {...base,state:'off',label:'Disabled',detail:'This connection is disabled in Settings.'};

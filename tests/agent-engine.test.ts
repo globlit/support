@@ -64,9 +64,9 @@ test('usage is read from non-streamed responses too',()=>{
 });
 
 for(const mode of ['api_key','claude_subscription'] as const)test(`a Claude Code session streams into the run, gets a review on its first result, and becomes a plan after checks (${mode})`,async()=>{
- const f=fixture();if(mode!=='api_key'){const s0=f.store.snapshot();f.store.config({...s0.config,modelAuth:mode},s0.configRevision);}const shared=join(f.dir,'shared');
- const env={SUPPORT_SANDBOX_URL:process.env.SUPPORT_SANDBOX_URL,SUPPORT_CLAUDE_ACCESS_PATH:process.env.SUPPORT_CLAUDE_ACCESS_PATH};
- process.env.SUPPORT_SANDBOX_URL='http://sandbox.internal';process.env.SUPPORT_CLAUDE_ACCESS_PATH=shared;
+ const f=fixture();if(mode!=='api_key'){const s0=f.store.snapshot();f.store.config({...s0.config,modelAuth:mode},s0.configRevision);}const shared='/home/admin/agent';
+ const env={SUPPORT_SANDBOX_URL:process.env.SUPPORT_SANDBOX_URL,SUPPORT_AGENT_HOME:process.env.SUPPORT_AGENT_HOME};
+ process.env.SUPPORT_SANDBOX_URL='http://sandbox.internal';process.env.SUPPORT_AGENT_HOME=shared;
  const gw=new AgentGateway(f.store,(async()=>Response.json({})) as typeof fetch);
  const inputs:unknown[]=[];let started:{cwd:string;args:string[];env:Record<string,string>;input:string}|undefined;const reviews:string[]=[];
  const sandbox=(async(input:RequestInfo|URL,init?:RequestInit)=>{
@@ -96,7 +96,7 @@ for(const mode of ['api_key','claude_subscription'] as const)test(`a Claude Code
   let s=c.status(run.id);for(let i=0;i<300&&s.state==='running';i++){await new Promise(r=>setTimeout(r,10));s=c.status(run.id);}
   assert.equal(s.state,'ready',s.error);assert.equal(s.outcome,'plan');assert.ok(s.planVersion);assert.equal(s.sessionId,'sess-1');
   assert.match(reviews[0],/^Before this is final/);assert.match(reviews[1],/^Recorded/);
-  assert.ok(started!.cwd.startsWith(shared+'/.support-agent/work/youtrack-INFRA-42'));
+  assert.ok(started!.cwd.startsWith(shared+'/work/youtrack-INFRA-42'));
   assert.equal(started!.env.CLAUDE_CONFIG_DIR,shared+'/.claude');if(mode==='api_key'){assert.equal(started!.env.ANTHROPIC_API_KEY,'support-gateway');assert.ok(started!.env.ANTHROPIC_BASE_URL.startsWith('http://'));}
   else for(const key of ['ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','CLAUDE_CODE_OAUTH_TOKEN'])assert.equal(started!.env[key],undefined,key+' is not set: Claude Code signs in by itself in the sandbox');
   assert.ok(started!.env.SUPPORT_TOOLS_URL.startsWith('http://'));assert.equal(started!.env.CLAUDE_CODE_OAUTH_TOKEN,undefined);

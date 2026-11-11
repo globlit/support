@@ -67,7 +67,7 @@ for(const changed of ['alert','source-note','source-plan','ticket','target-note'
   if(changed==='settings'){const s=f.store.snapshot();f.store.config({...s.config,engineer:'Changed'},s.configRevision);}
   if(changed==='vault')f.store.lock();if(changed==='resolved')f.remote.resolved=true;
   if(changed==='revision')await f.sourceAction('revise','Change the alert plan first');
-  await assert.rejects(f.handoff.carry(f.id,preview.hash));assert.equal(f.store.getWorkSession(preview.target.connection,'2-42')?.plans.length??0,0);
+  await assert.rejects(f.handoff.carry(f.id,preview.hash));if(changed==='vault')f.store.unlock('temporary test passphrase');assert.equal(f.store.getWorkSession(preview.target.connection,'2-42')?.plans.length??0,0);
  }finally{f.done();}
 });
 test('a new source revision appends a version while preserving an unresolved ticket revision request',async()=>{

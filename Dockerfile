@@ -29,7 +29,7 @@ USER node
 
 WORKDIR /app
 COPY --chown=node:node package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund && npm cache clean --force
+RUN npm ci --ignore-scripts --no-audit --no-fund && npm cache clean --force
 COPY --chown=node:node . .
 RUN npm run build
 

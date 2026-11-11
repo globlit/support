@@ -14,7 +14,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl git jq ripgrep less file openssh-client unzip xz-utils \
   python3 python3-yaml python-is-python3 \
-  dnsutils netcat-openbsd procps iptables util-linux
+  dnsutils netcat-openbsd procps util-linux
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 EOF
@@ -103,7 +103,7 @@ set -eu
 usermod --login admin --home /home/admin --move-home node
 groupmod --new-name admin node
 useradd --system --no-create-home --shell /usr/sbin/nologin sandboxd
-install -d -o admin -g admin -m 0755 /srv/sandbox-runs
+install -d -o admin -g admin -m 0755 /srv/sandbox-runs /home/admin/agent
 EOF
 
 ENV PATH=/home/admin/.local/bin:$PATH \
@@ -119,6 +119,8 @@ claude --version
 EOF
 USER root
 
+# Claude configuration copied into the agent volume on first start.
+COPY claude-seed/ /opt/support-agent/claude-seed/
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/sandbox-entrypoint
 COPY --chmod=0755 server.py /usr/local/bin/support-sandbox
 # The support command: calls Support tools from Bash and scripts.

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./*.secret)",
+      "Read(./*.secret.*)",
+      "Read(./_secret-*.yaml)",
+      "Bash(sudo *)"
+    ]
+  }
+}

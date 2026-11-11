@@ -47,12 +47,12 @@ process.umask(0o077);
 const runtime=deployment(),{port}=runtime,origin=runtime.publicOrigin;
 const dataDir=resolve(process.env.SUPPORT_DATA_DIR??'.support-data');
 const store=new Store(dataDir);
-const configProblem=storedConfigProblem(store,dataDir);
-if(configProblem){console.error(configProblem);store.close();process.exit(1);}
 const sessions=new Sessions(store,runtime);
 const transport=loggedFetch(store);
 const health=new HealthPoller(store);
-const healthTimer=setInterval(()=>void health.tick(),1000);healthTimer.unref();
+/** Runs `work` every `ms` while the Vault is unlocked. A failed run is ignored, so a lock during a run cannot stop the process. */
+const every=(ms:number,work:()=>unknown)=>{const timer=setInterval(()=>{if(!store.key)return;try{void Promise.resolve(work()).catch(()=>{});}catch{}},ms);timer.unref();return timer;};
+const healthTimer=every(1000,()=>health.tick());
 const youtrack=new YouTrack(store,transport);
 const claude=new Claude(store,youtrack,transport);
 const gitProxy=new GitProxy(store);
@@ -65,13 +65,13 @@ claude.onRun({started:r=>agentQueue.started(r),finished:(id,state,error)=>agentQ
 const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands},queue:agentQueue.counts(),parallelReview:store.snapshot().config.parallelReview,model:claude.modelStatus,gateway:{listening:gateway.listening},kubernetes:toolHealth(store).find(t=>t.name==='Kubernetes'),modelHealth:toolHealth(store).find(t=>t.name==='Model')});
 const notifications=new Notifications(store,()=>aiOverview(store,claude).workflows);
 claude.onQuestion(run=>{const [key,...title]=(run.title??'').split(' · ');notifications.question({key,title:title.join(' · '),source:sourceKind(run.connection??'')==='alert'?'alert':sourceKind(run.connection??'')==='slack'?'slack':'youtrack',route:`#/${sourcePage(run.connection??'')}?issue=${encodeURIComponent(run.issueId)}&step=investigation`});});
-const notificationTimer=setInterval(()=>notifications.tick(),5000);notificationTimer.unref();
+const notificationTimer=every(5000,()=>notifications.tick());
 const intake=new InvestigationQueue(store,youtrack,agentQueue);
-const intakeTimer=setInterval(()=>void intake.tick(),5000);intakeTimer.unref();
+const intakeTimer=every(5000,()=>intake.tick());
 const alerts=new Alertmanager(store,transport);
 const alertTickets=new AlertTickets(store,alerts,youtrack);
 const handoffs=new AlertHandoffs(store,alerts,youtrack);
-const alertTimer=setInterval(()=>void alerts.tick(claude,agentQueue),5000);alertTimer.unref();
+const alertTimer=every(5000,()=>alerts.tick(claude,agentQueue));
 const slack=new Slack(store,transport);
 const slackTickets=new AlertTickets(store,slack,youtrack,slack);
 const resolveSource=(id:string,connection?:string)=>id.startsWith('alert:')?alerts.issue(id.slice(6)):id.startsWith('slack:')?slack.issue(id.slice(6)):connection?.startsWith('alertmanager:')?alerts.issue(id):connection?.startsWith('slack:')?slack.issue(id):youtrack.issue(id);
@@ -79,7 +79,7 @@ const changes=new Changes(store,youtrack,transport,resolveSource);
 const pipelines=new Pipelines(store,youtrack,transport,resolveSource);
 const resolutions=new Resolutions(store,youtrack,transport,resolveSource);
 const replies=new IncomingReplies(store,resolveSource,slack,resolutions,transport);
-const slackTimer=setInterval(()=>void slack.tick(agentQueue),5000);slackTimer.unref();
+const slackTimer=every(5000,()=>slack.tick(agentQueue));
 /** Starts a run of a request on `basis`, through the source that owns the request (YouTrack, alerts or Slack). */
 async function startRun(connection:string,issueId:string,basis:RunBasis){
  const kind=sourceKind(connection);
@@ -109,7 +109,7 @@ claude.onResume((run,prompt)=>continueRun(run.id,prompt,'Support'));
 agentQueue.register('youtrack',{load:id=>youtrack.work(id),start:(id,expected)=>claude.start(id,expected)});
 agentQueue.register('alert',{load:id=>alerts.work(id),start:(id,expected)=>alerts.analyze(id,expected,claude),onStartError:(id,error)=>alerts.recordStartFailure(id,error)});
 agentQueue.register('slack',{load:id=>slack.work(id),start:(id,expected)=>claude.start(id,expected,slack)});
-const queueTimer=setInterval(()=>void agentQueue.tick(),5000);queueTimer.unref();
+const queueTimer=every(5000,()=>agentQueue.tick());
 let attempts:{time:number;count:number}={time:Date.now(),count:0};
 function rateLimit(){if(Date.now()-attempts.time>60_000)attempts={time:Date.now(),count:0};if(++attempts.count>20)throw new AppError(429,'Too many attempts. Try again in a minute.');}
 /** Reads a JSON request body of at most `limit` bytes. Kubeconfig requests use a larger limit. */
@@ -128,6 +128,8 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   if(v.action==='lock'){sessions.require(req);store.lock();sessions.clear();sessions.logout(req,res);return send(res,store.vaultStatus());}
   if(!v.passphrase)throw new AppError(400,'Passphrase required (at least 12 characters).');
   if(v.action==='initialize')store.unlock(v.passphrase,true);else if(store.key)store.verifyPassphrase(v.passphrase);else store.unlock(v.passphrase);
+  // The configuration is encrypted, so it can be read only after unlocking.
+  const configProblem=storedConfigProblem(store,dataDir);if(configProblem){store.lock();sessions.clear();throw new AppError(409,configProblem);}
   sessions.issue(req,res);return send(res,store.vaultStatus());
  }
  const session=sessions.require(req);

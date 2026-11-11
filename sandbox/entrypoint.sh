@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Entrypoint of the Support command sandbox. Runs as root with NET_ADMIN.
-# Rejects outgoing traffic to private networks, then runs the command as sandboxd.
+# Entrypoint of the Support command sandbox. Runs as root, prepares the agent folder, then runs the command as sandboxd.
+#
+# Network isolation comes from compose.yaml: the sandbox joins an internal network and reaches the internet only
+# through the egress proxy.
 #
 # Environment:
-#   SANDBOX_SUPPORT_ADDRESS  IPv4 address of Support on the agent network. Required.
-#   CLAUDE_ACCESS_PATH       Path of the shared ~/claude_access folder. Optional.
+#   HTTPS_PROXY       URL of the egress proxy. Required.
+#   SANDBOX_AGENT_ROOT  Agent folder, a volume. Default: /home/admin/agent.
 set -euo pipefail
 
 die() {
@@ -25,40 +27,28 @@ check_ipv6_disabled() {
   fi
 }
 
-# Rejects outgoing traffic to private, shared and link-local IPv4 ranges.
-# Allowed: replies to incoming connections, loopback (which includes the Docker DNS resolver), DNS to the
-# nameservers of /etc/resolv.conf, and Support's Git proxy (7071) and agent gateway (7072).
-block_private() {
-  local support="${SANDBOX_SUPPORT_ADDRESS:-}"
-  local nameserver
-  local range
-
-  if [[ ! "$support" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
-    die "SANDBOX_SUPPORT_ADDRESS must be the IPv4 address of Support."
+# Exits when no egress proxy is configured.
+check_proxy() {
+  if [[ ! "${HTTPS_PROXY:-}" =~ ^http://[^/]+$ ]]; then
+    die "HTTPS_PROXY must be the URL of the egress proxy, for example http://172.31.251.30:3128."
   fi
+}
 
-  iptables -A OUTPUT -o lo -j ACCEPT
-  iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  for nameserver in $(awk '/^nameserver/ {print $2}' /etc/resolv.conf); do
-    if [[ "$nameserver" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
-      iptables -A OUTPUT -d "$nameserver" -p udp --dport 53 -j ACCEPT
-      iptables -A OUTPUT -d "$nameserver" -p tcp --dport 53 -j ACCEPT
-    fi
-  done
-  iptables -A OUTPUT -d "$support" -p tcp --dport 7071:7072 -j ACCEPT
-  for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
-    iptables -A OUTPUT -d "$range" -j REJECT
-  done
-  echo "sandbox: outgoing traffic to private networks is rejected, except DNS and the Git proxy and agent gateway of $support."
+# Creates the folders of the agent volume. Copies the Claude configuration seed on first start only.
+prepare_agent_folder() {
+  local root="${SANDBOX_AGENT_ROOT:-/home/admin/agent}"
+
+  install -d -o admin -g admin -m 0755 "$root" "$root/work" "$root/repos"
+  if [ ! -e "$root/.claude" ]; then
+    cp -R /opt/support-agent/claude-seed "$root/.claude"
+    chown -R admin:admin "$root/.claude"
+    echo "sandbox: Claude configuration seeded in $root/.claude."
+  fi
 }
 
 check_ipv6_disabled
-block_private
-
-# Agent sessions find the shared folder at ~/claude_access as well as at its host path.
-if [ -n "${CLAUDE_ACCESS_PATH:-}" ] && [ "$CLAUDE_ACCESS_PATH" != /home/admin/claude_access ]; then
-  ln -sfn "$CLAUDE_ACCESS_PATH" /home/admin/claude_access
-fi
+check_proxy
+prepare_agent_folder
 
 export HOME=/home/admin
 export SANDBOX_COMMAND_USER=admin

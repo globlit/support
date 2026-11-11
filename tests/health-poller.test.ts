@@ -27,7 +27,7 @@ test('timeout bounds a hanging probe; late completion cannot overwrite the failu
 test('locked and disabled services are skipped; obsolete credential results are discarded',async()=>{
  const f=fixture();let resolve!:(r:HealthResult)=>void,calls=0;const p=new HealthPoller(f.store,async()=>{calls++;return new Promise(r=>resolve=r)});
  try{const pending=p.tick();await p.tick();assert.equal(calls,1);f.store.credential('YouTrack','replacement');resolve({ok:true,detail:'Old credential'});await pending;assert.equal(state(f.store).label,'Checking');
- f.store.lock();await p.tick();assert.equal(calls,1);assert.equal(state(f.store).label,'Paused');assert.equal(state(f.store,'GitLab').state,'off');}finally{p.stop();f.close()}
+ f.store.lock();await p.tick();assert.equal(calls,1);assert.equal(state(f.store).label,'Paused');assert.equal(state(f.store,'GitLab').label,'Paused');f.store.unlock('an isolated health passphrase');assert.equal(state(f.store,'GitLab').state,'off');}finally{p.stop();f.close()}
 });
 test('probes never exceed two concurrent services and shutdown aborts pending checks',async()=>{
  const f=fixture(['YouTrack','GitLab','Prometheus']);let calls=0;const signals:AbortSignal[]=[];const p=new HealthPoller(f.store,async(_n,_c,s)=>{calls++;signals.push(s);return new Promise(()=>{})});

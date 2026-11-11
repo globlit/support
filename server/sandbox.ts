@@ -14,6 +14,9 @@ export function sandboxUrl(env:NodeJS.ProcessEnv=process.env){
  return url;
 }
 
+/** Agent folder inside the sandbox, a volume: Claude configuration, repository clones and run folders. From SUPPORT_AGENT_HOME, default /home/admin/agent. */
+export const agentHome=(env:NodeJS.ProcessEnv=process.env)=>env.SUPPORT_AGENT_HOME?.trim().replace(/\/+$/,'')||'/home/admin/agent';
+
 /**
  * Runs a command in the sandbox and waits for it to end. Calls `onOutput` with each chunk of output as it arrives.
  * Aborting `signal` closes the connection, and the sandbox then kills the command.

@@ -122,7 +122,7 @@ export async function testConnection(name:ConnectionName,config:Config,probe:Hea
 export class HealthPoller{
  private context='';private next=new Map<ConnectionName,number>();private active=new Map<ConnectionName,AbortController>();private stopped=false;
  constructor(private store:Store,private probe:HealthProbe=serviceProbe(store),private now=()=>Date.now(),private timeouts=healthTimeouts){}
- private identity(){return `${this.store.snapshot().configRevision}:${this.store.credentialEpoch}:${this.store.vaultEpoch}`}
+ private identity(){return this.store.key?`${this.store.snapshot().configRevision}:${this.store.credentialEpoch}:${this.store.vaultEpoch}`:`locked:${this.store.vaultEpoch}`}
  async tick(){
   if(this.stopped)return;const context=this.identity();
   if(context!==this.context){for(const controller of this.active.values())controller.abort();this.next.clear();this.context=context;}

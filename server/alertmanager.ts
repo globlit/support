@@ -26,9 +26,9 @@ export class Alertmanager {
  private ticking=false;
  constructor(private store:Store,private fetcher:typeof fetch=fetch){
   // Require an explicit retry after a restart.
-  for(const c of store.alertCases())if(c.run?.state==='running'){
+  store.onOpen(()=>{for(const c of store.alertCases())if(c.run?.state==='running'){
    c.run.state='failed';c.run.error='Investigation interrupted by restart. Analyze again.';store.saveAlert(c);
-  }
+  }});
  }
  private context(){
   const s=this.store.snapshot(),c=s.config.connections.Alertmanager;
@@ -165,7 +165,7 @@ export class Alertmanager {
  async tick(claude:Claude,queue:AgentQueue){
   if(this.ticking)return;this.ticking=true;
   try{
-   const s=this.store.snapshot();if(!s.config.connections.Alertmanager.enabled||!s.vault.unlocked)return;
+   if(!this.store.key)return;const s=this.store.snapshot();if(!s.config.connections.Alertmanager.enabled)return;
    this.syncRuns(claude);
    if(Date.now()-this.lastAttempt>=s.config.alerting.pollSeconds*1000||this.attemptRevision!==s.configRevision||this.attemptEpoch!==this.store.credentialEpoch)await this.poll();
    if(!s.config.alerting.autoInvestigate||this.error)return;

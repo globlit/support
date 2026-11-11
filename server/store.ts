@@ -1,12 +1,15 @@
 import type {LogTool} from '../src/diagnostics-model.js';
 import {handling} from './intake.js';
 import {recordDiagnostic} from './diagnostics.js';
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync,chmodSync } from 'node:fs';
+import Database from 'better-sqlite3-multiple-ciphers';
+import { mkdirSync,chmodSync,existsSync,readFileSync,writeFileSync,renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID,randomBytes,createCipheriv,createDecipheriv,scryptSync } from 'node:crypto';
+import { randomUUID,randomBytes,createCipheriv,createDecipheriv,scryptSync,hkdfSync } from 'node:crypto';
 import { defaults,configSchema,type Config,type Snapshot,type SourceIssue,type WorkSession,type ChangeSet,type AlertCase,type AnalysisRun } from '../src/model.js';
 import {isServiceAuthConnection,parseServiceAuth,serviceAuthSecrets,type ServiceAuthConnection,type ServiceAuthScheme} from './service-auth.js';
+/** Statement of the database. Rows are untyped: callers cast them to the shape of their query. */
+type Statement={run(...params:unknown[]):{changes:number|bigint};get(...params:unknown[]):any;all(...params:unknown[]):any[];iterate(...params:unknown[]):IterableIterator<any>};
+type Sql={prepare(sql:string):Statement;exec(sql:string):unknown;pragma(sql:string):unknown};
 export class AppError extends Error{constructor(public status:number,message:string,public code?:string){super(message)}}
 /** Log category of an agent tool. */
 export function toolCategory(tool:string):LogTool{return tool==='run_command'?'Sandbox':tool.startsWith('gitlab')?'GitLab':tool.startsWith('prom')?'Prometheus':tool.startsWith('grafana')?'Grafana':tool.startsWith('kube')?'Kubernetes':tool.startsWith('youtrack')?'YouTrack':tool.startsWith('outline')?'Outline':tool.startsWith('alertmanager')?'Alertmanager':'Model';}
@@ -32,8 +35,29 @@ export class Store{
  alertCases():AlertCase[]{return (this.db.prepare('SELECT value FROM alert_cases').all() as {value:string}[]).map(r=>JSON.parse(r.value));}
  saveAlert(c:AlertCase){this.db.prepare('INSERT OR REPLACE INTO alert_cases VALUES (?,?)').run(c.id,JSON.stringify(c));}
  alert(id:string){const row=this.db.prepare('SELECT value FROM alert_cases WHERE id=?').get(id) as {value:string}|undefined;const c=row?JSON.parse(row.value) as AlertCase:undefined;if(!c)throw new AppError(404,'Alert case unavailable. Refresh the queue.');return c;}
- db:DatabaseSync;key:Buffer|null=null;credentialEpoch=0;vaultEpoch=0;
- constructor(dir:string){mkdirSync(dir,{recursive:true,mode:0o700});chmodSync(dir,0o700);this.db=new DatabaseSync(join(dir,'support.sqlite'));chmodSync(join(dir,'support.sqlite'),0o600);this.db.exec('PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS ai_dispositions (kind TEXT NOT NULL, id TEXT NOT NULL, signature TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS investigation_attempts (scope TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS state (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS work_sessions (connection TEXT NOT NULL, issue_id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,issue_id)); CREATE TABLE IF NOT EXISTS changes (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS alert_cases (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS investigations (id TEXT PRIMARY KEY, connection TEXT NOT NULL, issue_id TEXT NOT NULL, started TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS diagnostics (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, at TEXT NOT NULL, tool TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS model_usage (id TEXT PRIMARY KEY, at TEXT NOT NULL, provider TEXT NOT NULL, auth TEXT NOT NULL, model TEXT NOT NULL, input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER, cache_write INTEGER, web_searches INTEGER NOT NULL DEFAULT 0, limits TEXT NOT NULL DEFAULT \'[]\'); CREATE INDEX IF NOT EXISTS model_usage_at ON model_usage(at); CREATE INDEX IF NOT EXISTS diagnostic_time ON diagnostics(at); CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, value TEXT NOT NULL);');for(const row of this.db.prepare('SELECT value FROM changes').all() as {value:string}[]){const c=JSON.parse(row.value) as ChangeSet;if(c.state==='generating'){c.state='failed';c.message='Preparation interrupted before any branch write. Start again.';this.saveChange(c);}}if(this.get('config')&&!this.get('concurrencyV2')){const config=this.get<Config>('config')!;this.put('config',{...config,maxRuns:2});this.put('concurrencyV2',true);}if(!this.get('config')){this.put('concurrencyV2',true);this.put('config',defaults);this.put('configRevision',1);}}
+ key:Buffer|null=null;credentialEpoch=0;vaultEpoch=0;
+ private handle:Database|null=null;
+ /** Path of the database file. */
+ readonly file:string;private readonly vaultFile:string;
+ /** Database of the unlocked Vault. Throws a 423 AppError while the Vault is locked. */
+ get db():Sql{if(!this.handle)throw new AppError(423,'Unlock the Vault first.');return this.handle as unknown as Sql;}
+ /**
+  * Opens the data directory. A directory without a Vault holds a plaintext database of defaults only. Creating the Vault
+  * encrypts that database with a key derived from the passphrase. Once a Vault exists, the database file is encrypted
+  * and opens only in `unlock`. The salt and the passphrase check are in vault.json, which holds no secret.
+  */
+ constructor(dir:string){
+  mkdirSync(dir,{recursive:true,mode:0o700});chmodSync(dir,0o700);
+  this.file=join(dir,'support.sqlite');this.vaultFile=join(dir,'vault.json');
+  if(!existsSync(this.vaultFile)){this.handle=new Database(this.file);chmodSync(this.file,0o600);this.prepareDatabase();}
+ }
+ private openers:(()=>void)[]=[];
+ /** Calls `setup` each time the database opens, and now if it is open. Modules use it to create tables and recover state. */
+ onOpen(setup:()=>void){this.openers.push(setup);if(this.handle)setup();}
+ /** Creates the tables, fails interrupted change preparations and seeds the configuration. Runs each time the database opens. */
+ private prepareDatabase(){
+  this.db.exec('PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS ai_dispositions (kind TEXT NOT NULL, id TEXT NOT NULL, signature TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, actor TEXT NOT NULL, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS investigation_attempts (scope TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS state (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS work_sessions (connection TEXT NOT NULL, issue_id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,issue_id)); CREATE TABLE IF NOT EXISTS changes (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS alert_cases (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS investigations (id TEXT PRIMARY KEY, connection TEXT NOT NULL, issue_id TEXT NOT NULL, started TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS diagnostics (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, at TEXT NOT NULL, tool TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS model_usage (id TEXT PRIMARY KEY, at TEXT NOT NULL, provider TEXT NOT NULL, auth TEXT NOT NULL, model TEXT NOT NULL, input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER, cache_write INTEGER, web_searches INTEGER NOT NULL DEFAULT 0, limits TEXT NOT NULL DEFAULT \'[]\'); CREATE INDEX IF NOT EXISTS model_usage_at ON model_usage(at); CREATE INDEX IF NOT EXISTS diagnostic_time ON diagnostics(at); CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, value TEXT NOT NULL);');for(const row of this.db.prepare('SELECT value FROM changes').all() as {value:string}[]){const c=JSON.parse(row.value) as ChangeSet;if(c.state==='generating'){c.state='failed';c.message='Preparation interrupted before any branch write. Start again.';this.saveChange(c);}}if(!this.get('config')){this.put('config',defaults);this.put('configRevision',1);}
+ }
  get<T=unknown>(id:string):T|undefined{const row=this.db.prepare('SELECT value FROM state WHERE id=?').get(id) as {value:string}|undefined;return row?JSON.parse(row.value):undefined}
  put(id:string,value:unknown){this.db.prepare('INSERT OR REPLACE INTO state VALUES (?,?)').run(id,JSON.stringify(value))}
  private configCache?:{raw:string;config:Config};
@@ -53,31 +77,43 @@ export class Store{
  workSession(issue:SourceIssue):WorkSession{const row=this.db.prepare('SELECT value FROM work_sessions WHERE connection=? AND issue_id=?').get(issue.connection,issue.id) as {value:string}|undefined;const w:WorkSession=row?JSON.parse(row.value):{connection:issue.connection,issueId:issue.id,revision:1,sourceUpdated:issue.updated,updatedAt:new Date().toISOString(),notes:[],draft:'',plans:[],approval:null};let migrated=false;if(w.sourceKey!==issue.key){w.sourceKey=issue.key;migrated=true;}if(w.sourceUpdated!==issue.updated||(w.sourceFingerprint&&w.sourceFingerprint!==issue.sourceFingerprint)){w.sourceUpdated=issue.updated;w.sourceFingerprint=issue.sourceFingerprint;w.sourceChangedAt=new Date().toISOString();w.approval=null;w.revision++;this.saveWorkSession(w);}else if(migrated&&row)this.saveWorkSession(w);w.sourceFingerprint=issue.sourceFingerprint;if(!row)this.saveWorkSession(w);w.handling=handling(this,issue);w.replyState=this.get<{state:'draft'|'pending'|'sent'}>('incomingReply:'+issue.connection+':'+issue.id)?.state;w.origin=this.get('origin:'+issue.connection+':'+issue.id)??w.origin;return w;}
  getWorkSession(connection:string,id:string):WorkSession|undefined{const row=this.db.prepare('SELECT value FROM work_sessions WHERE connection=? AND issue_id=?').get(connection,id) as {value:string}|undefined;return row?JSON.parse(row.value):undefined;}
  pruneInvestigations(){this.db.prepare('DELETE FROM investigations WHERE started < ?').run(new Date(Date.now()-this.snapshot().config.retentionDays*86400000).toISOString());}
- saveInvestigation(run:AnalysisRun){if(!this.key||!run.connection)return;if(run.state!=='running'){const label={ready:'plan ready',failed:'failed',cancelled:'stopped'}[run.state],calls=run.events.filter(e=>e.tool).length,ms=Math.max(0,Date.parse(run.finishedAt??run.startedAt)-Date.parse(run.startedAt));recordDiagnostic(this,{id:run.id+':result',at:run.finishedAt??new Date().toISOString(),tool:'Agent',operation:`${run.kind==='changes'?'Change preparation':run.kind==='diagnosis'?'Pipeline diagnosis':'Investigation'} ${label}: ${(run.title??run.issueId).split(' · ')[0]}`,status:run.state==='failed'?'error':run.state==='cancelled'?'cancelled':'ok',durationMs:ms,output:[...(run.error&&run.state!=='ready'?[run.error]:[]),`Ticket: ${run.title??run.issueId}`,`Model: ${run.model??'unknown'}`,`Tool calls: ${calls}`,`Duration: ${Math.round(ms/1000)} s`].join('\n'),runId:run.id,issueId:run.issueId});}for(const [index,e] of run.events.entries())if(e.tool&&e.status!=='running'&&(e.result||e.status==='failed')){recordDiagnostic(this,{id:run.id+':'+index,at:e.at,tool:toolCategory(e.tool),operation:e.tool,status:e.status==='failed'?'error':'ok',durationMs:0,request:e.input,output:e.result??e.conclusion??e.text,runId:run.id,issueId:run.issueId});}this.pruneInvestigations();this.db.prepare('INSERT OR REPLACE INTO investigations VALUES (?,?,?,?,?)').run(run.id,run.connection,run.issueId,run.startedAt,this.encrypt(JSON.stringify(run),this.key));}
- investigation(id:string):AnalysisRun{if(!this.key)throw new AppError(423,'Unlock the Vault to read investigations.');this.pruneInvestigations();const row=this.db.prepare('SELECT value FROM investigations WHERE id=?').get(id) as {value:string}|undefined;if(!row)throw new AppError(404,'Investigation not found or expired.');return JSON.parse(this.open(row.value));}
+ saveInvestigation(run:AnalysisRun){if(!this.key||!run.connection)return;if(run.state!=='running'){const label={ready:'plan ready',failed:'failed',cancelled:'stopped'}[run.state],calls=run.events.filter(e=>e.tool).length,ms=Math.max(0,Date.parse(run.finishedAt??run.startedAt)-Date.parse(run.startedAt));recordDiagnostic(this,{id:run.id+':result',at:run.finishedAt??new Date().toISOString(),tool:'Agent',operation:`${run.kind==='changes'?'Change preparation':run.kind==='diagnosis'?'Pipeline diagnosis':'Investigation'} ${label}: ${(run.title??run.issueId).split(' · ')[0]}`,status:run.state==='failed'?'error':run.state==='cancelled'?'cancelled':'ok',durationMs:ms,output:[...(run.error&&run.state!=='ready'?[run.error]:[]),`Ticket: ${run.title??run.issueId}`,`Model: ${run.model??'unknown'}`,`Tool calls: ${calls}`,`Duration: ${Math.round(ms/1000)} s`].join('\n'),runId:run.id,issueId:run.issueId});}for(const [index,e] of run.events.entries())if(e.tool&&e.status!=='running'&&(e.result||e.status==='failed')){recordDiagnostic(this,{id:run.id+':'+index,at:e.at,tool:toolCategory(e.tool),operation:e.tool,status:e.status==='failed'?'error':'ok',durationMs:0,request:e.input,output:e.result??e.conclusion??e.text,runId:run.id,issueId:run.issueId});}this.pruneInvestigations();this.db.prepare('INSERT OR REPLACE INTO investigations VALUES (?,?,?,?,?)').run(run.id,run.connection,run.issueId,run.startedAt,JSON.stringify(run));}
+ investigation(id:string):AnalysisRun{if(!this.key)throw new AppError(423,'Unlock the Vault to read investigations.');this.pruneInvestigations();const row=this.db.prepare('SELECT value FROM investigations WHERE id=?').get(id) as {value:string}|undefined;if(!row)throw new AppError(404,'Investigation not found or expired.');return JSON.parse(row.value);}
  investigations(connection:string,id:string){if(!this.key)throw new AppError(423,'Unlock the Vault to read investigations.');this.pruneInvestigations();return (this.db.prepare('SELECT id FROM investigations WHERE connection=? AND issue_id=? ORDER BY started DESC LIMIT 100').all(connection,id) as {id:string}[]).map(r=>this.investigation(r.id));}
  saveWorkSession(w:WorkSession){this.db.prepare('INSERT OR REPLACE INTO work_sessions VALUES (?,?,?)').run(w.connection,w.issueId,JSON.stringify(w));}
  private schemeCache?:{epoch:string;schemes:Record<string,ServiceAuthScheme>};
- vaultStatus(){const credentials=(this.db.prepare('SELECT id FROM secrets').all() as {id:string}[]).map(r=>r.id);let authSchemes:Record<string,ServiceAuthScheme>={};
+ vaultStatus(){const credentials=this.handle&&this.key?(this.db.prepare('SELECT id FROM secrets').all() as {id:string}[]).map(r=>r.id):[];let authSchemes:Record<string,ServiceAuthScheme>={};
   if(this.key){const epoch=this.vaultEpoch+':'+this.credentialEpoch;if(this.schemeCache?.epoch!==epoch){const schemes:Record<string,ServiceAuthScheme>={};for(const id of credentials)if(isServiceAuthConnection(id)||id.startsWith('Prometheus/'))schemes[id]=parseServiceAuth(this.readCredential(id)).scheme;this.schemeCache={epoch,schemes};}authSchemes={...this.schemeCache.schemes};}
-  return {initialized:!!this.get('vault'),unlocked:!!this.key,credentials,authSchemes:authSchemes as Partial<Record<ServiceAuthConnection,ServiceAuthScheme>>&Record<string,ServiceAuthScheme>}}
+  return {initialized:this.vaultMeta()!==undefined,unlocked:!!this.key,credentials,authSchemes:authSchemes as Partial<Record<ServiceAuthConnection,ServiceAuthScheme>>&Record<string,ServiceAuthScheme>}}
  encrypt(value:string,key:Buffer){const iv=randomBytes(12);const cipher=createCipheriv('aes-256-gcm',key,iv);return JSON.stringify({iv:iv.toString('base64'),tag:'',data:Buffer.concat([cipher.update(value,'utf8'),cipher.final()]).toString('base64')}).replace('"tag":""','"tag":"'+cipher.getAuthTag().toString('base64')+'"')}
- private plain=new Map<string,string>();
- /**
-  * Decrypts a value stored with the Vault key. Plaintexts are cached by their authentication tag, which is unique per
-  * encryption, so a rewritten row is never served stale. The cache holds at most 5,000 values and is cleared on lock.
-  */
- open(value:string){
-  if(!this.key)throw new AppError(423,'Unlock the Vault first.');
-  const tag=value.match(/"tag":"([^"]+)"/)?.[1];const hit=tag?this.plain.get(tag):undefined;if(hit!==undefined)return hit;
-  const text=this.decrypt(value,this.key);
-  if(tag){if(this.plain.size>=5000)this.plain.delete(this.plain.keys().next().value!);this.plain.set(tag,text);}
-  return text;
- }
  decrypt(value:string,key:Buffer){const v=JSON.parse(value);const cipher=createDecipheriv('aes-256-gcm',key,Buffer.from(v.iv,'base64'));cipher.setAuthTag(Buffer.from(v.tag,'base64'));return Buffer.concat([cipher.update(Buffer.from(v.data,'base64')),cipher.final()]).toString('utf8')}
- verifyPassphrase(passphrase:string){const v=this.get<{salt:string;check:string}>('vault');if(!v)throw new AppError(409,'Create the vault first.');const key=scryptSync(passphrase,Buffer.from(v.salt,'base64'),32);try{if(this.decrypt(v.check,key)!=='support-vault-v1')throw new Error();}catch{throw new AppError(401,'Incorrect vault passphrase.');}finally{key.fill(0);}}
- unlock(passphrase:string,initialize=false){const v=this.get<{salt:string;check:string}>('vault');if(initialize&&v)throw new AppError(409,'Vault already exists.');if(!v&&!initialize)throw new AppError(409,'Create the vault first.');const salt=v?.salt??randomBytes(32).toString('base64');const key=scryptSync(passphrase,Buffer.from(salt,'base64'),32);try{if(v&&this.decrypt(v.check,key)!=='support-vault-v1')throw new Error();}catch{key.fill(0);throw new AppError(401,'Incorrect vault passphrase.');}this.lock();this.key=key;if(!v)this.put('vault',{salt,check:this.encrypt('support-vault-v1',key)});return this.vaultStatus()}
- lock(){this.plain.clear();this.secretCache=undefined;this.schemeCache=undefined;this.vaultEpoch++;this.credentialEpoch++;this.key?.fill(0);this.key=null}
+ private vaultMeta(){try{return JSON.parse(readFileSync(this.vaultFile,'utf8')) as {salt:string;check:string};}catch{return undefined;}}
+ /** Subkey that encrypts the database. The Vault key itself encrypts credentials. */
+ private databaseKey(key:Buffer){return `x'${Buffer.from(hkdfSync('sha256',key,Buffer.alloc(0),'support-database-v1',32)).toString('hex')}'`;}
+ private checkPassphrase(passphrase:string,v:{salt:string;check:string}){const key=scryptSync(passphrase,Buffer.from(v.salt,'base64'),32);try{if(this.decrypt(v.check,key)!=='support-vault-v1')throw new Error();return key;}catch{key.fill(0);throw new AppError(401,'Incorrect vault passphrase.');}}
+ verifyPassphrase(passphrase:string){const v=this.vaultMeta();if(!v)throw new AppError(409,'Create the vault first.');this.checkPassphrase(passphrase,v).fill(0);}
+ /**
+  * Creates the Vault (`initialize`) or unlocks it. Creating encrypts the database. Unlocking opens the encrypted database
+  * with a key derived from the passphrase. A wrong passphrase leaves the Vault locked.
+  */
+ unlock(passphrase:string,initialize=false){
+  const v=this.vaultMeta();if(initialize&&v)throw new AppError(409,'Vault already exists.');if(!v&&!initialize)throw new AppError(409,'Create the vault first.');
+  if(!v){
+   const salt=randomBytes(32).toString('base64'),key=scryptSync(passphrase,Buffer.from(salt,'base64'),32);
+   this.resetCaches();
+   // SQLCipher cannot encrypt a database in WAL mode. Switch to the rollback journal while it rewrites the file.
+   this.db.pragma('journal_mode=DELETE');this.db.pragma(`cipher='sqlcipher'`);this.db.pragma(`rekey="${this.databaseKey(key)}"`);this.db.pragma('journal_mode=WAL');
+   const meta=this.vaultFile+'.tmp';writeFileSync(meta,JSON.stringify({salt,check:this.encrypt('support-vault-v1',key)}),{mode:0o600});renameSync(meta,this.vaultFile);
+   this.key=key;return this.vaultStatus();
+  }
+  const key=this.checkPassphrase(passphrase,v);this.lock();
+  try{const db=new Database(this.file);db.pragma(`cipher='sqlcipher'`);db.pragma(`key="${this.databaseKey(key)}"`);this.handle=db;this.prepareDatabase();for(const setup of this.openers)setup();}
+  catch(e){this.handle?.close();this.handle=null;key.fill(0);throw e instanceof AppError?e:new AppError(500,'The database could not be opened. Check the data directory.');}
+  this.key=key;return this.vaultStatus();
+ }
+ private resetCaches(){this.secretCache=undefined;this.schemeCache=undefined;this.vaultEpoch++;this.credentialEpoch++;}
+ /** Clears the key from memory and closes the database. The file stays encrypted on disk. */
+ lock(){this.resetCaches();this.key?.fill(0);this.key=null;this.handle?.close();this.handle=null}
  credential(id:string,value:string){this.credentialEpoch++;if(!this.key)throw new AppError(423,'Unlock the vault first.');this.db.prepare('INSERT OR REPLACE INTO secrets VALUES (?,?)').run(id,this.encrypt(value,this.key));if(id==='Model')this.put('modelCredentialProvider',this.snapshot().config.modelProvider);return this.vaultStatus()}
  /** Deletes a saved credential. */
  removeCredential(id:string){this.credentialEpoch++;if(!this.key)throw new AppError(423,'Unlock the vault first.');this.db.prepare('DELETE FROM secrets WHERE id=?').run(id);return this.vaultStatus()}
@@ -86,5 +122,5 @@ export class Store{
   this.db.prepare('INSERT OR IGNORE INTO model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(u.id??randomUUID(),u.at??new Date().toISOString(),u.provider,u.auth,u.model,u.input,u.output,u.cacheRead??null,u.cacheWrite??null,u.webSearches??0,JSON.stringify(u.limits??[]));
   this.db.prepare('DELETE FROM model_usage WHERE at < ?').run(new Date(Date.now()-this.snapshot().config.retentionDays*86400000).toISOString());
  }
- close(){this.lock();this.db.close()}
+ close(){this.lock()}
 }

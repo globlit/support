@@ -1,9 +1,8 @@
 # Support with its command sandbox. See docs/container.md.
 #   support  Support server, on http://127.0.0.1:4173.
 #   sandbox  Runs the agent's Claude Code sessions and shell commands. Contains no credentials.
-#            Only support reaches it, on the agent network.
-# Variables:
-#   CLAUDE_ACCESS_PATH       Host folder shared with agent sessions, mounted at the same path. Default: ~/claude_access.
+#            Only support reaches it, on the internal agent network. It has no direct internet access.
+#   egress   Squid proxy. The only way out of the sandbox: HTTPS to the hostnames of egress/allowlist.txt.
 name: support
 
 x-hardening: &hardening
@@ -24,16 +23,14 @@ services:
       SUPPORT_SANDBOX_URL: http://172.31.251.20:7070
       # Address of the Git proxy (7071) and the agent gateway (7072).
       SUPPORT_RELAY_BIND: 172.31.251.10
-      # Shared folder of agent sessions, at the same path as on the host. Read-only here.
-      SUPPORT_CLAUDE_ACCESS_PATH: ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}
     ports:
       - "127.0.0.1:4173:4173"
     volumes:
       - support-data:/data
-      - ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}:${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}:ro
     networks:
       agent:
         ipv4_address: 172.31.251.10
+      internet: {}
     depends_on: [sandbox]
 
   sandbox:
@@ -41,29 +38,51 @@ services:
     build:
       context: sandbox
     image: support-sandbox:local
-    # NET_ADMIN is used by the entrypoint for iptables only. The server keeps setuid, setgid, setpcap and kill.
-    cap_add: [NET_ADMIN]
     environment:
-      SANDBOX_SUPPORT_ADDRESS: 172.31.251.10
       SANDBOX_BIND: 172.31.251.20:7070
-      CLAUDE_ACCESS_PATH: ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}
-      SANDBOX_AGENT_ROOT: ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}/.support-agent/work
+      SANDBOX_AGENT_ROOT: /home/admin/agent
+      # Only HTTPS to the allowlist leaves the sandbox. Support (Git proxy, agent gateway) is reached directly.
+      HTTPS_PROXY: http://172.31.251.30:3128
+      HTTP_PROXY: http://172.31.251.30:3128
+      https_proxy: http://172.31.251.30:3128
+      http_proxy: http://172.31.251.30:3128
+      NO_PROXY: 172.31.251.10,localhost,127.0.0.1
+      no_proxy: 172.31.251.10,localhost,127.0.0.1
     volumes:
-      - ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}:${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}
-    # Empty folders over the claude-jail credential folders, when ~/claude_access contains claude-jail.
-    tmpfs:
-      - ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}/claude-jail/provision:size=1m
-      - ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}/claude-jail/.claude:size=1m
+      # Claude configuration, repository clones and run folders. Survives restarts of the sandbox.
+      - sandbox-data:/home/admin/agent
     networks:
       agent:
         ipv4_address: 172.31.251.20
+    depends_on: [egress]
+
+  egress:
+    <<: *hardening
+    build:
+      context: egress
+    image: support-egress:local
+    read_only: true
+    cap_drop: [ALL]
+    tmpfs:
+      - /tmp
+      - /var/log/squid
+    volumes:
+      - ./egress/allowlist.txt:/etc/squid/allowlist.txt:ro
+    networks:
+      agent:
+        ipv4_address: 172.31.251.30
+      internet: {}
 
 networks:
-  # Only support and sandbox join this network. It also gives both services internet access.
+  # Only support, sandbox and egress join this network. It has no route to the internet.
   agent:
+    internal: true
     ipam:
       config:
         - subnet: 172.31.251.0/24
+  # Internet access of support and egress.
+  internet: {}
 
 volumes:
   support-data: {}
+  sandbox-data: {}

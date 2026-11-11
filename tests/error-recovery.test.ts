@@ -19,7 +19,7 @@ test('service credentials route to their connection settings; model API keys and
 });
 test('configuration failures select the actual tool; Kubernetes never asks for a service token',()=>{
  for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack','Kubernetes'] as ConnectionName[])assert.equal(route(`Configure and enable ${name} in Connections.`),`#/settings?section=Connections&tool=${name}`);
- for(const message of ['Enable Model in Connections and set its API base URL, model ID and vault API key.','Set the absolute path to the Claude executable in Settings → Model.','The Claude subscription runs in the sandbox. Turn on agent commands and make sure the sandbox and gateway are available.','Claude Code in the sandbox did not report a login status. Check that the sandbox image contains Claude Code.','Set SUPPORT_CLAUDE_ACCESS_PATH so Support knows the Claude configuration folder of the sandbox.'])assert.equal(route(message),'#/settings?section=Model');
+ for(const message of ['Enable Model in Connections and set its API base URL, model ID and vault API key.','Set the absolute path to the Claude executable in Settings → Model.','The Claude subscription runs in the sandbox. Turn on agent commands and make sure the sandbox and gateway are available.','Claude Code in the sandbox did not report a login status. Check that the sandbox image contains Claude Code.'])assert.equal(route(message),'#/settings?section=Model');
  assert.equal(route('Kubernetes context prod is not enabled in Support. Enabled contexts: none.'),'#/settings?section=Connections&tool=Kubernetes');
  assert.equal(route('Kubernetes: HTTP 401 unauthorized.'),'#/settings?section=Connections&tool=Kubernetes');
 });

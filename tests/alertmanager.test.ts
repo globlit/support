@@ -59,7 +59,7 @@ for(const mode of ['unavailable','redirect','invalid','oversized'] as const)test
  }finally{f.done();}
 });
 test('concurrent polls share one request and credential changes discard the response',async()=>{
- const f=fixture();try{let release!:()=>void;f.remote.delay=()=>new Promise<void>(r=>release=r);const a=f.alerts.poll(),b=f.alerts.poll();assert.equal(f.remote.calls,1);f.store.lock();release();await assert.rejects(a);await assert.rejects(b);assert.equal(f.store.alertCases().length,0);assert.equal(f.alerts.queue().paused,true);
+ const f=fixture();try{let release!:()=>void;f.remote.delay=()=>new Promise<void>(r=>release=r);const a=f.alerts.poll(),b=f.alerts.poll();assert.equal(f.remote.calls,1);f.store.lock();release();await assert.rejects(a);await assert.rejects(b);f.store.unlock('temporary test passphrase');assert.equal(f.store.alertCases().length,0);
  }finally{f.done();}
 });
 test('settings edits discard in-flight results; remote HTTP is rejected before credentials leave',async()=>{

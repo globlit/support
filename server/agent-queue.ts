@@ -23,9 +23,11 @@ const entry=(r:Row):QueueEntry=>({scope:r.scope,connection:r.connection,issueId:
 export class AgentQueue {
  private adapters=new Map<SourceKind,QueueAdapter>();private busy=false;
  constructor(private store:Store,private isActive:(runId:string)=>boolean=()=>false,private now=()=>Date.now()){
-  store.db.exec(`CREATE TABLE IF NOT EXISTS agent_queue (scope TEXT PRIMARY KEY, connection TEXT NOT NULL, issue_id TEXT NOT NULL, title TEXT NOT NULL, fingerprint TEXT NOT NULL, origin TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, run_id TEXT, next_attempt_at TEXT NOT NULL, enqueued_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
-  // Runs do not survive a restart: queue interrupted entries again without counting an attempt.
-  for(const e of this.list('running'))if(!this.isActive(e.runId??''))this.update(e.scope,{state:e.origin==='auto'?'queued':'done',run_id:null});
+  store.onOpen(()=>{
+   store.db.exec(`CREATE TABLE IF NOT EXISTS agent_queue (scope TEXT PRIMARY KEY, connection TEXT NOT NULL, issue_id TEXT NOT NULL, title TEXT NOT NULL, fingerprint TEXT NOT NULL, origin TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, run_id TEXT, next_attempt_at TEXT NOT NULL, enqueued_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+   // Runs do not survive a restart: queue interrupted entries again without counting an attempt.
+   for(const e of this.list('running'))if(!this.isActive(e.runId??''))this.update(e.scope,{state:e.origin==='auto'?'queued':'done',run_id:null});
+  });
  }
  register(kind:SourceKind,adapter:QueueAdapter){this.adapters.set(kind,adapter);}
  private iso(offset=0){return new Date(this.now()+offset).toISOString();}
