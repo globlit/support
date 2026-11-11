@@ -7,11 +7,11 @@ import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
 import {Alertmanager} from './alertmanager.js';
-import {YouTrack} from './youtrack.js';
-import type {AlertTicketDraft} from '../src/model.js';
+import {YouTrack,TicketRejected} from './youtrack.js';
+import type {AlertTicketDraft,TicketField} from '../src/model.js';
 
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export const alertDraftInput=z.object({projectId:z.string().min(1).max(100),title:z.string().trim().min(1).max(250),description:z.string().trim().min(1).max(48000),hash:z.string().length(64)}).strict();
+export const alertDraftInput=z.object({fields:z.record(z.string().max(200),z.string().max(200)).optional(),projectId:z.string().min(1).max(100),title:z.string().trim().min(1).max(250),description:z.string().trim().min(1).max(48000),hash:z.string().length(64)}).strict();
 type Context=ReturnType<YouTrack['context']>;
 export class AlertTickets {
  constructor(private store:Store,private alerts:Pick<Alertmanager,'work'|'issue'>,private youtrack:YouTrack,private cases?:{getCase:(id:string)=>AlertCase;saveCase:(c:AlertCase)=>void}){}
@@ -19,8 +19,16 @@ export class AlertTickets {
  private saveCase(c:AlertCase){if(this.cases)this.cases.saveCase(c);else this.store.saveAlert(c)}
  private editable(id:string){const c=this.case(id);assertHandling(this.store,{connection:c.connection,id},['pending','ticket','investigate']);if(c.ticket)throw new AppError(409,'This case already has a YouTrack ticket.');if(c.ticketCreation&&c.ticketCreation.state!=='draft')throw new AppError(409,'Check the pending creation. No new request will be sent.');return c;}
  /** Ticket description sent to YouTrack: the approved draft with the AI label, then the case marker. */
+ /**
+  * Required fields of a project with their values: the given values, then the defaults from Settings when the project is
+  * the default project, then YouTrack's defaults. A value outside a field's allowed values is dropped.
+  */
+ private async fieldsFor(projectId:string,values:Record<string,string>):Promise<TicketField[]>{
+  const defaults=this.store.snapshot().config.youtrackTicketDefaults,preset=defaults.projectId===projectId?defaults.fields:{};
+  return (await this.youtrack.projectFields(projectId)).map(f=>{const wanted=values[f.name]??preset[f.name]??f.value;return {...f,value:!wanted||f.options.length&&!f.options.includes(wanted)?(f.options.includes(f.value)?f.value:''):wanted};});
+ }
  private text(d:AlertTicketDraft){return withAiLabel(d.description)+'\n\nSupport alert case: '+d.marker;}
- private digest(d:AlertTicketDraft){return hash({revision:d.revision,connection:d.connection,endpoint:d.endpoint,project:d.project,title:d.title,description:this.text(d),source:d.sourceUpdated,session:d.sessionRevision,config:d.configRevision});}
+ private digest(d:AlertTicketDraft){return hash({fields:(d.fields??[]).map(f=>[f.name,f.value]),revision:d.revision,connection:d.connection,endpoint:d.endpoint,project:d.project,title:d.title,description:this.text(d),source:d.sourceUpdated,session:d.sessionRevision,config:d.configRevision});}
  private safeText(text:string){
   const tokens=this.store.secretValues();
   if(tokens.some(t=>t&&text.includes(t))||/-----BEGIN [^-]*PRIVATE KEY-----|\bclient-key-data\s*:|\b(password|token|api[_-]?key|authorization)\s*[:=]\s*["']?[^\s"'<>$\[]+/i.test(text))
@@ -62,7 +70,8 @@ export class AlertTickets {
     plan?'## Proposed plan — not executed\n\n'+plan.text:'Investigation pending. No remediation has been performed.',
     c.sourceKind==='slack'?'## Slack thread\n\n'+detail.issue.description+'\n\n'+(detail.issue.comments??[]).map(c=>c.text).join('\n\n'):'Created from a local support alert case. Alert recurrence does not create a new ticket.'].join('\n\n');
    if(description.includes('Support alert case:'))throw new AppError(400,'Remove embedded case references from the plan before preparing a ticket.');
-   const d:AlertTicketDraft={state:'draft',revision:(c.ticketCreation?.revision??0)+1,hash:'',connection:ctx.connection,endpoint:ctx.base.href,project,title:('['+c.severity+'] '+c.title).slice(0,250),description,marker,sourceUpdated:detail.issue.updated,sessionRevision:detail.session.revision,configRevision:ctx.revision!,message:'Draft only. Review the project, title and description before creation.'};
+   const fields=await this.fieldsFor(project.id,{});
+   const d:AlertTicketDraft={fields,state:'draft',revision:(c.ticketCreation?.revision??0)+1,hash:'',connection:ctx.connection,endpoint:ctx.base.href,project,title:('['+c.severity+'] '+c.title).slice(0,250),description,marker,sourceUpdated:detail.issue.updated,sessionRevision:detail.session.revision,configRevision:ctx.revision!,message:'Draft only. Review the project, title and description before creation.'};
    this.safeText(d.title+'\n'+this.text(d));this.guard(id,d,ctx);d.hash=this.digest(d);return this.persist(id,d);
   }finally{release();}
  }
@@ -73,7 +82,9 @@ export class AlertTickets {
    const project=await this.project(input.projectId,ctx);this.guard(id,d,ctx);
    // Keep the reference out of editable text.
    if(input.description.includes('Support alert case:'))throw new AppError(400,'The case reference is added separately. Remove it from the editable description.');
-   Object.assign(d,{project,title:input.title,description:input.description,revision:d.revision+1});
+   const values={...Object.fromEntries((d.project.id===project.id?d.fields??[]:[]).map(f=>[f.name,f.value])),...input.fields};
+   const fields=await this.fieldsFor(project.id,values);
+   Object.assign(d,{fields,project,title:input.title,description:input.description,revision:d.revision+1});
    this.safeText(d.title+'\n'+this.text(d));d.hash=this.digest(d);return this.persist(id,d);
   }finally{release();}
  }
@@ -94,15 +105,20 @@ export class AlertTickets {
    if(hash(await this.project(d.project.id,ctx))!==hash(d.project))throw new AppError(409,'The destination project changed. Prepare a fresh draft.');
    const existing=await this.existing(d.marker,ctx);this.guard(id,d,ctx);
    if(existing)return this.link(id,existing,ctx,'Existing ticket found. No creation request sent.');
+   const missing=(d.fields??[]).filter(f=>f.issueType&&!f.value).map(f=>f.name);
+   if(missing.length)throw new AppError(400,`Choose a value for ${missing.join(', ')} before creating the ticket.`);
    this.safeText(d.title+'\n'+this.text(d));
    // Persist intent before the POST. Pending never returns to draft.
    d.state='pending';d.approval={hash:expectedHash,...humanAttribution(this.store),at:new Date().toISOString()};d.message='Creation requested. Check status if interrupted.';
    this.persist(id,d);intended=true;
-   const remoteId=await this.youtrack.createAlertTicket({project:{id:d.project.id},summary:d.title,description:this.text(d)},ctx);
+   const customFields=(d.fields??[]).filter(f=>f.issueType&&f.value).map(f=>({name:f.name,$type:f.issueType,value:f.issueType==='SingleUserIssueCustomField'?{login:f.value}:{name:f.value}}));
+   const remoteId=await this.youtrack.createAlertTicket({project:{id:d.project.id},summary:d.title,description:this.text(d),...(customFields.length?{customFields}:{})},ctx);
    // Merge operation metadata only. Polling may have updated the case.
    const current=this.case(id).ticketCreation!;current.remoteId=remoteId;this.persist(id,current);
    return await this.finish(id,ctx);
   }catch(e){
+   // A refused creation created nothing: the draft becomes editable again.
+   if(intended&&e instanceof TicketRejected){const d=this.case(id).ticketCreation!;d.state='draft';delete d.approval;d.message=e.message;return this.persist(id,d);}
    if(intended){const d=this.case(id).ticketCreation!;d.message=e instanceof AppError?e.message:'Creation response could not be verified. Check YouTrack status; no automatic retry.';return this.persist(id,d);}
    throw e;
   }finally{release();}

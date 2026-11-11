@@ -236,7 +236,9 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
 
  if(path==='/api/alerts'&&req.method==='GET')return send(res,alerts.queue(claude));
  if(path==='/api/alerts/poll'&&req.method==='POST'){await alerts.poll();return send(res,alerts.queue(claude));}
- if(path==='/api/youtrack/projects'&&req.method==='GET')return send(res,await youtrack.projects());
+ if(path==='/api/youtrack/projects'&&req.method==='GET'){const cache=await youtrack.cachedProjects(url.searchParams.get('refresh')==='1');return send(res,{projects:cache.projects,loadedAt:cache.at,defaultProjectId:store.snapshot().config.youtrackTicketDefaults.projectId});}
+ const projectFieldsMatch=path.match(/^\/api\/youtrack\/projects\/([A-Za-z0-9_.-]{1,100})\/fields$/);
+ if(projectFieldsMatch&&req.method==='GET')return send(res,{fields:await youtrack.projectFields(projectFieldsMatch[1])});
  const handoff=path.match(/^\/api\/alerts\/([a-f0-9]{64})\/handoff\/(preview|carry)$/);
  if(handoff&&req.method==='POST'){
   if(handoff[2]==='preview')return send(res,await handoffs.preview(handoff[1]));

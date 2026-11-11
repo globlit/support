@@ -639,3 +639,5 @@ summary:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; bo
 .work-collapsed{padding:4px 2px}
 @media (max-width:1100px){.work-board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){.work-board{grid-template-columns:1fr}}
+.ticket-fields{border:1px solid var(--line);border-radius:8px;padding:8px 14px;margin:12px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 14px}.ticket-fields legend{font-size:12px;font-weight:600;padding:0 4px}.ticket-fields label{margin:8px 0}
+.ticket-defaults{margin:18px 0;display:grid;gap:4px}.ticket-defaults h4{margin:0;font-size:13px}.ticket-defaults-row{display:flex;gap:10px;align-items:center}.ticket-defaults-row select{flex:1;max-width:360px}.ticket-defaults-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 14px}

@@ -3,7 +3,7 @@ import {assertHandling} from './intake.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {boundedJSON} from './gitlab.js';
-import type {ResolvedState} from '../src/model.js';
+import type {ResolvedState,TicketField} from '../src/model.js';
 import {AppError,Store} from './store.js';
 import type {SourceIssue,WorkSession,PlanAnnotation} from '../src/model.js';
 /** YouTrack project. YouTrack may omit `archived` for projects that are not archived; a missing value means false. */
@@ -16,6 +16,10 @@ const issueSchema=z.object({commentsCount:z.number().optional(),comments:z.array
 const listFields='id,idReadable,summary,updated,resolved,project(name,shortName),customFields(name,value(name,login,fullName,isResolved))';
 const fields='commentsCount,comments(id,text,created,updated,deleted),id,idReadable,summary,description,updated,resolved,project(name,shortName),customFields(name,value(name,login,fullName,isResolved))';
 function display(v:unknown):string{if(v==null)return '';if(Array.isArray(v))return v.map(display).join(', ');if(typeof v==='object'){const o=v as Record<string,unknown>;return String(o.fullName??o.name??o.login??'')}return String(v)}
+/** YouTrack refused a creation request (4xx). Nothing was created. */
+export class TicketRejected extends AppError{constructor(reason:string){super(409,`YouTrack refused the ticket: ${reason}. Nothing was created.`);}}
+/** Issue field type to send for each project field type. */
+const issueFieldTypes:Record<string,string>={EnumProjectCustomField:'SingleEnumIssueCustomField',StateProjectCustomField:'StateIssueCustomField',OwnedProjectCustomField:'SingleOwnedIssueCustomField',VersionProjectCustomField:'SingleVersionIssueCustomField',BuildProjectCustomField:'SingleBuildIssueCustomField',UserProjectCustomField:'SingleUserIssueCustomField'};
 export class YouTrack{
  constructor(private store:Store,private fetcher:typeof fetch=fetch){}
  context(){const config=this.store.snapshot().config.connections.YouTrack;if(!config.enabled||!config.endpoint||!config.scope.trim())throw new AppError(400,'Configure and enable YouTrack with an instance URL and a search query first.');const base=new URL(config.endpoint.replace(/\/+$/,'' )+'/');if(base.protocol!=='https:'&&!['127.0.0.1','localhost','[::1]'].includes(base.hostname))throw new AppError(400,'Use HTTPS for YouTrack. HTTP is allowed only on loopback.');if(/\/(api|mcp)\/?$/.test(base.pathname))throw new AppError(400,'Use the YouTrack instance URL, not its /api or /mcp endpoint.');const token=this.store.readCredential('YouTrack');return {base,token,query:config.scope,revision:this.store.get<number>('configRevision'),epoch:this.store.credentialEpoch,connection:createHash('sha256').update(base.href).digest('hex')};}
@@ -42,10 +46,48 @@ export class YouTrack{
   throw new AppError(409,'Case reference search is incomplete. No ticket was created.');
  }
  async alertTicket(id:string,ctx:ReturnType<YouTrack['context']>){return alertIssueSchema.parse(await this.request('api/issues/'+encodeURIComponent(id),{fields:alertIssueFields},ctx));}
- async createAlertTicket(payload:{project:{id:string};summary:string;description:string},ctx:ReturnType<YouTrack['context']>){
+ /**
+  * Creates an issue. A 4xx answer means YouTrack created nothing: it throws TicketRejected with YouTrack's reason.
+  * Other failures leave the outcome unknown and throw an AppError; the caller must check before any retry.
+  */
+ async createAlertTicket(payload:{project:{id:string};summary:string;description:string;customFields?:unknown[]},ctx:ReturnType<YouTrack['context']>){
   this.assertContext(ctx);const url=new URL('api/issues',ctx.base);url.searchParams.set('fields','id');
-  const result=await boundedJSON(this.fetcher,url,{Authorization:'Bearer '+ctx.token},payload);this.assertContext(ctx);
-  return z.object({id:z.string().min(1)}).parse(result).id;
+  let response:Response;
+  try{response=await this.fetcher(url,{method:'POST',redirect:'manual',headers:{Authorization:'Bearer '+ctx.token,Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(45000)});}
+  catch{throw new AppError(502,'The connection to YouTrack was interrupted. Check whether the ticket exists before trying again.');}
+  const chunks:Uint8Array[]=[];let size=0;
+  if(response.body)for await(const c of response.body as unknown as AsyncIterable<Uint8Array>){size+=c.length;if(size>262144)break;chunks.push(c);}
+  let value:Record<string,unknown>={};try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{value={};}
+  if(response.status>=400&&response.status<500){
+   const reason=[value.error_description??value.error_message??value.error,value.error_field?`(field: ${value.error_field})`:''].filter(v=>typeof v==='string'&&v).join(' ');
+   let text=String(reason||`HTTP ${response.status}`).replace(/[\x00-\x1f\x7f]/g,' ').slice(0,300);for(const s of this.store.secretValues())if(s.length>=6)text=text.split(s).join('[redacted]');
+   throw new TicketRejected(text);
+  }
+  if(!response.ok)throw new AppError(502,`YouTrack returned HTTP ${response.status}. Check whether the ticket exists before trying again.`);
+  this.assertContext(ctx);
+  return z.object({id:z.string().min(1)}).parse(value).id;
+ }
+ /**
+  * Returns the custom fields of a project that cannot be empty, with their allowed values and YouTrack default values.
+  * `issueType` is the type to send at creation; fields of other types are left to YouTrack.
+  */
+ async projectFields(projectId:string):Promise<TicketField[]>{
+  const ctx=this.context();
+  const raw=z.array(z.object({$type:z.string(),canBeEmpty:z.boolean().optional(),field:z.object({name:z.string()}),defaultValues:z.array(z.object({name:z.string().optional(),login:z.string().optional()}).passthrough()).nullish(),bundle:z.object({values:z.array(z.object({name:z.string().optional(),login:z.string().optional(),archived:z.boolean().optional()}).passthrough()).nullish()}).passthrough().nullish()}).passthrough())
+   .parse(await this.request('api/admin/projects/'+encodeURIComponent(projectId)+'/customFields',{fields:'$type,canBeEmpty,field(name),defaultValues(name,login),bundle(values(name,login,archived))',$top:'200'},ctx));
+  return raw.filter(f=>f.canBeEmpty===false).map(f=>{
+   const issueType=issueFieldTypes[f.$type];
+   const options=(f.bundle?.values??[]).filter(v=>!v.archived).map(v=>v.name??v.login??'').filter(Boolean);
+   const defaults=(f.defaultValues??[]).map(v=>v.name??v.login??'').filter(Boolean);
+   return {name:f.field.name,issueType,options,value:defaults[0]??''};
+  });
+ }
+ /** Projects of the connection, from a cache refreshed every 30 minutes or when `refresh` is set. */
+ async cachedProjects(refresh=false){
+  const ctx=this.context(),cached=this.store.get<{at:string;connection:string;projects:z.infer<typeof projectSchema>[]}>('youtrack.projects');
+  if(!refresh&&cached&&cached.connection===ctx.connection&&Date.now()-Date.parse(cached.at)<30*60_000)return cached;
+  const fresh={at:new Date().toISOString(),connection:ctx.connection,projects:await this.projects()};
+  this.store.put('youtrack.projects',fresh);return fresh;
  }
  async resolvedStates(id:string):Promise<ResolvedState[]>{const ctx=this.context();const raw=await this.request('api/issues/'+encodeURIComponent(id)+'/customFields',{fields:'id,name,$type,value(id,name,isResolved),projectCustomField(bundle(values(id,name,isResolved)))',$top:'100'},ctx);const values=z.array(z.object({id:z.string(),name:z.string(),$type:z.string(),projectCustomField:z.object({bundle:z.object({values:z.array(z.object({id:z.string(),name:z.string(),isResolved:z.boolean().optional()}))}).nullable().optional()}).nullable().optional()})).parse(raw);if(values.length>=100)throw new AppError(409,'State field list is incomplete. Close the issue in YouTrack.');return values.filter(v=>v.$type==='StateIssueCustomField').flatMap(v=>(v.projectCustomField?.bundle?.values??[]).filter(s=>s.isResolved===true).map(s=>({fieldId:v.id,fieldName:v.name,valueId:s.id,valueName:s.name})));}
  async currentState(id:string,fieldId:string){const ctx=this.context();return z.object({id:z.string(),$type:z.string(),value:z.object({id:z.string(),isResolved:z.boolean()}).nullable()}).parse(await this.request('api/issues/'+encodeURIComponent(id)+'/customFields/'+encodeURIComponent(fieldId),{fields:'id,$type,value(id,isResolved)'},ctx));}

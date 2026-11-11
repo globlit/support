@@ -14,6 +14,10 @@ Unlock the Vault, then open **Settings → Connections → `<connection>`**. The
 | Toolbox | kubeconfig. |
 | Model | API key, Claude Code login or ChatGPT sign-in, in **Settings → Model**. |
 
+## YouTrack tickets
+
+**Settings → Connections → YouTrack → New tickets** sets the default project for tickets created from alerts and Slack requests, and default values for its required fields. Each ticket can choose another project. Project lists are cached for 30 minutes; **Refresh the list** reads them again.
+
 ## GitLab permissions
 
 The token decides which projects Support can reach. A fine-grained token has two parts ([GitLab REST permissions](https://docs.gitlab.com/auth/tokens/fine_grained_access_tokens_rest/)).
