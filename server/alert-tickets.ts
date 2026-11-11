@@ -1,3 +1,4 @@
+import {withAiLabel} from './ai-label.js';
 import {humanAttribution} from './identity.js';
 import {assertHandling,handling} from './intake.js';
 import type {AlertCase} from '../src/model.js';
@@ -17,7 +18,8 @@ export class AlertTickets {
  private case(id:string){return this.cases?this.cases.getCase(id):this.store.alert(id)}
  private saveCase(c:AlertCase){if(this.cases)this.cases.saveCase(c);else this.store.saveAlert(c)}
  private editable(id:string){const c=this.case(id);assertHandling(this.store,{connection:c.connection,id},['pending','ticket','investigate']);if(c.ticket)throw new AppError(409,'This case already has a YouTrack ticket.');if(c.ticketCreation&&c.ticketCreation.state!=='draft')throw new AppError(409,'Check the pending creation. No new request will be sent.');return c;}
- private text(d:AlertTicketDraft){return d.description+'\n\nSupport alert case: '+d.marker;}
+ /** Ticket description sent to YouTrack: the approved draft with the AI label, then the case marker. */
+ private text(d:AlertTicketDraft){return withAiLabel(d.description)+'\n\nSupport alert case: '+d.marker;}
  private digest(d:AlertTicketDraft){return hash({revision:d.revision,connection:d.connection,endpoint:d.endpoint,project:d.project,title:d.title,description:this.text(d),source:d.sourceUpdated,session:d.sessionRevision,config:d.configRevision});}
  private safeText(text:string){
   const tokens=this.store.secretValues();

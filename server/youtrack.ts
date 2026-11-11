@@ -6,7 +6,8 @@ import {boundedJSON} from './gitlab.js';
 import type {ResolvedState} from '../src/model.js';
 import {AppError,Store} from './store.js';
 import type {SourceIssue,WorkSession,PlanAnnotation} from '../src/model.js';
-export const projectSchema=z.object({id:z.string().min(1),name:z.string(),shortName:z.string(),archived:z.boolean()});
+/** YouTrack project. YouTrack may omit `archived` for projects that are not archived; a missing value means false. */
+export const projectSchema=z.object({id:z.string().min(1),name:z.string(),shortName:z.string(),archived:z.boolean().nullish().transform(v=>v===true)});
 const alertIssueSchema=z.object({id:z.string().min(1),idReadable:z.string().min(1),description:z.string().nullable(),project:z.object({id:z.string().min(1)})});
 const alertIssueFields='id,idReadable,description,project(id)';
 const value=z.union([z.object({name:z.string().optional(),login:z.string().optional(),fullName:z.string().optional(),isResolved:z.boolean().optional()}).passthrough(),z.array(z.object({name:z.string().optional(),login:z.string().optional(),fullName:z.string().optional()}).passthrough()),z.string(),z.number(),z.null()]);

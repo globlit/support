@@ -54,3 +54,6 @@ test('plan annotations queue without a run, survive reads, and can be deleted wi
 test('the ticket list requests no descriptions or comments',async()=>{const f=setup();try{let fields='';const yt=new YouTrack(f.s,(async(url:RequestInfo|URL)=>{fields=new URL(String(url)).searchParams.get('fields')??'';return Response.json([{id:'2-1',idReadable:'INFRA-1',summary:'Disk',updated:1,resolved:null,customFields:[]}]);}) as typeof fetch);
  const page=await yt.list(0,true);assert.ok(!fields.includes('comments')&&!fields.includes('description'));assert.equal(page.issues[0].key,'INFRA-1');assert.equal(page.issues[0].sourceFingerprint,undefined);
  await yt.list(0);assert.ok(fields.includes('comments('),'the intake queue keeps the full fields');}finally{f.done()}});
+
+test('projects without an archived field count as not archived',async()=>{const f=setup();try{const yt=new YouTrack(f.s,(async()=>Response.json([{id:'0-1',name:'Infra',shortName:'INFRA',archived:false},{id:'0-2',name:'Ops',shortName:'OPS'},{id:'0-3',name:'Old',shortName:'OLD',archived:true}])) as typeof fetch);
+ assert.deepEqual((await yt.projects()).map(p=>p.shortName),['INFRA','OPS']);}finally{f.done()}});

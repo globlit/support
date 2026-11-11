@@ -1,3 +1,4 @@
+import {withAiLabel} from './ai-label.js';
 import {humanAttribution} from './identity.js';
 import {sourceKind} from '../src/intake-model.js';
 import {assertHandling} from './intake.js';
@@ -10,7 +11,8 @@ import {AppError} from './store.js';
 import type {ChangeSet,Resolution,ResolutionProof,ResolvedState} from '../src/model.js';
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 export class Resolutions extends Changes {
- private body(r:Resolution){return r.text+'\n\nSupport resolution: '+r.id;}
+ /** Comment posted to YouTrack: the approved text with the AI label, then the resolution marker used to verify it. */
+ private body(r:Resolution){return withAiLabel(r.text)+'\n\nSupport resolution: '+r.id;}
  private resolutionDigest(r:Resolution){return hash({id:r.id,text:this.body(r),revision:r.revision,source:r.sourceUpdated,session:r.sessionRevision,config:r.configRevision,proof:r.proof});}
  private async source(c:ChangeSet,g:GitLab,allowResolved=false){g.check();const issue=await this.readSource(c.issueId,c.connection);g.check();assertHandling(this.store,issue);const w=this.store.workSession(issue);if(issue.connection!==c.connection||(!allowResolved&&issue.resolved&&sourceKind(issue.connection)==='youtrack')||w.pendingRevision||w.plans.at(-1)?.version!==c.planVersion||c.fixes?.some(f=>['pushing','changed'].includes(f.state)))throw new AppError(409,'Ticket or plan needs review before resolution.');return {issue,w};}
  private async proof(c:ChangeSet,g:GitLab):Promise<ResolutionProof>{
