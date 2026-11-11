@@ -280,47 +280,118 @@ export async function relayPorts(locals:number[],tunnel:ChildProcess,address=pro
  return relays;
 }
 
-const kubectlVerbs=new Set(['get','logs','contexts','resources','api-resources','config']);
+/** kubectl short names, mapped to the names Toolbox accepts. */
+const kubectlAliases:Record<string,string>={po:'pods',pod:'pods',svc:'services',service:'services',deploy:'deployments',deployment:'deployments',sts:'statefulsets',statefulset:'statefulsets',ds:'daemonsets',daemonset:'daemonsets',rs:'replicasets',replicaset:'replicasets',job:'jobs',cj:'cronjobs',cronjob:'cronjobs',ing:'ingresses',ingress:'ingresses',netpol:'networkpolicies',networkpolicy:'networkpolicies',ep:'endpoints',ev:'events',event:'events',pvc:'persistentvolumeclaims',pv:'persistentvolumes',ns:'namespaces',namespace:'namespaces',no:'nodes',node:'nodes',cm:'configmaps',configmap:'configmaps',hpa:'horizontalpodautoscalers',pdb:'poddisruptionbudgets',sc:'storageclasses',hr:'helmreleases',helmrelease:'helmreleases',ks:'kustomizations',kustomization:'kustomizations',smon:'servicemonitors',servicemonitor:'servicemonitors',pmon:'podmonitors',podmonitor:'podmonitors',prometheusrule:'prometheusrules',cert:'certificates',certificate:'certificates',cnp:'ciliumnetworkpolicies',ciliumnetworkpolicy:'ciliumnetworkpolicies',ccnp:'ciliumclusterwidenetworkpolicies'};
+type K8sObject={kind?:string;metadata?:{name?:string;namespace?:string;creationTimestamp?:string;managedFields?:unknown;annotations?:Record<string,string>};spec?:Record<string,unknown>;status?:Record<string,unknown>;[k:string]:unknown};
+/** Removes managedFields and the last-applied annotation, which are large and rarely useful to read. */
+function slim<T>(value:T):T{
+ if(Array.isArray(value))return value.map(slim) as T;
+ if(value&&typeof value==='object'){const out:Record<string,unknown>={};for(const [k,v] of Object.entries(value)){if(k==='managedFields')continue;if(k==='annotations'&&v&&typeof v==='object'){const a={...v as Record<string,unknown>};delete a['kubectl.kubernetes.io/last-applied-configuration'];out[k]=a;continue;}out[k]=slim(v);}return out as T;}
+ return value;
+}
+const age=(ts?:string)=>{if(!ts)return '';const s=Math.max(0,(Date.now()-Date.parse(ts))/1000);return s<120?`${Math.round(s)}s`:s<7200?`${Math.round(s/60)}m`:s<172800?`${Math.round(s/3600)}h`:`${Math.round(s/86400)}d`;};
+/** Formats objects as a kubectl-like table: common columns for pods, workloads, services and events, NAME and AGE otherwise. */
+function table(items:K8sObject[],wide:boolean,allNamespaces:boolean){
+ if(!items.length)return 'No resources found.';
+ const kind=items[0].kind??'';
+ const cols:[string,(o:K8sObject)=>string][]=[];
+ if(allNamespaces)cols.push(['NAMESPACE',o=>o.metadata?.namespace??'']);
+ cols.push(['NAME',o=>o.metadata?.name??'']);
+ const st=(o:K8sObject)=>o.status as Record<string,any>|undefined,sp=(o:K8sObject)=>o.spec as Record<string,any>|undefined;
+ if(kind==='Pod'){
+  cols.push(['READY',o=>{const c=(st(o)?.containerStatuses??[]) as {ready?:boolean}[];return `${c.filter(x=>x.ready).length}/${c.length||((sp(o)?.containers??[]) as unknown[]).length}`;}],
+   ['STATUS',o=>{const c=(st(o)?.containerStatuses??[]) as {state?:{waiting?:{reason?:string};terminated?:{reason?:string}}}[];return c.map(x=>x.state?.waiting?.reason??x.state?.terminated?.reason).find(Boolean)??st(o)?.phase??'';}],
+   ['RESTARTS',o=>String(((st(o)?.containerStatuses??[]) as {restartCount?:number}[]).reduce((n,x)=>n+(x.restartCount??0),0))]);
+  if(wide)cols.push(['IP',o=>st(o)?.podIP??''],['NODE',o=>sp(o)?.nodeName??'']);
+ }else if(['Deployment','StatefulSet','ReplicaSet'].includes(kind))cols.push(['READY',o=>`${st(o)?.readyReplicas??0}/${sp(o)?.replicas??0}`],['UP-TO-DATE',o=>String(st(o)?.updatedReplicas??0)],['AVAILABLE',o=>String(st(o)?.availableReplicas??0)]);
+ else if(kind==='DaemonSet')cols.push(['DESIRED',o=>String(st(o)?.desiredNumberScheduled??0)],['READY',o=>String(st(o)?.numberReady??0)]);
+ else if(kind==='Service')cols.push(['TYPE',o=>sp(o)?.type??''],['CLUSTER-IP',o=>sp(o)?.clusterIP??''],['PORTS',o=>((sp(o)?.ports??[]) as {port?:number;protocol?:string}[]).map(p=>`${p.port}/${p.protocol??'TCP'}`).join(',')]);
+ else if(kind==='Event')cols.splice(cols.findIndex(c=>c[0]==='NAME'),1,['TYPE',o=>String((o as any).type??'')],['REASON',o=>String((o as any).reason??'')],['OBJECT',o=>`${(o as any).involvedObject?.kind??''}/${(o as any).involvedObject?.name??''}`],['MESSAGE',o=>String((o as any).message??'').replace(/\s+/g,' ').slice(0,wide?400:120)]);
+ else if(kind==='Node')cols.push(['STATUS',o=>((st(o)?.conditions??[]) as {type?:string;status?:string}[]).find(c=>c.type==='Ready')?.status==='True'?'Ready':'NotReady'],['VERSION',o=>st(o)?.nodeInfo?.kubeletVersion??'']);
+ else if(['HelmRelease','Kustomization'].includes(kind))cols.push(['READY',o=>((st(o)?.conditions??[]) as {type?:string;status?:string;message?:string}[]).find(c=>c.type==='Ready')?.status??''],['STATUS',o=>(((st(o)?.conditions??[]) as {type?:string;message?:string}[]).find(c=>c.type==='Ready')?.message??'').slice(0,wide?300:80)]);
+ cols.push(['AGE',o=>age(o.metadata?.creationTimestamp)]);
+ const rows=[cols.map(c=>c[0]),...items.map(o=>cols.map(c=>{try{return c[1](o);}catch{return '';}}))];
+ const widths=cols.map((_,i)=>Math.max(...rows.map(r=>r[i].length)));
+ return rows.map(r=>r.map((v,i)=>i===r.length-1?v:v.padEnd(widths[i])).join('   ')).join('\n');
+}
+/** Minimal YAML for kubectl -o yaml and describe. */
+function yaml(v:unknown,indent=''):string{
+ if(v===null||v===undefined)return 'null';
+ if(typeof v!=='object')return typeof v==='string'&&(/^[\s-?:,[\]{}#&*!|>'"%@`]|[:#]\s|^$|^(true|false|null|\d[\d.eE+-]*)$/.test(v)||v.includes('\n'))?JSON.stringify(v):String(v);
+ if(Array.isArray(v))return v.length?v.map(x=>`\n${indent}- ${yaml(x,indent+'  ').replace(/^\n\s*/,'')}`).join(''):'[]';
+ const e=Object.entries(v as Record<string,unknown>);
+ return e.length?e.map(([k,x])=>`\n${indent}${k}: ${typeof x==='object'&&x!==null&&(Array.isArray(x)?x.length:Object.keys(x).length)?yaml(x,indent+'  '):yaml(x,indent+'  ')}`).join(''):'{}';
+}
 /**
- * Runs a kubectl-style read through Toolbox for the agent's kubectl command. Accepts `get`, `logs`, `api-resources`
- * (the Toolbox catalog), `contexts` and `config get-contexts`. Toolbox applies its policy: allowed contexts,
- * namespaces and resources, sanitized output. Output flags other than JSON are replaced by JSON. Returns kubectl-like
- * stdout, stderr and exit code: the object data as JSON, or the log text.
+ * Runs a kubectl-style read through Toolbox for the agent's kubectl command. Accepts get (table by default, or -o wide,
+ * yaml, json, name), describe (object and its events), logs, top, api-resources (the Toolbox catalog) and config
+ * get-contexts. Short names such as po, svc or netpol are accepted. Toolbox applies its policy: allowed contexts,
+ * namespaces and resources, sanitized output. Returns kubectl-like stdout, stderr and exit code.
  */
 export async function toolboxKubectl(config:Config,argv:unknown,signal:AbortSignal,files:ToolboxFiles|null){
  const args=z.array(z.string().max(2000)).max(40).parse(argv);
+ const usage='Read-only kubectl through Toolbox: get (table; -o wide|yaml|json|name), describe, logs, top pods|nodes, api-resources, config get-contexts. Flags: --context, -n, -A, -l, -c, --tail, --since, --previous. Not available: writes, exec, port-forward (use the toolbox_port_forward tool), jsonpath (use -o json | jq).';
  const verb=args[0];
- const usage='Supported: kubectl get, kubectl logs, kubectl api-resources, kubectl config get-contexts. Writes, exec, port-forward and describe are not available. Use get -o json and the events resource instead of describe, and toolbox_port_forward for tunnels.';
- if(!verb||verb==='-h'||verb==='--help')return {stdout:usage,stderr:'',code:0};
- if(!kubectlVerbs.has(verb))return {stdout:'',stderr:`kubectl ${verb} is not available in the agent sandbox. ${usage}`,code:1};
+ if(!verb||verb==='-h'||verb==='--help'||verb==='help')return {stdout:usage,stderr:'',code:0};
+ if(!['get','describe','logs','top','api-resources','config'].includes(verb))return {stdout:'',stderr:`kubectl ${verb} is not available in the agent sandbox. ${usage}`,code:1};
  if(!config.connections.Toolbox.enabled)return {stdout:'',stderr:'Toolbox is disabled in Settings → Connections → Toolbox.',code:1};
- let rest=args.slice(1);
- let mode=verb;
- if(verb==='config'){if(rest[0]!=='get-contexts'&&rest[0]!=='current-context')return {stdout:'',stderr:`kubectl config ${rest[0]??''} is not available. Use kubectl config get-contexts.`,code:1};mode='contexts';rest=[];}
- if(verb==='api-resources'){mode='resources';rest=rest.filter(a=>a.startsWith('--context'));}
- if(mode==='get'){
-  const kept:string[]=[];
-  for(let i=0;i<rest.length;i++){const a=rest[i];if(a==='-o'||a==='--output'){i++;continue;}if(a.startsWith('-o')&&a.length>2||a.startsWith('--output='))continue;kept.push(a);}
-  rest=[...kept,'-o','json'];
- }
+ // Options with a value, normalised to their long form.
+ const opts:Record<string,string>={};const flags=new Set<string>();const positional:string[]=[];
+ const valued:Record<string,string>={'-n':'namespace','--namespace':'namespace','-l':'selector','--selector':'selector','-o':'output','--output':'output','--context':'context','-c':'container','--container':'container','--tail':'tail','--since':'since','--sort-by':'sort-by','--field-selector':'field-selector'};
+ for(let i=1;i<args.length;i++){const a=args[i];const [k,v]=a.includes('=')&&a.startsWith('-')?[a.slice(0,a.indexOf('=')),a.slice(a.indexOf('=')+1)]:[a,undefined];
+  if(k in valued){opts[valued[k]]=v??args[++i]??'';continue;}
+  if(a==='-A'||a==='--all-namespaces'){flags.add('all');continue;}
+  if(a==='-p'||a==='--previous'){flags.add('previous');continue;}
+  if(a==='--no-headers'||a==='--show-labels'||a==='-w'||a==='--watch'){flags.add(a);continue;}
+  if(a.startsWith('-o')&&a.length>2){opts.output=a.slice(2);continue;}
+  if(a.startsWith('-'))return {stdout:'',stderr:`kubectl: option ${a} is not supported here. ${usage}`,code:1};
+  positional.push(a);}
+ if(flags.has('-w')||flags.has('--watch'))return {stdout:'',stderr:'kubectl: --watch is not available. Run the command again later instead.',code:1};
+ const resolve=(r:string)=>{const [base,name]=r.split('/');const lower=base.toLowerCase();const mapped=kubectlAliases[lower]??lower;return {resource:catalogName(mapped,readableResources(config)),name};};
+ const common=[...(opts.context?['--context',opts.context]:[]),...(opts.namespace?['--namespace',opts.namespace]:[])];
  const binary=toolboxBinary();let run:Awaited<ReturnType<typeof toolboxRunConfig>>|undefined;
+ const exec2=(cli:string[])=>new Promise<{stdout:string;stderr:string;code:number}>((resolveP,reject)=>{execFile(binary,['--config',run!.configPath,'kubectl',...cli],{signal,timeout:60000,maxBuffer:16_000_000,encoding:'utf8',shell:false,env:run!.env},(error,stdout,stderr)=>{const code=(error as {code?:unknown}|null)?.code;if(error&&typeof code!=='number')return reject(error);resolveP({stdout:String(stdout),stderr:String(stderr),code:typeof code==='number'?code:0});});});
+ // Runs Toolbox and returns its data, or the error it reported.
+ const read=async(cli:string[]):Promise<{data?:unknown;text?:string;error?:string}>=>{const r=await exec2(cli);let v:{error?:string;data?:unknown;text?:string;diagnostics?:string}|undefined;try{v=JSON.parse(r.stdout);}catch{return r.code?{error:(r.stderr||r.stdout).trim().split('\n')[0]||'Toolbox failed.'}:{text:r.stdout};}if(v?.error)return {error:[v.error,v.diagnostics].filter(Boolean).join(' · ')};return {data:v?.data,text:v?.text};};
+ const items=(d:unknown):K8sObject[]=>{const v=d as {items?:K8sObject[];kind?:string};return Array.isArray(v?.items)?v.items.map(i=>({kind:(v.kind??'').replace(/List$/,'')||i.kind,...i})):v&&typeof v==='object'?[v as K8sObject]:[];};
  try{
   run=await toolboxRunConfig(config,files);
-  const result=await new Promise<{stdout:string;stderr:string;code:number}>((resolve,reject)=>{
-   execFile(binary,['--config',run!.configPath,'kubectl',mode,...rest],{signal,timeout:60000,maxBuffer:16_000_000,encoding:'utf8',shell:false,env:run!.env},(error,stdout,stderr)=>{
-    const code=(error as {code?:unknown}|null)?.code;
-    if(error&&typeof code!=='number')return reject(error);
-    resolve({stdout:String(stdout),stderr:String(stderr),code:typeof code==='number'?code:0});
-   });
-  });
-  let value:{error?:string;data?:unknown;text?:string;diagnostics?:string}|unknown;try{value=JSON.parse(result.stdout);}catch{return {stdout:result.stdout,stderr:result.stderr,code:result.code};}
-  const v=value as {error?:string;data?:unknown;text?:string;diagnostics?:string};
-  if(v&&typeof v==='object'&&!Array.isArray(v)&&('data' in v||'text' in v||'error' in v)){
-   const stderr=[v.error,v.diagnostics].filter(Boolean).join('\n');
-   const stdout=v.text??(v.data===undefined?'':JSON.stringify(v.data,null,2));
-   return {stdout,stderr,code:v.error?1:result.code};
+  if(verb==='config'){if(positional[0]!=='get-contexts'&&positional[0]!=='current-context')return {stdout:'',stderr:'kubectl config: only get-contexts is available.',code:1};const r=await read(['contexts']);return r.error?{stdout:'',stderr:r.error,code:1}:{stdout:JSON.stringify(r.data??r.text,null,1),stderr:'',code:0};}
+  if(verb==='api-resources'){const r=await read(['resources',...(opts.context?['--context',opts.context]:[])]);return r.error?{stdout:'',stderr:r.error,code:1}:{stdout:((r.data??[]) as {name?:string;cluster_scoped?:boolean}[]).map(x=>`${x.name}${x.cluster_scoped?'  (cluster-scoped)':''}`).join('\n')||JSON.stringify(r.data),stderr:'',code:0};}
+  if(verb==='logs'){
+   const target=positional[0]?.replace(/^(pod|po|pods)\//,'');if(!target)return {stdout:'',stderr:'kubectl logs: give a pod name.',code:1};
+   const r=await read(['logs',target,...common,...(opts.container?['-c',opts.container]:[]),...(flags.has('previous')?['--previous']:[]),'--tail',opts.tail&&Number(opts.tail)>0?String(Math.min(2000,Number(opts.tail))):'200',...(opts.since?['--since',opts.since]:[])]);
+   return r.error?{stdout:'',stderr:r.error,code:1}:{stdout:r.text??JSON.stringify(r.data),stderr:'',code:0};
   }
-  return {stdout:JSON.stringify(value,null,2),stderr:result.stderr,code:result.code};
+  if(verb==='top'){const kind=(positional[0]??'').toLowerCase();const resource=kind.startsWith('no')?'nodes.metrics.k8s.io':'pods.metrics.k8s.io';const r=await read(['get',resource,...common,...(flags.has('all')?['--all-namespaces']:[]),'-o','json']);if(r.error)return {stdout:'',stderr:r.error,code:1};
+   const rows=items(r.data).map(o=>{const c=((o as any).containers??[{usage:(o as any).usage}]) as {usage?:{cpu?:string;memory?:string}}[];return [o.metadata?.namespace??'',o.metadata?.name??'',c.map(x=>x.usage?.cpu??'').join('+'),c.map(x=>x.usage?.memory??'').join('+')];});
+   return {stdout:['NAMESPACE   NAME   CPU   MEMORY',...rows.map(r=>r.join('   '))].join('\n'),stderr:'',code:0};}
+  if(verb==='get'||verb==='describe'){
+   if(!positional.length)return {stdout:'',stderr:`kubectl ${verb}: give a resource, for example pods or netpol/NAME.`,code:1};
+   const {resource,name:inline}=resolve(positional[0]);const name=inline??positional[1];
+   if(!readableResources(config).includes(resource))return {stdout:'',stderr:`kubectl: ${positional[0]} is not in the Toolbox catalog. Run kubectl api-resources for the list.`,code:1};
+   const r=await read(['get',resource,...(name?[name]:[]),...common,...(flags.has('all')&&!name?['--all-namespaces']:[]),...(opts.selector?['-l',opts.selector]:[]),'-o','json']);
+   if(r.error)return {stdout:'',stderr:r.error,code:1};
+   const list=slim(items(r.data));
+   if(verb==='describe'){
+    const parts:string[]=[];
+    for(const o of list.slice(0,10)){
+     parts.push(`# ${o.kind??resource}/${o.metadata?.name}${o.metadata?.namespace?` (namespace ${o.metadata.namespace})`:''}`+yaml(o));
+     const ev=await read(['get','events',...(opts.context?['--context',opts.context]:[]),...(o.metadata?.namespace?['--namespace',o.metadata.namespace]:[]),'-o','json']);
+     const mine=ev.error?[]:items(ev.data).filter(e=>(e as any).involvedObject?.name===o.metadata?.name);
+     parts.push(mine.length?'Events:\n'+table(mine.map(e=>({...e,kind:'Event'})),false,false):'Events: <none>');
+    }
+    return {stdout:parts.join('\n\n'),stderr:list.length>10?`Showing 10 of ${list.length}. Name one object to describe it.`:'',code:0};
+   }
+   const out=(opts.output??'').toLowerCase();
+   if(out==='json')return {stdout:JSON.stringify(list.length===1&&name?list[0]:{kind:'List',items:list},null,1),stderr:'',code:0};
+   if(out==='yaml')return {stdout:yaml(list.length===1&&name?list[0]:{kind:'List',items:list}).replace(/^\n/,''),stderr:'',code:0};
+   if(out==='name')return {stdout:list.map(o=>`${(o.kind??resource).toLowerCase()}/${o.metadata?.name}`).join('\n'),stderr:'',code:0};
+   if(out&&out!=='wide')return {stdout:'',stderr:`kubectl: -o ${out} is not supported here. Use -o json and jq.`,code:1};
+   const text=table(list,out==='wide',flags.has('all'));
+   return {stdout:flags.has('--no-headers')?text.split('\n').slice(1).join('\n'):text,stderr:'',code:0};
+  }
+  return {stdout:'',stderr:`kubectl ${verb} is not available in the agent sandbox. ${usage}`,code:1};
  }catch(e){throw toolboxFailure(e,'kubectl failed',signal);}
  finally{await run?.cleanup();}
 }

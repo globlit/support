@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+# Calls a Support tool from the agent sandbox.
+#   support list                 Lists the tools with their input schema.
+#   support <tool> [JSON input]  Calls a tool and prints its JSON result. The input can also come from stdin.
+# Environment: SUPPORT_TOOLS_URL, set by Support for each agent session.
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+USAGE = 'Usage: support list | support <tool> [JSON input]'
+
+# Support is on the sandbox network: ignore HTTP_PROXY and the other proxy variables.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def send(request):
+    """Returns the HTTP status and the response body, also for error statuses."""
+    try:
+        with OPENER.open(request) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+def read_input(argument):
+    """Returns the tool input: the argument, else stdin, else "{}"."""
+    if argument is not None:
+        return argument
+    if sys.stdin is None or sys.stdin.isatty():
+        return '{}'
+    text = sys.stdin.read().strip()
+    if not text:
+        return '{}'
+    return text
+
+
+def main():
+    base = os.environ.get('SUPPORT_TOOLS_URL')
+    if not base:
+        print('support: SUPPORT_TOOLS_URL is not set. This command works inside a Support agent session only.', file=sys.stderr)
+        return 2
+
+    args = sys.argv[1:]
+    name = args[0] if args else ''
+    argument = args[1] if len(args) > 1 else None
+    if not name or name in ('-h', '--help'):
+        print(USAGE)
+        return 0 if name else 2
+
+    if name == 'list':
+        request = urllib.request.Request(f'{base}/tools')
+    else:
+        try:
+            tool_input = json.loads(read_input(argument))
+        except ValueError:
+            print('support: the input must be JSON, for example {"query":"up"}.', file=sys.stderr)
+            return 2
+        tool = urllib.parse.quote(name, safe="!*'()")
+        request = urllib.request.Request(
+            f'{base}/tools/{tool}',
+            data=json.dumps(tool_input).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+
+    status, body = send(request)
+    text = body.decode('utf-8', errors='replace')
+    try:
+        value = json.loads(text)
+    except ValueError:
+        value = text
+
+    if not 200 <= status < 300:
+        error = value.get('error') if isinstance(value, dict) else None
+        print(f'support: {error if error is not None else text}', file=sys.stderr)
+        return 1
+
+    if isinstance(value, str):
+        print(value)
+    else:
+        print(json.dumps(value, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except urllib.error.URLError as error:
+        print(f'support: {error.reason}', file=sys.stderr)
+        sys.exit(1)
+    except Exception as error:
+        print(f'support: {error}', file=sys.stderr)
+        sys.exit(1)

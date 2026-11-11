@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+// Toolbox in the agent sandbox: "toolbox kubectl ..." runs the same read-only kubectl as the kubectl command, through
+// Support, which applies the Toolbox configuration. --config is ignored: Support holds the configuration.
+const base=process.env.SUPPORT_TOOLS_URL;
+if(!base){console.error('toolbox: SUPPORT_TOOLS_URL is not set. Cluster access works inside a Support agent session only.');process.exit(2);}
+const args=process.argv.slice(2).filter((a,i,all)=>a!=='--config'&&all[i-1]!=='--config'&&!a.startsWith('--config='));
+if(args[0]!=='kubectl'){console.error('toolbox: only "toolbox kubectl <get|describe|logs|top|api-resources> ..." is available in the agent sandbox.');process.exit(2);}
+fetch(`${base}/kubectl`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:args.slice(1)})})
+ .then(async r=>{const v=await r.json().catch(()=>({error:'Support returned no JSON.'}));
+  if(!r.ok){console.error('toolbox: '+(v.error??`HTTP ${r.status}`));process.exit(1);}
+  if(v.stderr)process.stderr.write(v.stderr.endsWith('\n')?v.stderr:v.stderr+'\n');
+  if(v.stdout)process.stdout.write(v.stdout.endsWith('\n')?v.stdout:v.stdout+'\n');
+  process.exit(v.code??0);})
+ .catch(e=>{console.error('toolbox: '+(e?.message??e));process.exit(1);});

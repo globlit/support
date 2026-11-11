@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+# Read-only kubectl for the agent sandbox.
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+# Support is on the sandbox network: ignore HTTP_PROXY and the other proxy variables.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def post_json(url, value):
+    """Sends value as JSON. Returns the HTTP status and the response body, also for error statuses."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(value).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with OPENER.open(request) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+def write_line(stream, text):
+    if text.endswith('\n'):
+        stream.write(text)
+    else:
+        stream.write(text + '\n')
+
+
+def main():
+    base = os.environ.get('SUPPORT_TOOLS_URL')
+    if not base:
+        print('kubectl: SUPPORT_TOOLS_URL is not set. Cluster access works inside a Support agent session only.', file=sys.stderr)
+        return 2
+
+    status, body = post_json(f'{base}/kubectl', {'args': sys.argv[1:]})
+    try:
+        value = json.loads(body)
+    except ValueError:
+        value = {'error': 'Support returned no JSON.'}
+    if not isinstance(value, dict):
+        value = {}
+
+    if not 200 <= status < 300:
+        error = value.get('error')
+        print(f'kubectl: {error if error is not None else f"HTTP {status}"}', file=sys.stderr)
+        return 1
+
+    if value.get('stderr'):
+        write_line(sys.stderr, value['stderr'])
+    if value.get('stdout'):
+        write_line(sys.stdout, value['stdout'])
+    code = value.get('code')
+    if code is None:
+        return 0
+    return int(code)
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except urllib.error.URLError as error:
+        print(f'kubectl: {error.reason}', file=sys.stderr)
+        sys.exit(1)
+    except Exception as error:
+        print(f'kubectl: {error}', file=sys.stderr)
+        sys.exit(1)
