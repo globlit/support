@@ -122,7 +122,7 @@ USER root
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/sandbox-entrypoint
 COPY --chmod=0755 server.py /usr/local/bin/support-sandbox
-# Commands of the Support agent: Support tools and read-only cluster access through Support.
+# The support command: calls Support tools from Bash and scripts.
 COPY --chmod=0755 bin/ /opt/support-agent/bin/
 
 WORKDIR /srv/sandbox-runs

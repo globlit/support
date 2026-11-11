@@ -8,7 +8,7 @@ import {routeHash} from '../src/navigation.js';
 import type {ConnectionName} from '../src/model.js';
 const route=(message:string,context?:ConnectionName)=>{const action=errorRecovery(message,context);return action?routeHash(action.route):null};
 test('Vault access errors from every page lead to Vault without depending on the tool context',()=>{
- for(const context of [undefined,'Model','GitLab','YouTrack','Alertmanager','Toolbox'] as const)for(const message of ['Unlock the credential vault in Settings → Vault first.','Unlock the Vault to read investigations.','Unlock Settings → Vault to view logs.','Polling paused · Vault locked','Incorrect vault passphrase.','Create the vault first.'])assert.equal(route(message,context),'#/settings?section=Vault',message);
+ for(const context of [undefined,'Model','GitLab','YouTrack','Alertmanager','Kubernetes'] as const)for(const message of ['Unlock the credential vault in Settings → Vault first.','Unlock the Vault to read investigations.','Unlock Settings → Vault to view logs.','Polling paused · Vault locked','Incorrect vault passphrase.','Create the vault first.'])assert.equal(route(message,context),'#/settings?section=Vault',message);
 });
 test('service credentials route to their connection settings; model API keys and subscription accounts route to Model',()=>{
  for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack'])assert.equal(route(`Save the ${name} credential in the Vault first.`),`#/settings?section=Connections&tool=${name}`);
@@ -17,10 +17,11 @@ test('service credentials route to their connection settings; model API keys and
  assert.equal(route('Service returned HTTP 401. Check access and configuration.','GitLab'),'#/settings?section=Connections&tool=GitLab');
  assert.equal(route('Connection returned HTTP 403. Check access and endpoint settings.','Model'),'#/logs?step=error&tool=Model');
 });
-test('configuration failures select the actual tool; Toolbox never asks for a service token',()=>{
- for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack','Toolbox'] as ConnectionName[])assert.equal(route(`Configure and enable ${name} in Connections.`),`#/settings?section=Connections&tool=${name}`);
+test('configuration failures select the actual tool; Kubernetes never asks for a service token',()=>{
+ for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack','Kubernetes'] as ConnectionName[])assert.equal(route(`Configure and enable ${name} in Connections.`),`#/settings?section=Connections&tool=${name}`);
  for(const message of ['Enable Model in Connections and set its API base URL, model ID and vault API key.','Set the absolute path to the Claude executable in Settings → Model.','Could not start Claude CLI. Check its executable path and installation.'])assert.equal(route(message),'#/settings?section=Model');
- assert.equal(route('Toolbox read failed. Check its binary, configuration, context access and response size where Support runs.'),'#/settings?section=Connections&tool=Toolbox');
+ assert.equal(route('Kubernetes context prod is not enabled in Support. Enabled contexts: none.'),'#/settings?section=Connections&tool=Kubernetes');
+ assert.equal(route('Kubernetes: HTTP 401 unauthorized.'),'#/settings?section=Connections&tool=Kubernetes');
 });
 test('usage, outages and generated-request failures do not send users to sign in again',()=>{
  for(const message of ['The provider is rate-limiting requests. Wait before investigating again; your saved connection has been kept.','The usage allowance for this request has been reached. Check ChatGPT Settings → Usage if using your subscription. Signing in again will not reset it.','The provider rejected the model request or tool definition. Review the details below; signing in again will not fix the request.','ChatGPT authentication is temporarily unavailable. Your saved account has been kept.','Conclusion references an unknown tool call.'])assert.equal(route(message,'Model'),'#/logs?step=error&tool=Model',message);

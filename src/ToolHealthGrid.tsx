@@ -1,5 +1,5 @@
 import type {ToolHealth} from './telemetry-model';
-const icons:Record<string,string>={YouTrack:'YT',GitLab:'GL',Toolbox:'⌘',Outline:'O',Alertmanager:'!',Prometheus:'P',Grafana:'G',Slack:'#',Model:'✦'};
+const icons:Record<string,string>={YouTrack:'YT',GitLab:'GL',Kubernetes:'K8s',Outline:'O',Alertmanager:'!',Prometheus:'P',Grafana:'G',Slack:'#',Model:'✦'};
 export function ToolHealthGrid({items,openTool}:{items:ToolHealth[];openTool:(name:string)=>void}){
  return <div className="tool-health-grid">{items.map(tool=><div className="tool-health-item" key={tool.name}><button type="button" aria-label={`${tool.name}: ${tool.label}`} aria-describedby={'health-'+tool.name} onClick={()=>openTool(tool.name)}><span className="tool-symbol" aria-hidden="true">{icons[tool.name]}</span><span>{tool.name}</span><i className={'health-dot '+tool.state} aria-hidden="true"/></button><div id={'health-'+tool.name} role="tooltip" className="tool-health-tooltip"><strong>{tool.name} · {tool.label}</strong><p>{tool.detail}</p>{tool.at&&<small>Checked {new Date(tool.at).toLocaleString()}</small>}{tool.intervalSeconds&&<small>Every {tool.intervalSeconds}s · Timeout {tool.timeoutSeconds}s</small>}</div></div>)}</div>;
 }

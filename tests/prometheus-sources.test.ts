@@ -3,35 +3,36 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {EventEmitter} from 'node:events';
-import type {ChildProcess} from 'node:child_process';
+import {createServer} from 'node:http';
 import {Store} from '../server/store.js';
 import {defaults,configSchema,type Config} from '../src/model.js';
-import {PrometheusSources} from '../server/prometheus-sources.js';
+import {PrometheusSources,serviceProxyPath} from '../server/prometheus-sources.js';
 import {Grafana} from '../server/grafana.js';
-import {portForwardInput,toolboxArgs} from '../server/toolbox.js';
 import {systemPrompt} from '../server/claude.js';
 
-function fixture(edit:(c:Config)=>void=()=>{}){
+function fixture(edit:(c:Config)=>void=()=>{},server='http://127.0.0.1:9'){
  const dir=mkdtempSync(join(tmpdir(),'support-prom-')),store=new Store(dir);store.unlock('an isolated prometheus passphrase',true);
  const config:Config=structuredClone(defaults);
  config.connections.Prometheus={...config.connections.Prometheus,enabled:true};
  config.connections.Grafana={...config.connections.Grafana,enabled:true,endpoint:'https://grafana.internal'};
- config.connections.Toolbox={...config.connections.Toolbox,enabled:true};config.toolbox={...config.toolbox,allowPortForward:true};
- config.prometheusSources=[{id:'p1',name:'prometheus',kind:'url',endpoint:'https://prom.internal'},{id:'m1',name:'monitoring',kind:'tunnel',context:'monitoring',namespace:'monitoring-federation',target:'statefulset/prometheus-kps-prometheus',port:9090,pathPrefix:''}];
+ config.connections.Kubernetes={...config.connections.Kubernetes,enabled:true};config.kubernetesContexts=[{name:'monitoring',server,enabled:true}];
+ store.credential('Kubernetes/monitoring',JSON.stringify({token:'monitoring-token'}));
+ config.prometheusSources=[{id:'p1',name:'prometheus',kind:'url',endpoint:'https://prom.internal'},{id:'m1',name:'monitoring',kind:'tunnel',context:'monitoring',namespace:'monitoring-federation',target:'service/prometheus-operated',port:9090,pathPrefix:''}];
  edit(config);
  return {store,config,close(){store.close();rmSync(dir,{recursive:true,force:true})}};
 }
-const child=()=>Object.assign(new EventEmitter(),{exitCode:null,signalCode:null,kill(){(this as {exitCode:number|null}).exitCode=0;return true;}}) as unknown as ChildProcess;
 
-test('sources combine URL servers, Kubernetes tunnels and Grafana datasources, each with its own URL and credential',async()=>{
- const f=fixture();f.store.credential('Grafana',JSON.stringify({v:1,scheme:'basic',username:'viewer',password:'pw'}));f.store.credential('Prometheus/p1',JSON.stringify({v:1,scheme:'bearer',token:'prom-token'}));
- const urls:{url:string;auth?:string}[]=[];let opened=0;
+test('sources combine URL servers, servers inside a cluster and Grafana datasources, each with its own URL and credential',async()=>{
+ const proxied:{url:string;auth?:string;method?:string}[]=[];
+ const api=createServer((req,res)=>{proxied.push({url:req.url??'',auth:req.headers.authorization,method:req.method});res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({status:'success',data:{result:[]}}));});
+ await new Promise<void>(r=>api.listen(0,'127.0.0.1',()=>r()));
+ const f=fixture(()=>{},`http://127.0.0.1:${(api.address() as {port:number}).port}`);f.store.credential('Grafana',JSON.stringify({v:1,scheme:'basic',username:'viewer',password:'pw'}));f.store.credential('Prometheus/p1',JSON.stringify({v:1,scheme:'bearer',token:'prom-token'}));
+ const urls:{url:string;auth?:string}[]=[];
  const fetcher=(async(input:RequestInfo|URL,init?:RequestInit)=>{const u=new URL(String(input));urls.push({url:u.href,auth:(init?.headers as Record<string,string>).Authorization});
   if(u.pathname==='/api/datasources')return Response.json([{uid:'fed',name:'Federation',type:'prometheus'},{uid:'logs',name:'Loki',type:'loki'}]);
   return Response.json({status:'success',data:{result:[]}});}) as typeof fetch;
  try{
-  const s=await PrometheusSources.create(f.store,f.config,fetcher,undefined,async(_c,source,port)=>{opened++;assert.equal(source.name,'monitoring');assert.ok(port>0);return child();});
+  const s=await PrometheusSources.create(f.store,f.config,fetcher);
   assert.deepEqual(s.names(),['prometheus','monitoring','grafana/Federation']);
   await s.query({query:'up'});
   assert.match(urls.at(-1)!.url,/^https:\/\/prom\.internal\/api\/v1\/query\?query=up/);assert.equal(urls.at(-1)!.auth,'Bearer prom-token');
@@ -40,12 +41,13 @@ test('sources combine URL servers, Kubernetes tunnels and Grafana datasources, e
   assert.equal(urls.at(-1)!.auth,'Basic '+Buffer.from('viewer:pw').toString('base64'));
   await s.queryRange({source:'monitoring',query:'up',start:'1',end:'2',step:'60s'});
   await s.api({source:'monitoring',endpoint:'rules'});
-  assert.equal(opened,1,'the tunnel is reused');
-  assert.match(urls.at(-2)!.url,/^http:\/\/127\.0\.0\.1:\d+\/api\/v1\/query_range\?/);
+  assert.equal(proxied.length,2);assert.ok(proxied.every(p=>p.method==='GET'&&p.auth==='Bearer monitoring-token'));
+  assert.match(proxied[0].url,/^\/api\/v1\/namespaces\/monitoring-federation\/services\/prometheus-operated:9090\/proxy\/api\/v1\/query_range\?query=up&start=1&end=2&step=60s/);
+  assert.match(proxied[1].url,/\/proxy\/api\/v1\/rules$/);
   await assert.rejects(s.api({source:'monitoring',endpoint:'admin/tsdb/delete_series'}));
   await assert.rejects(s.query({source:'nope',query:'up'}),/Unknown Prometheus source/);
-  s.close();
- }finally{f.close()}
+  assert.equal(urls.some(u=>u.url.includes('prometheus-operated')),false,'servers inside a cluster are not read with fetch');
+ }finally{f.close();api.close();}
 });
 
 test('targets are compacted and filtered by health; label values need a label',async()=>{
@@ -62,8 +64,8 @@ test('targets are compacted and filtered by health; label values need a label',a
  }finally{f.close()}
 });
 
-test('tunnel sources need Toolbox port forwarding, and a Grafana failure keeps other sources',async()=>{
- const f=fixture(c=>{c.toolbox.allowPortForward=false;});
+test('servers inside a cluster need their Kubernetes context enabled, and a Grafana failure keeps other sources',async()=>{
+ const f=fixture(c=>{c.kubernetesContexts[0].enabled=false;});
  const fetcher=(async()=>new Response('no',{status:500})) as typeof fetch;
  try{
   const s=await PrometheusSources.create(f.store,f.config,fetcher);
@@ -89,12 +91,11 @@ test('Grafana lists datasources from frontend settings when listing is forbidden
  }finally{f.close()}
 });
 
-test('Toolbox accepts StatefulSet tunnels and named reads with a label selector',()=>{
- assert.ok(portForwardInput.parse({context:'monitoring',namespace:'monitoring-federation',target:'statefulset/prometheus-kps-prometheus',ports:['9090'],durationSeconds:60}));
- assert.throws(()=>portForwardInput.parse({context:'m',namespace:'n',target:'secret/x',ports:['1'],durationSeconds:1}));
- const config=structuredClone(defaults);config.connections.Toolbox.enabled=true;
- assert.deepEqual(toolboxArgs(config,{context:'dev',namespace:'apps',resource:'pods',name:'web-0',selector:'app=web'},'/t.json',['dev']),['--config','/t.json','kubectl','get','pods','web-0','--context','dev','--namespace','apps','-l','app=web','-o','json']);
- assert.throws(()=>toolboxArgs(config,{context:'dev',namespace:'apps',resource:'pods',selector:'a;rm -rf /'},'/t.json',['dev']));
+test('servers inside a cluster are read through the service or pod proxy of the API server',()=>{
+ const source={id:'m1',name:'fed',kind:'tunnel' as const,context:'monitoring',namespace:'mon',target:'service/prometheus-operated',port:9090,pathPrefix:'/prom/'};
+ assert.equal(serviceProxyPath(source,'query'),'/api/v1/namespaces/mon/services/prometheus-operated:9090/proxy/prom/api/v1/query');
+ assert.equal(serviceProxyPath({...source,target:'prometheus-0',pathPrefix:''},'rules'),'/api/v1/namespaces/mon/pods/prometheus-0:9090/proxy/api/v1/rules');
+ assert.throws(()=>serviceProxyPath({...source,target:'statefulset/prometheus'},'query'),/use service\/NAME or a pod name/);
 });
 
 test('agent instructions follow the fixed rules, and older configurations gain the new settings',()=>{
@@ -122,23 +123,4 @@ test('the old Prometheus credential moves to its server, and removed servers los
   const next=store.snapshot();store.config({...next.config,prometheusSources:[]},next.configRevision);
   assert.deepEqual(store.vaultStatus().credentials.filter(c=>c.startsWith('Prometheus')),[]);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
-});
-
-test('a failed Toolbox read reports the reason Toolbox gave',async()=>{
- const {toolboxFailure}=await import('../server/toolbox.js');
- assert.match(toolboxFailure({code:1,stdout:JSON.stringify({context:'dev',error:'namespace "kube-system" is not allowed for context dev',redactions:0,untrusted:true})+'\n',stderr:''},'Toolbox read failed').message,/^Toolbox read failed: namespace "kube-system" is not allowed for context dev$/);
- assert.match(toolboxFailure({code:1,stdout:'',stderr:'option is not permitted. Run toolbox --help\n'},'Toolbox read failed').message,/Toolbox refused the request: option is not permitted/);
- assert.match(toolboxFailure({code:'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'},'Toolbox read failed').message,/larger than Support accepts/);
- assert.match(toolboxFailure({code:'ENOENT'},'Toolbox read failed').message,/SUPPORT_TOOLBOX_BINARY/);
- const stopped=new AbortController();stopped.abort();assert.equal(toolboxFailure({},'x',stopped.signal).status,409);
-});
-
-test('Toolbox receives its exact catalog name, also when the agent gives only the plural',()=>{
- const config=structuredClone(defaults);config.connections.Toolbox.enabled=true;config.toolbox.allowClusterScoped=true;
- const args=(resource:string,namespace?:string)=>toolboxArgs(config,{context:'dev',resource,...(namespace?{namespace}:{})},'/t.json',['dev']).slice(4,5)[0];
- assert.equal(args('networkpolicies','apps'),'networkpolicies.networking.k8s.io');
- assert.equal(args('networkpolicies.networking.k8s.io','apps'),'networkpolicies.networking.k8s.io');
- assert.equal(args('pods','apps'),'pods');assert.equal(args('deployments','apps'),'deployments.apps');assert.equal(args('nodes'),'nodes');
- assert.throws(()=>args('filters','apps'),/not enabled/,'a plural shared by Fluent Bit and Fluentd stays ambiguous');
- assert.throws(()=>args('secrets','apps'));
 });

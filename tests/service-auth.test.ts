@@ -7,15 +7,13 @@ import {TestStore as Store} from './authenticated-fixture.js';
 import {Alertmanager} from '../server/alertmanager.js';
 import {serviceProbe} from '../server/health-poller.js';
 import {credentialInput,parseServiceAuth,serviceAuthHeaders,storedCredential} from '../server/service-auth.js';
-import {kubeconfigSecrets,resolveToolboxConfig} from '../server/toolbox-config.js';
-import {readToolbox,toolboxFiles} from '../server/toolbox.js';
 
 const basic=(username:string,password:string)=>'Basic '+Buffer.from(username+':'+password,'utf8').toString('base64');
 function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'support-service-auth-')),store=new Store(dir);store.unlock('temporary test passphrase',true);
  const s=store.snapshot();
  store.config({...s.config,connections:{...s.config.connections,Alertmanager:{enabled:true,endpoint:'https://alerts.internal',scope:'',path:''},Prometheus:{enabled:true,endpoint:'https://metrics.internal',scope:'',path:''}}},s.configRevision);
- const save=(input:unknown)=>{const v=credentialInput.parse(input);if('remove' in v)return store.removeCredential(v.name);if('toolbox' in v)throw new Error('The server generates Toolbox credentials.');return store.credential(v.name,storedCredential(v));};
+ const save=(input:unknown)=>{const v=credentialInput.parse(input);if('remove' in v)return store.removeCredential(v.name);if('kubernetes' in v)return store.credential(v.name,JSON.stringify(v.kubernetes));return store.credential(v.name,storedCredential(v));};
  return {store,save,done(){store.close();rmSync(dir,{recursive:true,force:true});}};
 }
 
@@ -71,49 +69,20 @@ test('Alertmanager polling and API health checks send the saved Basic auth heade
  }finally{f.done();}
 });
 
-const kubeconfig='apiVersion: v1\nkind: Config\nusers:\n- name: dev\n  user:\n    token: kube-secret-token-123\n';
-/** Vault value of a configuration pasted before generation existed (format v1). */
-const legacyToolbox=JSON.stringify({v:1,toolboxConfig:'{"kubeconfig":"{{kubeconfig}}"}',kubeconfig});
-test('Toolbox save requests take a kubeconfig and contexts, and refuse custom configurations',()=>{
- assert.ok(credentialInput.parse({name:'Toolbox',toolbox:{kubeconfig,contexts:['dev','prod']}}));
- assert.throws(()=>credentialInput.parse({name:'Toolbox',value:'/path/toolbox.json'}));
- assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{config:'{"kubeconfig":"{{kubeconfig}}"}',kubeconfig}}));
- assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{kubeconfig,contexts:[]}}),/Select at least one context/);
- assert.throws(()=>credentialInput.parse({name:'Toolbox',toolbox:{kubeconfig:'  ',contexts:['dev']}}),/Paste the kubeconfig/);
- assert.ok(credentialInput.parse({name:'Toolbox',remove:true}));assert.ok(credentialInput.parse({name:'Outline',remove:true}));
-});
-
-test('Toolbox configuration points at the pasted kubeconfig by placeholder or by its single kubeconfig field',()=>{
- assert.deepEqual(JSON.parse(resolveToolboxConfig('{"a":{"path":"{{kubeconfig}}"},"kubeconfig":"/old"}','/tmp/x/kubeconfig')),{a:{path:'/tmp/x/kubeconfig'},kubeconfig:'/old'});
- assert.deepEqual(JSON.parse(resolveToolboxConfig('{"cluster":{"kubeconfig_path":"/old"},"name":"dev"}','/tmp/x/kubeconfig')),{cluster:{kubeconfig_path:'/tmp/x/kubeconfig'},name:'dev'});
- assert.deepEqual(JSON.parse(resolveToolboxConfig('{"name":"dev"}','/tmp/x/kubeconfig')),{name:'dev'});
- assert.deepEqual(kubeconfigSecrets(kubeconfig),['kube-secret-token-123']);
-});
-
-test('a Toolbox configuration pasted before generation existed stays readable, redacted and removable',()=>{
+test('Kubernetes context tokens are saved per context, validated, redacted, and deleted with their context',()=>{
+ assert.ok(credentialInput.parse({name:'Kubernetes/arn:aws:eks:eu-west-3:1:cluster/prod',kubernetes:{token:'eyJ.token',ca:'-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----'}}));
+ assert.throws(()=>credentialInput.parse({name:'Kubernetes/dev',kubernetes:{token:'two words'}}),/spaces/);
+ assert.throws(()=>credentialInput.parse({name:'Kubernetes/dev',kubernetes:{token:'t',ca:'not a certificate'}}),/PEM/);
+ assert.throws(()=>credentialInput.parse({name:'Kubernetes/../x',kubernetes:{token:'t'}}));
+ assert.throws(()=>credentialInput.parse({name:'Kubernetes',value:'token'}));
+ assert.throws(()=>credentialInput.parse({name:'Toolbox',remove:true}));
  const f=fixture();try{
-  f.store.credential('Toolbox',legacyToolbox);
-  assert.equal(toolboxFiles(f.store)?.kubeconfig,kubeconfig);
+  const s=f.store.snapshot();f.store.config({...s.config,kubernetesContexts:[{name:'dev',server:'https://dev.internal:6443',enabled:true}]},s.configRevision);
+  f.save({name:'Kubernetes/dev',kubernetes:{token:'kube-secret-token-123'}});
+  f.store.credential('Toolbox','{"v":1}');
   assert.ok(f.store.secretValues().includes('kube-secret-token-123'));
-  f.save({name:'Toolbox',remove:true});assert.equal(toolboxFiles(f.store),null);
+  const next=f.store.snapshot();f.store.config({...next.config,kubernetesContexts:[]},next.configRevision);
+  assert.deepEqual(f.store.vaultStatus().credentials.filter(c=>c.startsWith('Kubernetes')||c==='Toolbox'),[]);
  }finally{f.done();}
 });
 
-test('Toolbox runs with private temporary files from the pasted configuration and deletes them',{skip:process.platform!=='linux'},async()=>{
- const f=fixture(),dir=mkdtempSync(join(tmpdir(),'support-toolbox-test-')),record=join(dir,'record'),binary=join(dir,'toolbox'),previous=process.env.SUPPORT_TOOLBOX_BINARY;
- writeFileSync(binary,`#!/bin/sh\ncfg="$2"\n{ printf '%s\\n' "$cfg"; stat -c %a "$(dirname "$cfg")" "$cfg" "$KUBECONFIG"; cat "$cfg"; } > '${record}'\n[ -f '${join(dir,'fail')}' ] && exit 1\necho '{"items":[]}'\n`,{mode:0o700});
- process.env.SUPPORT_TOOLBOX_BINARY=binary;
- try{
-  const s=f.store.snapshot();f.store.config({...s.config,connections:{...s.config.connections,Toolbox:{enabled:true,endpoint:'',scope:'dev',path:'/missing/toolbox.json'}}},s.configRevision);
-  f.store.credential('Toolbox',legacyToolbox);
-  const config=f.store.snapshot().config,input={context:'dev',namespace:'apps',resource:'pods'};
-  assert.deepEqual(await readToolbox(config,input,new AbortController().signal,toolboxFiles(f.store)),{items:[]});
-  const [cfg,dirMode,cfgMode,kubeMode,...json]=readFileSync(record,'utf8').trim().split('\n');
-  assert.notEqual(cfg,'/missing/toolbox.json');assert.deepEqual([dirMode,cfgMode,kubeMode],['700','600','600']);
-  assert.deepEqual(JSON.parse(json.join('\n')),{kubeconfig:join(dirname(cfg),'kubeconfig')});
-  assert.equal(existsSync(dirname(cfg)),false);
-  writeFileSync(join(dir,'fail'),'');
-  await assert.rejects(readToolbox(config,input,new AbortController().signal,toolboxFiles(f.store)),/Toolbox read failed/);
-  assert.equal(existsSync(dirname(readFileSync(record,'utf8').split('\n')[0])),false);
- }finally{if(previous===undefined)delete process.env.SUPPORT_TOOLBOX_BINARY;else process.env.SUPPORT_TOOLBOX_BINARY=previous;rmSync(dir,{recursive:true,force:true});f.done();}
-});

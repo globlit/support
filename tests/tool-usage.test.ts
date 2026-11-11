@@ -15,14 +15,14 @@ test('a shell command counts as its first program',()=>{
 test('Support tools count under their integration, Claude Code tools by name, notes not at all',()=>{
  assert.equal(toolLabel('Bash',JSON.stringify({command:'rg netpol ~/claude_access/gitlab'})),'rg');
  assert.equal(toolLabel('run_command',JSON.stringify({command:'ls'})),'ls');
- assert.equal(toolLabel('toolbox_get'),'toolbox');assert.equal(toolLabel('kubectl'),'toolbox');assert.equal(toolLabel('mcp__support__outline_search'),'outline');
+ assert.equal(toolLabel('kubernetes_read'),'kubernetes');assert.equal(toolLabel('kubectl'),'kubernetes');assert.equal(toolLabel('mcp__support__outline_search'),'outline');
  assert.equal(toolLabel('prometheus_query_range'),'prometheus');assert.equal(toolLabel('gitlab_file'),'gitlab');assert.equal(toolLabel('WebFetch'),'WebFetch');
  assert.equal(toolLabel('submit_result'),'submit_result');assert.equal(toolLabel('note'),undefined);assert.equal(toolLabel('Bash','not json'),'shell');
 });
 
 test('counts are sorted and keep failures',()=>{
  const c=countTools([{tool:'Bash',input:'{"command":"ls"}',status:'complete'},{tool:'Bash',input:'{"command":"ls -l | wc"}',status:'failed'},{tool:'toolbox_get',status:'complete'},{tool:'note'},{text:'x'} as {tool?:string}]);
- assert.deepEqual(c,[{label:'ls',total:2,failed:1},{label:'toolbox',total:1,failed:0}]);
+ assert.deepEqual(c,[{label:'ls',total:2,failed:1},{label:'kubernetes',total:1,failed:0}]);
 });
 
 test('a step preview shows what ran on one line',async()=>{

@@ -1,14 +1,11 @@
 import {outlineCollectionRef} from './outline.js';
 export {outlineCollectionRef};
-import {access} from 'node:fs/promises';
-import {constants} from 'node:fs';
-import {isAbsolute} from 'node:path';
 import {connectionNames,type Config,type ConnectionName} from '../src/model.js';
 import {logTools} from '../src/diagnostics-model.js';
 import {Store,AppError} from './store.js';
 import {serviceBase} from './gitlab.js';
 import {serviceAuthHeaders,serverAuthHeaders} from './service-auth.js';
-import {probeToolboxContexts,toolboxFiles} from './toolbox.js';
+import {checkContext,enabledContexts} from './kubernetes.js';
 import {modelKey} from './model-api.js';
 import {claudeCliStatus} from './claude-cli.js';
 import {recordDiagnostic} from './diagnostics.js';
@@ -48,12 +45,12 @@ async function probeOutline(base:URL,token:string,collection:string,fetcher:type
 }
 export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe{return async(name,config,signal)=>{
  const c=config.connections[name];signal.throwIfAborted();
- if(name==='Toolbox'){
-  const binary=process.env.SUPPORT_TOOLBOX_BINARY??'/usr/local/bin/toolbox';
-  const pasted=store.vaultStatus().credentials.includes('Toolbox');
-  if(process.platform!=='linux'||!isAbsolute(binary)||(!pasted&&!isAbsolute(c.path)))return {ok:false,detail:'Add a kubeconfig and generate the Toolbox configuration in Settings → Connections → Toolbox.'};
-  if(!pasted)await access(c.path,constants.R_OK);signal.throwIfAborted();
-  return await probeToolboxContexts(config,pasted?toolboxFiles(store):null,signal);
+ if(name==='Kubernetes'){
+  const contexts=enabledContexts(store,config);
+  if(!contexts.length)return {ok:false,detail:'No enabled context with a saved token. Import a kubeconfig or add a context in Settings → Connections → Kubernetes.'};
+  const results=await Promise.all(contexts.map(x=>checkContext(store,config,x.name,signal)));
+  const failed=results.filter(r=>!r.ok);
+  return failed.length?{ok:false,detail:`${failed.length} of ${results.length} contexts failed. ${failed.slice(0,3).map(r=>r.detail).join(' ')}`}:{ok:true,detail:results.length===1?results[0].detail:`${results.length} contexts answer: ${contexts.map(x=>x.name).join(', ')}.`};
  }
  if(name==='Model'&&config.modelAuth==='claude_cli'){
   const status=await claudeCliStatus(c.path,undefined,signal);return {ok:status.connected,detail:status.connected?'Local Claude CLI responds and is signed in. No generation or remote model request performed.':'Local Claude CLI is not signed in with a subscription.'};

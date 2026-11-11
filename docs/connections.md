@@ -11,7 +11,7 @@ Unlock the Vault, then open **Settings → Connections → `<connection>`**. The
 | Alertmanager | None, Basic auth or bearer token. |
 | Prometheus | Per server: none, Basic auth or bearer token. See [Prometheus servers](#prometheus-servers). |
 | Grafana | Username and password, or service account token. Viewer role with query access to the Prometheus datasources. |
-| Toolbox | kubeconfig. |
+| Kubernetes | Per context: ServiceAccount token, optional CA certificates. See [Kubernetes access](kubernetes-access.md). |
 | Model | API key, Claude Code login or ChatGPT sign-in, in **Settings → Model**. |
 
 ## YouTrack tickets
@@ -52,21 +52,9 @@ With a legacy token, use the `api` scope. `read_api` allows investigations only.
 
 Leave **Allowed collection** empty to let the agent search every collection the API key can read.
 
-## Toolbox
+## Kubernetes
 
-Support generates the Toolbox configuration. The configuration is the only access policy for the agent.
-
-1. In **Toolbox behaviour**, set the excluded namespaces and the allowed features, then click **Save settings**.
-2. Add the kubeconfig, click **Detect contexts**, and select contexts.
-3. Click **Generate configuration**, then **Save settings**.
-
-Generation lists each cluster's namespaces and allows every namespace that matches no exclusion. It needs:
-
-- the `list` permission on `namespaces`
-- a reachable cluster for each selected context
-- at most 100 allowed namespaces per context
-
-Generate again after namespaces are created.
+**Settings → Connections → Kubernetes** lists the contexts the agent can read. Import kubeconfig files or add a context by hand, then enable each context the agent may read. Use a ServiceAccount token bound to a read-only role. [Kubernetes access](kubernetes-access.md) gives the RBAC manifest and what works in the sandbox.
 
 ## Prometheus servers
 
@@ -75,7 +63,7 @@ Generate again after namespaces are created.
 | Kind | Use for | Credential |
 | --- | --- | --- |
 | URL | A server exposed through an ingress. | None, Basic auth or bearer token, per server. |
-| Through Kubernetes | A server that is not exposed. Support opens a Toolbox tunnel to its service or StatefulSet on first use. Requires Toolbox port forwarding. | The Toolbox kubeconfig. |
+| Through Kubernetes | A server that is not exposed. Support reads it through the API server proxy of a Kubernetes context: `service/NAME` (service port) or a pod name (container port). | The context token, with `get` on `services/proxy` or `pods/proxy` in the namespace. |
 
 Each Prometheus datasource of the Grafana connection is also available, as `grafana/<datasource>`.
 

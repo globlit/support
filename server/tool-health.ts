@@ -2,7 +2,7 @@ import type {Store} from './store.js';
 import {connectionNames,type ConnectionName} from '../src/model.js';
 import type {ToolHealth} from '../src/telemetry-model.js';
 export const healthIntervalMs=60_000;
-export const healthTimeouts:Record<ConnectionName,number>={Alertmanager:3000,Prometheus:5000,Grafana:8000,YouTrack:8000,GitLab:10000,Outline:8000,Slack:5000,Toolbox:15000,Model:12000};
+export const healthTimeouts:Record<ConnectionName,number>={Alertmanager:3000,Prometheus:5000,Grafana:8000,YouTrack:8000,GitLab:10000,Outline:8000,Slack:5000,Kubernetes:15000,Model:12000};
 export type HealthResult={ok:boolean;detail:string;code?:number};
 type Observation={result:HealthResult;failures:number;at:string;revision:number;epoch:number;durationMs:number};
 const observations=new WeakMap<Store,Map<ConnectionName,Observation>>();
@@ -23,6 +23,6 @@ export function toolHealth(store:Store,now=Date.now()):ToolHealth[]{
   const common={...base,at:o.at,failures:o.failures,durationMs:o.durationMs};
   if(o.failures)return {...common,state:o.failures>=2?'red':'yellow',label:o.failures>=2?'Failed':'Stale',detail:`${o.failures} consecutive failed check${o.failures===1?'':'s'}. ${o.result.detail}`};
   if(now-Date.parse(o.at)>healthIntervalMs+healthTimeouts[name]+10000)return {...common,state:'yellow',label:'Stale',detail:'The next scheduled check is overdue. '+o.result.detail};
-  return {...common,state:'green',label:name==='Toolbox'||snapshot.config.modelAuth==='claude_cli'&&name==='Model'?'Local tool ready':'Reachable',detail:o.result.detail};
+  return {...common,state:'green',label:snapshot.config.modelAuth==='claude_cli'&&name==='Model'?'Local tool ready':'Reachable',detail:o.result.detail};
  });
 }

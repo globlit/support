@@ -3,7 +3,7 @@ const wrappers=new Set(['sudo','env','time','nice','nohup','timeout','xargs','co
 /** Options of the wrappers that take a value in the next word, such as sudo -u USER. */
 const valueOptions:Record<string,string[]>={sudo:['-u','-g','-C','-h','-p','-U'],env:['-u','-C','-S'],nice:['-n'],timeout:['-s','-k','--signal','--kill-after'],ionice:['-c','-n','-p'],xargs:['-I','-n','-P','-d','-L','-s','-E','-a'],stdbuf:['-i','-o','-e'],watch:['-n','-d']};
 /** Support tool families: a tool name prefix and the label it is counted under. */
-const families:[RegExp,string][]=[[/^(toolbox_|kubectl$)/,'toolbox'],[/^outline_/,'outline'],[/^prometheus_/,'prometheus'],[/^grafana_/,'grafana'],[/^gitlab_/,'gitlab'],[/^youtrack_/,'youtrack'],[/^alertmanager_/,'alertmanager']];
+const families:[RegExp,string][]=[[/^(kubernetes|toolbox_|kubectl$)/,'kubernetes'],[/^outline_/,'outline'],[/^prometheus_/,'prometheus'],[/^grafana_/,'grafana'],[/^gitlab_/,'gitlab'],[/^youtrack_/,'youtrack'],[/^alertmanager_/,'alertmanager']];
 
 /** Splits a shell command into words, keeping quoted text together. Not a full shell parser. */
 function words(text:string){
@@ -51,7 +51,7 @@ export function shellProgram(command:string,depth=0):string{
 }
 /**
  * Returns the label a tool call is counted under: the program for shell commands, the integration for Support tools
- * (toolbox, outline, prometheus…), or the tool name. Returns undefined for agent notes, which are not tool calls.
+ * (kubernetes, outline, prometheus…), or the tool name. Returns undefined for agent notes, which are not tool calls.
  */
 export function toolLabel(tool:string,input?:string){
  if(!tool||tool==='note')return undefined;

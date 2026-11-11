@@ -10,7 +10,6 @@ import {Sessions} from '../server/sessions.js';
 import {humanAttribution,localOwner,withIdentity,workspaceIdentity} from '../server/identity.js';
 import {Store} from '../server/store.js';
 import {localAction} from '../server/youtrack.js';
-import {toolboxEnvironment} from '../server/toolbox.js';
 import {cliEnvironment} from '../server/claude-cli.js';
 const req=(cookie='',method='GET',csrf?:string)=>({method,headers:{cookie,...(csrf?{'x-support-csrf':csrf}:{})}} as IncomingMessage);
 const response=()=>{let value='';return {res:{setHeader(_name:string,v:string){value=v}} as unknown as ServerResponse,cookie:()=>value.split(';')[0]};};
@@ -58,7 +57,7 @@ test('a real plan requires an active human identity; old approvals are preserved
 });
 test('tools cannot inherit host agent sockets or service/browser authentication environment',()=>{
  const input={HOME:'/workspace',PATH:'/usr/bin',SSH_AUTH_SOCK:'/host/agent',SSH_CONNECTION:'host',SUPPORT_SESSION_SECRET:'secret',GIT_ASKPASS:'/host/run',NODE_OPTIONS:'--require /host/run',AWS_SECRET_ACCESS_KEY:'secret',DYLD_INSERT_LIBRARIES:'/host/lib'};
- for(const env of [toolboxEnvironment(input),cliEnvironment(input)])for(const key of ['SSH_AUTH_SOCK','SSH_CONNECTION','SUPPORT_SESSION_SECRET','GIT_ASKPASS','NODE_OPTIONS','AWS_SECRET_ACCESS_KEY','DYLD_INSERT_LIBRARIES'])assert.equal(env[key],undefined,key);
+ for(const env of [cliEnvironment(input)])for(const key of ['SSH_AUTH_SOCK','SSH_CONNECTION','SUPPORT_SESSION_SECRET','GIT_ASKPASS','NODE_OPTIONS','AWS_SECRET_ACCESS_KEY','DYLD_INSERT_LIBRARIES'])assert.equal(env[key],undefined,key);
 });
 
 test('browser session recovery distinguishes provider token errors and ignores an obsolete session check',async()=>{

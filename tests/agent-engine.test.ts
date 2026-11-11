@@ -20,7 +20,7 @@ function fixture(){
  const yt=new YouTrack(store,(async()=>Response.json(issue)) as typeof fetch);
  return {store,yt,dir,done(){store.close();rmSync(dir,{recursive:true,force:true})}};
 }
-const stubToolset=(calls:unknown[]=[]):AgentToolset=>({definitions:[{name:'echo',description:'Echo the input.',input_schema:{type:'object',properties:{v:{type:'string'}},required:[],additionalProperties:false}}],async run(name,input){calls.push([name,input]);if(name!=='echo')throw new Error('unknown');return {echo:input};},async kubectl(args){return {stdout:JSON.stringify(args),stderr:'',code:0};},close(){}} as AgentToolset);
+const stubToolset=(calls:unknown[]=[]):AgentToolset=>({definitions:[{name:'echo',description:'Echo the input.',input_schema:{type:'object',properties:{v:{type:'string'}},required:[],additionalProperties:false}}],async run(name,input){calls.push([name,input]);if(name!=='echo')throw new Error('unknown');return {echo:input};},} as AgentToolset);
 
 test('the gateway replaces the placeholder credential, records usage, and serves tools over MCP and HTTP',async()=>{
  const f=fixture();const seen:{url:string;headers:Record<string,string>;body:string}[]=[];
@@ -44,7 +44,7 @@ test('the gateway replaces the placeholder credential, records usage, and serves
   assert.equal(call.result.isError,false);assert.match(call.result.content[0].text,/"v": "a"/);
   const failed=await (await rpc({jsonrpc:'2.0',id:4,method:'tools/call',params:{name:'missing',arguments:{}}})).json() as {result:{isError:boolean}};assert.equal(failed.result.isError,true);
   assert.deepEqual(await (await fetch(s.url+'/tools/echo',{method:'POST',body:'{"v":"b"}'})).json(),{echo:{v:'b'}});
-  assert.deepEqual(await (await fetch(s.url+'/kubectl',{method:'POST',body:'{"args":["get","pods"]}'})).json(),{stdout:'["get","pods"]',stderr:'',code:0});
+  assert.equal((await fetch(s.url+'/kubectl',{method:'POST',body:'{}'})).status,404);
   assert.equal((await fetch(s.url.replace(s.token,'x'.repeat(32))+'/tools')).status,403);
   gw.release(s.token);assert.equal((await fetch(s.url+'/tools')).status,403);
  }finally{gw.close();f.done();}

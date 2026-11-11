@@ -23,7 +23,7 @@ test('token usage survives log pruning and settings saved during a call, and cou
   const transport=configuredModelFetch(f.store,(async()=>{save();return Response.json({usage:{input_tokens:100,output_tokens:20,cache_read_input_tokens:5,server_tool_use:{web_search_requests:2}}});}) as typeof fetch);
   save=()=>{const s=f.store.snapshot();f.store.config({...s.config,retentionDays:29},s.configRevision);};
   await transport('https://model.internal/v1/messages',{method:'POST',body:'{}'});save=()=>{};
-  for(let i=0;i<2100;i++)recordDiagnostic(f.store,{tool:'Toolbox',operation:'read '+i,status:'ok',durationMs:1,output:'x'});
+  for(let i=0;i<2100;i++)recordDiagnostic(f.store,{tool:'Kubernetes',operation:'read '+i,status:'ok',durationMs:1,output:'x'});
   readLogs(f.store);
   const d=dashboard(f.store,overview as never,7);
   assert.equal(d.usage?.responses,1);assert.equal(d.usage?.input,105);assert.equal(d.usage?.output,20);assert.equal(d.usage?.webSearches,2);

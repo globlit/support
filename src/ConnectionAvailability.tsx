@@ -3,7 +3,7 @@ import type {Config,ConnectionName} from './model';
 const behavior:Record<ConnectionName,{label:string;on:string;off:string}>={
  YouTrack:{label:'Read YouTrack tickets',on:'The queue reads tickets and comments from your configured query.',off:'Ticket reads are unavailable. Saved work sessions and credentials are kept.'},
  GitLab:{label:'Use GitLab for support work',on:'Read repositories and pipelines. Branch changes and merge requests still require engineer approval.',off:'New GitLab requests are blocked. Existing branches and merge requests stay in GitLab.'},
- Toolbox:{label:'Allow Toolbox reads',on:'The agent can read allowed resources in the contexts and namespaces configured here.',off:'The agent cannot call Toolbox. Its configuration and kubeconfig files are unchanged.'},
+ Kubernetes:{label:'Allow Kubernetes reads',on:'The agent can read the enabled contexts below with kubectl, through Support. Cluster RBAC decides what is readable.',off:'The agent cannot read any cluster. Contexts and their tokens are kept.'},
  Prometheus:{label:'Allow metric queries',on:'The agent can query this Prometheus endpoint during an investigation.',off:'Metric queries through this connection are unavailable.'},
  Grafana:{label:'Allow Grafana reads',on:'The agent can query the Prometheus datasources and read the dashboards of this Grafana.',off:'Grafana reads are unavailable.'},
  Alertmanager:{label:'Poll Alertmanager',on:'Refresh alerts automatically while the server runs and the Vault is unlocked.',off:'Automatic polling is paused. Existing alert cases and their history are kept.'},

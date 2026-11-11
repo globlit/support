@@ -1,38 +1,41 @@
-import {createServer} from 'node:net';
-import type {ChildProcess} from 'node:child_process';
 import {z} from 'zod';
 import {AppError,type Store} from './store.js';
 import {serviceBase} from './gitlab.js';
 import {serverAuthHeaders} from './service-auth.js';
 import {Grafana,grafanaAvailable,readJSON} from './grafana.js';
-import {openTunnel,toolboxFiles} from './toolbox.js';
+import {enabledContexts,kubernetesJSON,kubernetesTarget} from './kubernetes.js';
 import {prometheusCredential,type Config,type PrometheusSource} from '../src/model.js';
 type TunnelSource=Extract<PrometheusSource,{kind:'tunnel'}>;
 
 /** Prometheus HTTP API endpoints that `prometheus_api` may read. All are GET requests under /api/v1. */
 export const prometheusEndpoints=['targets','rules','alerts','labels','label_values','series','metadata','status/buildinfo','status/runtimeinfo','status/tsdb','status/flags','status/config'] as const;
 export type SourceInfo={name:string;kind:'url'|'grafana'|'tunnel';detail:string};
-type Tunnel={port:number;child:ChildProcess};
-export type TunnelOpener=(config:Config,source:TunnelSource,port:number)=>Promise<ChildProcess>;
 
-/** Returns a free TCP port on 127.0.0.1. */
-export function freePort(){return new Promise<number>((resolve,reject)=>{const s=createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const {port}=s.address() as {port:number};s.close(()=>resolve(port));});});}
-const defaultOpener=(store:Store):TunnelOpener=>async(config,source,port)=>(await openTunnel(config,{context:source.context,namespace:source.namespace,target:source.target,ports:[`${port}:${source.port}`],durationSeconds:config.toolbox.portForwardMaxSeconds},toolboxFiles(store))).child;
+/**
+ * Path of a Prometheus API endpoint through the Kubernetes API service proxy, for a server inside a cluster.
+ * The target is service/NAME (the service port) or a pod name (the container port). Needs `get` on services/proxy or
+ * pods/proxy in the namespace.
+ */
+export function serviceProxyPath(source:TunnelSource,path:string){
+ const [kind,name]=source.target.includes('/')?source.target.split('/',2):['pod',source.target];
+ const resource=kind==='service'||kind==='svc'?'services':kind==='pod'?'pods':undefined;
+ if(!resource)throw new AppError(400,`Prometheus server ${source.name}: use service/NAME or a pod name as target. ${kind} targets cannot be reached through the API server.`);
+ const prefix=source.pathPrefix.replace(/^\/+|\/+$/g,'');
+ return `/api/v1/namespaces/${encodeURIComponent(source.namespace)}/${resource}/${encodeURIComponent(name)}:${source.port}/proxy/${prefix?prefix+'/':''}api/v1/${path}`;
+}
 const timeValue=z.string().trim().min(1).max(40);
 const step=z.string().regex(/^\d{1,6}(ms|s|m|h)?$/,'Use a duration such as 60s or 5m.');
 
 /**
- * Prometheus servers the agent can query: each configured server reached by URL or through a Toolbox tunnel, and each
- * Prometheus datasource of Grafana. A tunnel opens on the first request to its source and is
- * reused until it exits or `close` is called.
+ * Prometheus servers the agent can query: each configured server reached by URL or through the Kubernetes API service
+ * proxy of an enabled context, and each Prometheus datasource of Grafana.
  */
 export class PrometheusSources {
  private grafana?:Grafana;private grafanaSources=new Map<string,string>();private grafanaError?:string;
- private tunnels=new Map<string,Promise<Tunnel>>();
- private constructor(private store:Store,private config:Config,private fetcher:typeof fetch,private opener:TunnelOpener){}
+ private constructor(private store:Store,private config:Config,private fetcher:typeof fetch){}
  /** Lists the sources. Grafana datasources are read once. A Grafana failure leaves the other sources available. */
- static async create(store:Store,config:Config,fetcher:typeof fetch=fetch,signal?:AbortSignal,opener:TunnelOpener=defaultOpener(store)){
-  const s=new PrometheusSources(store,config,fetcher,opener);
+ static async create(store:Store,config:Config,fetcher:typeof fetch=fetch,signal?:AbortSignal){
+  const s=new PrometheusSources(store,config,fetcher);
   if(grafanaAvailable(config)){
    try{s.grafana=new Grafana(store,config,fetcher);for(const d of await s.grafana.prometheusDatasources(signal))s.grafanaSources.set('grafana/'+d.name,d.uid);}
    catch(e){s.grafanaError=e instanceof AppError?e.message:'Grafana datasources could not be read.';}
@@ -50,37 +53,35 @@ export class PrometheusSources {
   for(const name of this.grafanaSources.keys())out.push({name,kind:'grafana',detail:'Grafana datasource proxy'});
   return out;
  }
- /** True when a configured server can be queried: Prometheus is enabled, and tunnels also need Toolbox port forwarding. */
+ /** True when a configured server can be queried: Prometheus is enabled, and servers inside a cluster also need their Kubernetes context enabled. */
  private usable(s:PrometheusSource){
   if(!this.config.connections.Prometheus.enabled)return false;
-  return s.kind==='url'||(this.config.connections.Toolbox.enabled&&this.config.toolbox.allowPortForward);
+  return s.kind==='url'||enabledContexts(this.store,this.config).some(c=>c.name===s.context);
  }
  /** Summary for the agent, with sources that are configured but unavailable. */
  describe(){
   const unavailable:string[]=[];
   if(this.grafanaError)unavailable.push(`Grafana datasources: ${this.grafanaError}`);
   if(!this.config.connections.Prometheus.enabled&&this.config.prometheusSources.length)unavailable.push('Configured servers: Prometheus is disabled in Settings.');
-  else if(this.config.prometheusSources.some(s=>s.kind==='tunnel')&&!(this.config.connections.Toolbox.enabled&&this.config.toolbox.allowPortForward))unavailable.push('Servers through Kubernetes: Toolbox port forwarding is disabled in Settings.');
+  else for(const s of this.config.prometheusSources)if(s.kind==='tunnel'&&!this.usable(s))unavailable.push(`${s.name}: Kubernetes context ${s.context} is not enabled in Settings.`);
   return {sources:this.list(),...(unavailable.length?{unavailable}:{})};
  }
- private async tunnel(source:TunnelSource){
-  let pending=this.tunnels.get(source.name);
-  if(pending){const t=await pending.catch(()=>undefined);if(t&&t.child.exitCode===null&&t.child.signalCode===null)return t;this.tunnels.delete(source.name);}
-  pending=(async()=>{const port=await freePort();return {port,child:await this.opener(this.config,source,port)};})();
-  this.tunnels.set(source.name,pending);
-  try{return await pending;}catch(e){this.tunnels.delete(source.name);throw e;}
- }
- /** Builds the URL and headers of an /api/v1 path for a source. Opens the source's tunnel when needed. */
+ /** Builds the URL and headers of an /api/v1 path for a source reached over HTTP: a URL server or a Grafana datasource. */
  private async target(name:string,path:string):Promise<{url:URL;headers:Record<string,string>}>{
   const uid=this.grafanaSources.get(name);
   if(uid&&this.grafana)return {url:this.grafana.proxyURL(uid,'api/v1/'+path),headers:this.grafana.authHeaders()};
   const source=this.config.prometheusSources.find(s=>s.name===name);
   if(source?.kind==='url'&&this.usable(source))return {url:new URL('api/v1/'+path,serviceBase(source.endpoint)),headers:serverAuthHeaders(this.store,source.id)};
-  if(source?.kind==='tunnel'&&this.usable(source)){const {port}=await this.tunnel(source);const prefix=source.pathPrefix.replace(/^\/+|\/+$/g,'');return {url:new URL(`http://127.0.0.1:${port}/${prefix?prefix+'/':''}api/v1/${path}`),headers:{}};}
   throw new AppError(400,`Unknown Prometheus source ${name}. Use one of: ${this.names().join(', ')||'none configured'}.`);
  }
  private source(name:string|undefined){const n=name??this.names()[0];if(!n)throw new AppError(400,'No Prometheus source is configured.');return n;}
  private async get(name:string,path:string,params:Record<string,string|string[]>,signal?:AbortSignal){
+  const source=this.config.prometheusSources.find(s=>s.name===name);
+  if(source?.kind==='tunnel'&&this.usable(source)){
+   const query=new URLSearchParams();for(const [k,v] of Object.entries(params))for(const x of Array.isArray(v)?v:[v])query.append(k,x);
+   const target=kubernetesTarget(this.store,this.config,source.context),q=query.toString();
+   return kubernetesJSON(target,serviceProxyPath(source,path)+(q?'?'+q:''),signal);
+  }
   const {url,headers}=await this.target(name,path);
   for(const [k,v] of Object.entries(params))for(const x of Array.isArray(v)?v:[v])url.searchParams.append(k,x);
   return readJSON(this.fetcher,url,headers,signal,`Prometheus source ${name}`);
@@ -115,6 +116,4 @@ export class PrometheusSources {
  }
  /** Reads `status/buildinfo` from one source. Used by the Settings test. */
  buildInfo(name:string,signal?:AbortSignal){return this.get(name,'status/buildinfo',{},signal);}
- /** Stops every tunnel opened by this instance. */
- close(){for(const p of this.tunnels.values())void p.then(t=>t.child.kill('SIGTERM'),()=>{});this.tunnels.clear();}
 }

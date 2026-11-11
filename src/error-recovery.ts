@@ -6,7 +6,7 @@ const model=(label='Open Model settings'):RecoveryAction=>({label,route:{page:'s
 const connection=(tool:ConnectionName):RecoveryAction=>tool==='Model'?model():({label:`Open ${tool} settings`,route:{page:'settings',section:'Connections',tool}});
 const credentials=(tool:ConnectionName,label=`Manage ${tool} credentials`):RecoveryAction=>tool==='Model'?model():{label,route:{page:'settings',section:'Connections',tool}};
 const logs=(tool?:ConnectionName):RecoveryAction=>({label:tool==='Model'?'View model logs':'View logs',route:{page:'logs',tool,step:'error'}});
-const services:ConnectionName[]=['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack','Toolbox','Model'];
+const services:ConnectionName[]=['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack','Kubernetes','Model'];
 /** Recovery destinations come from this allowlist, never from error text. */
 export function errorRecovery(message:string,context?:ConnectionName):RecoveryAction|null{
  const m=message.trim();
@@ -20,12 +20,12 @@ export function errorRecovery(message:string,context?:ConnectionName):RecoveryAc
  if(/changed.*(?:review|refresh|again)|(?:ticket|plan|approval|source|session).*(?:changed|stale)|remote status before retry|pending.*(?:write|creation)|namespace excluded/i.test(m))return null;
  if(/^(?:Continue with ChatGPT|ChatGPT sign-in requires|ChatGPT authentication expired|ChatGPT token exchange|This account has not granted ChatGPT|Sign in to Claude Code|Local Claude requires|Set the absolute path to the Claude|Claude executable|Could not start Claude CLI|Claude CLI could not report login status|Save an API key for the selected model|Select a model from this ChatGPT|Enable Model|The local Claude connection)/i.test(m)||/Settings\s*→\s*Model|selected account|selected model provider/i.test(m))return model();
  if(/^(?:YouTrack rejected the token|The token cannot read this YouTrack resource)/i.test(m))return credentials('YouTrack','Review YouTrack token');
- if(/rejected.*(?:credential|API key)|authentication expired|sign.in (?:expired|required|failed)|check login or usage in Claude Code/i.test(m))return context==='Model'||/ChatGPT|Claude|provider/i.test(m)?model():context&&context!=='Toolbox'?credentials(context):null;
+ if(/rejected.*(?:credential|API key)|authentication expired|sign.in (?:expired|required|failed)|check login or usage in Claude Code/i.test(m))return context==='Model'||/ChatGPT|Claude|provider/i.test(m)?model():context&&context!=='Kubernetes'?credentials(context):null;
  if(context==='Model'&&/^(?:Connection returned HTTP|Use HTTPS for model and tool)/.test(m))return logs('Model');
  const named=services.find(tool=>new RegExp('\\b'+tool+'\\b','i').test(m));
  const tool=named??context;
  if(tool&&/connections\.[A-Za-z]+\.|modelAuth|modelProvider/.test(m))return connection(tool);
- if(/Slack: (?:invalid_auth|token_revoked|not_authed|missing_scope)|HTTP (?:401|403)\b|unauthorized|invalid.*token|authentication failed/i.test(m)&&tool)return tool==='Model'?model():tool==='Toolbox'?connection(tool):credentials(tool);
+ if(/Slack: (?:invalid_auth|token_revoked|not_authed|missing_scope)|HTTP (?:401|403)\b|unauthorized|invalid.*token|authentication failed/i.test(m)&&tool)return tool==='Model'?model():tool==='Kubernetes'?connection(tool):credentials(tool);
 
  if(tool&&/(?:configure|enable|endpoint|base URL|instance URL|HTTPS|could not be reached|connection refused|configuration|context is not enabled|executable path|binary|connection.*unavailable)/i.test(m))return connection(tool);
  if(tool==='Model'&&/returned (?:an? )?(?:unsupported|invalid)|unknown tool call|truncated|no structured result|no result was applied|could not complete/i.test(m))return logs('Model');

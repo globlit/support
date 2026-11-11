@@ -14,8 +14,8 @@ test('a field with help shows a labelled "?" button outside its label, and stays
 });
 
 test('every connection with a credential explains how to create it',()=>{
- for(const name of ['YouTrack','GitLab','Slack','Outline','Alertmanager','Prometheus','Toolbox'] as const)assert.ok(credentialHelp(name),name);
- for(const name of connectionNames.filter(n=>!['Model','Toolbox'].includes(n)))assert.ok(endpointHelp(name),name);
+ for(const name of ['YouTrack','GitLab','Slack','Outline','Alertmanager','Prometheus','Kubernetes'] as const)assert.ok(credentialHelp(name),name);
+ for(const name of connectionNames.filter(n=>!['Model','Kubernetes'].includes(n)))assert.ok(endpointHelp(name),name);
  for(const name of ['YouTrack','Outline','Slack','Alertmanager'] as const)assert.ok(scopeHelp(name),name);
 });
 

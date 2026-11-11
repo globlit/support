@@ -1,6 +1,6 @@
 # Container
 
-The `Dockerfile` builds an image with Support, kubectl, Toolbox and the Claude Code CLI. The image runs as user `node` (uid 1000).
+The `Dockerfile` builds an image with Support, kubectl and the Claude Code CLI. kubectl merges imported kubeconfig files. The image runs as user `node` (uid 1000).
 
 ```shell
 docker build -t support .
@@ -38,7 +38,8 @@ Mount `/home/node/.claude` to keep the login when the container is recreated.
 Sandbox properties:
 
 - The image is built from `sandbox/Dockerfile`. It contains Claude Code, kubectl, Helm, Flux, kustomize, the Argo CD CLI, yq, jq, git, curl and Python.
-- Outgoing traffic to private, shared and link-local IPv4 ranges is rejected. Exceptions: DNS, and Support's Git proxy (7071), agent gateway (7072) and tunnel relays (32768-60999).
+- Agent sessions get a kubeconfig with the enabled Kubernetes contexts. Each context points at the agent gateway, which adds the context token. See [Kubernetes access](kubernetes-access.md).
+- Outgoing traffic to private, shared and link-local IPv4 ranges is rejected. Exceptions: DNS, and Support's Git proxy (7071) and agent gateway (7072).
 - `sandbox/server.py` runs as `sandboxd`. Commands and agent sessions run as `admin`, and cannot signal the server.
 - Only the `support` service reaches the sandbox, on the `agent` network (`172.31.251.0/24`).
 

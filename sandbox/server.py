@@ -86,6 +86,8 @@ AGENT_ENV_KEYS = {
     'SUPPORT_RUN_ID',
     'PATH',
     'DISABLE_AUTOUPDATER',
+    'ENABLE_TOOL_SEARCH',
+    'KUBECONFIG',
 }
 
 # Prefix that runs a program as the command user, without any capability.

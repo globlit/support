@@ -1,7 +1,6 @@
 import {z} from 'zod';
 import type {Store} from './store.js';
-import {connectionNames,prometheusCredential} from '../src/model.js';
-import {toolboxCredentialSchema} from './toolbox-config.js';
+import {connectionNames,kubernetesContextName,prometheusCredential} from '../src/model.js';
 
 export const serviceAuthConnections=['Alertmanager','Prometheus','Grafana'] as const;
 export type ServiceAuthConnection=typeof serviceAuthConnections[number];
@@ -58,21 +57,30 @@ export function serviceAuthSecrets(raw:string){
  return [auth.password,pair,Buffer.from(pair,'utf8').toString('base64')];
 }
 
+/** Vault value of a Kubernetes context: bearer token, optional CA certificates (PEM), optional TLS verification skip. */
+export const kubernetesSecretSchema=z.object({
+ token:z.string().trim().min(1).max(16384).regex(/^[\x21-\x7e]+$/,'The token must not contain spaces or control characters.'),
+ ca:z.string().max(262144).refine(v=>!v.trim()||v.includes('-----BEGIN CERTIFICATE-----'),'Use PEM certificates (-----BEGIN CERTIFICATE-----).').optional(),
+ insecure:z.boolean().optional(),
+}).strict();
+export type KubernetesSecret=z.infer<typeof kubernetesSecretSchema>;
+/** Vault name of a Kubernetes context credential: Kubernetes/<context>. */
+export const kubernetesCredentialName=z.string().max(220).refine(v=>v.startsWith('Kubernetes/')&&kubernetesContextName.safeParse(v.slice(11)).success,'Unknown Kubernetes context.');
 const serviceName=z.enum(serviceAuthConnections);
 /** Connections whose saved credential can be removed without saving a replacement. */
-export const removableCredentials=[...serviceAuthConnections,'Outline','Toolbox'] as const;
+export const removableCredentials=[...serviceAuthConnections,'Outline'] as const;
 /** Request body of POST /api/credential. */
 export const credentialInput=z.union([
- z.object({name:z.enum(connectionNames).exclude(['Toolbox']),value:z.string().min(1).max(16384)}).strict(),
+ z.object({name:z.enum(connectionNames).exclude(['Kubernetes']),value:z.string().min(1).max(16384)}).strict(),
  z.object({name:serviceName,basic:basicCredentialSchema}).strict(),
- z.object({name:z.literal('Toolbox'),toolbox:toolboxCredentialSchema}).strict(),
  z.object({name:z.enum(removableCredentials),remove:z.literal(true)}).strict(),
  z.object({name:serverCredentialName,value:z.string().min(1).max(16384)}).strict(),
  z.object({name:serverCredentialName,basic:basicCredentialSchema}).strict(),
  z.object({name:serverCredentialName,remove:z.literal(true)}).strict(),
+ z.object({name:kubernetesCredentialName,kubernetes:kubernetesSecretSchema}).strict(),
 ]);
 /** Returns the value to store for a save request. */
-export function storedCredential(v:Exclude<z.infer<typeof credentialInput>,{remove:true}|{toolbox:unknown}>){
+export function storedCredential(v:Exclude<z.infer<typeof credentialInput>,{remove:true}|{kubernetes:unknown}>){
  if('basic' in v)return basicCredential(v.basic);
  return isServiceAuthConnection(v.name)||v.name.startsWith('Prometheus/')?bearerCredential(v.value):v.value;
 }

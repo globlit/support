@@ -26,9 +26,7 @@ import { checkGitLabConnection,checkModelConnection } from './connections.js';
 import { createServer,type IncomingMessage,type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import {gitLabProjects} from './gitlab.js';
-import {mergeKubeconfigs,stopTunnels,toolboxFiles} from './toolbox.js';
-import {generateToolboxSetup,kubeconfigContexts,setupHash} from './toolbox-setup.js';
-import {maxKubeconfigBytes,toolboxStoredValue} from './toolbox-config.js';
+import {checkContext,importKubeconfigs,kubernetesSecretSchema} from './kubernetes.js';
 /** Request size limit for kubeconfig loading, generation and saving: 8 MiB. */
 const kubeconfigBodyLimit=8*1024*1024;
 import { resolve,join,extname,relative,isAbsolute } from 'node:path';
@@ -42,7 +40,7 @@ import { AlertTickets,alertDraftInput } from './alert-tickets.js';
 import { Alertmanager } from './alertmanager.js';
 import { Claude } from './claude.js';
 import { YouTrack } from './youtrack.js';
-import { connectionNames,configSchema ,toolboxSettingsSchema,type RunBasis} from '../src/model.js';
+import { connectionNames,configSchema,kubernetesCredential,type RunBasis} from '../src/model.js';
 import {credentialInput,storedCredential} from './service-auth.js';
 process.umask(0o077);
 const runtime=deployment(),{port}=runtime,origin=runtime.publicOrigin;
@@ -179,7 +177,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(agentMessage&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(4000),replyTo:z.string().uuid().optional()}).strict().parse(await body(req));return send(res,claude.message(agentMessage[1],v,session.principal.name));}
  const agentRunStop=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/stop$/);
  if(agentRunStop&&req.method==='POST'){await body(req);claude.cancel(agentRunStop[1]);return send(res,await agentState());}
- if(path==='/api/agent/halt'&&req.method==='POST'){await body(req);setAgentHalted(store,true);const stopped=claude.cancelAll();stopTunnels();await killAllSandbox();recordDiagnostic(store,{tool:'Agent',operation:'Agent stopped (Stop all)',status:'cancelled',durationMs:0,output:`Runs stopped: ${stopped}\nCommands and tunnels stopped. New runs blocked until resume.`});return send(res,await agentState());}
+ if(path==='/api/agent/halt'&&req.method==='POST'){await body(req);setAgentHalted(store,true);const stopped=claude.cancelAll();await killAllSandbox();recordDiagnostic(store,{tool:'Agent',operation:'Agent stopped (Stop all)',status:'cancelled',durationMs:0,output:`Runs stopped: ${stopped}\nCommands and tunnels stopped. New runs blocked until resume.`});return send(res,await agentState());}
  if(path==='/api/agent/queue'&&req.method==='GET')return send(res,{entries:agentQueue.view(),counts:agentQueue.counts()});
  const queueAction=path.match(/^\/api\/agent\/queue\/(retry|discard)$/);
  if(queueAction&&req.method==='POST'){const {scope}=z.object({scope:z.string().min(3).max(400)}).strict().parse(await body(req));if(queueAction[1]==='retry')agentQueue.retry(scope);else agentQueue.discard(scope);return send(res,{entries:agentQueue.view(),counts:agentQueue.counts()});}
@@ -305,25 +303,21 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(path==='/api/config'&&req.method==='PUT'){const data=z.object({config:z.unknown(),revision:z.number().int()}).strict().parse(await body(req));return send(res,store.config(data.config,data.revision));}
  if(path==='/api/config/export'&&req.method==='GET'){const state=store.snapshot();return send(res,{format:1,config:state.config});}
  if(path==='/api/gitlab/projects'&&req.method==='GET'){const {search}=z.object({search:z.string().trim().max(200).optional()}).strict().parse(Object.fromEntries(url.searchParams));return send(res,{projects:await gitLabProjects(store,transport,search??'')});}
- if(path==='/api/toolbox/kubeconfig/merge'&&req.method==='POST'){const {files}=z.object({files:z.array(z.object({name:z.string().trim().min(1).max(200),content:z.string().min(1).max(1_048_576)}).strict()).min(1).max(500)}).strict().parse(await body(req,kubeconfigBodyLimit));return send(res,await mergeKubeconfigs(files));}
- if(path==='/api/toolbox/contexts'&&req.method==='POST'){const {kubeconfig}=z.object({kubeconfig:z.string().min(1).max(maxKubeconfigBytes)}).strict().parse(await body(req,kubeconfigBodyLimit));return send(res,{contexts:await kubeconfigContexts(kubeconfig)});}
- // Preview with unsaved settings. Nothing is stored: saving the Toolbox credential generates again with the saved settings.
- if(path==='/api/toolbox/generate'&&req.method==='POST'){const v=z.object({kubeconfig:z.string().min(1).max(maxKubeconfigBytes),contexts:z.array(z.string().min(1).max(253)).min(1).max(100),settings:toolboxSettingsSchema}).strict().parse(await body(req,kubeconfigBodyLimit));return send(res,await generateToolboxSetup(v.kubeconfig,v.contexts,v.settings));}
+ // Import returns each context with its token, so that the browser saves it with the other settings.
+ if(path==='/api/kubernetes/import'&&req.method==='POST'){const {files}=z.object({files:z.array(z.object({name:z.string().trim().min(1).max(200),content:z.string().min(1).max(1_048_576)}).strict()).min(1).max(500)}).strict().parse(await body(req,kubeconfigBodyLimit));return send(res,{contexts:await importKubeconfigs(files)});}
+ if(path==='/api/kubernetes/test'&&req.method==='POST'){const {name}=z.object({name:z.string().max(200)}).strict().parse(await body(req)),config=store.snapshot().config;if(!config.kubernetesContexts.some(c=>c.name===name))throw new AppError(404,'Save the context first, then test it.');return send(res,await checkContext(store,{...config,connections:{...config.connections,Kubernetes:{...config.connections.Kubernetes,enabled:true}},kubernetesContexts:config.kubernetesContexts.map(c=>c.name===name?{...c,enabled:true}:c)},name,AbortSignal.timeout(15000)));}
  if(path==='/api/prometheus/sources'&&req.method==='GET'){const sources=await PrometheusSources.create(store,store.snapshot().config,transport);return send(res,sources.describe());}
  if(path==='/api/prometheus/test'&&req.method==='POST'){
   const {id}=z.object({id:z.string().max(16)}).strict().parse(await body(req)),config=store.snapshot().config,server=config.prometheusSources.find(s=>s.id===id);
   if(!server)throw new AppError(404,'Save the server first, then test it.');
   const sources=await PrometheusSources.create(store,{...config,connections:{...config.connections,Prometheus:{...config.connections.Prometheus,enabled:true},Grafana:{...config.connections.Grafana,enabled:false}},prometheusSources:[server]},transport);
   try{
-   if(!sources.names().includes(server.name))return send(res,{ok:false,detail:'Enable Toolbox and its port forwarding in Settings → Connections → Toolbox, then save.'});
+   if(!sources.names().includes(server.name))return send(res,{ok:false,detail:`Enable the Kubernetes connection and the context ${server.kind==='tunnel'?server.context:''} in Settings → Connections → Kubernetes, then save.`});
    const v=await sources.buildInfo(server.name,AbortSignal.timeout(30000)) as {data?:{version?:string}};
    const version=v.data?.version?`Prometheus ${v.data.version}`:'Prometheus';
-   return send(res,{ok:true,detail:server.kind==='url'?`${version} responds at ${server.endpoint}.`:`${version} responds through a tunnel to ${server.target} in ${server.context}/${server.namespace}.`});
+   return send(res,{ok:true,detail:server.kind==='url'?`${version} responds at ${server.endpoint}.`:`${version} responds through the API server of ${server.context}, at ${server.target} in ${server.namespace}.`});
   }catch(e){return send(res,{ok:false,detail:e instanceof AppError?e.message:'The query failed.'});}
-  finally{sources.close();}
  }
- if(path==='/api/toolbox/status'&&req.method==='GET'){const files=toolboxFiles(store),c=store.snapshot().config;if(!files)return send(res,{source:c.connections.Toolbox.path?'path':'none'});if(files.v===1)return send(res,{source:'custom'});return send(res,{source:'generated',contexts:files.contexts,generatedAt:files.generatedAt,stale:setupHash(c.toolbox,files.contexts.map(x=>x.name))!==files.settingsHash});}
- if(path==='/api/toolbox/regenerate'&&req.method==='POST'){await body(req);const files=toolboxFiles(store);if(files?.v!==2)throw new AppError(409,'Save a kubeconfig and select contexts first.');const settings=store.snapshot().config.toolbox,names=files.contexts.map(x=>x.name),setup=await generateToolboxSetup(files.kubeconfig,names,settings);store.credential('Toolbox',toolboxStoredValue(setup,files.kubeconfig,setupHash(settings,names)));return send(res,{contexts:setup.contexts.map(x=>({name:x.name,namespaces:x.namespaces.length,excluded:x.excluded}))});}
  if(path==='/api/connection/check'&&req.method==='POST'){const {name,config}=z.object({name:z.enum(connectionNames),config:z.unknown().optional()}).strict().parse(await body(req));if(config!==undefined){const result=await testConnection(name,configSchema.parse(config),serviceProbe(store));return send(res,{checks:[{label:`${name} (unsaved settings)`,ok:result.ok,detail:result.detail}],draft:true});}const started=Date.now();
   // Saved settings: run a live check, and record its result as the connection's health.
   const savedCheck=async():Promise<{checks:{label:string;ok:boolean;detail:string}[];liveTest:boolean}>=>{if(name==='Model')return (await checkModelConnection(store,transport));if(name==='Slack'){await slack.poll();return ({checks:[{label:'Slack read access',ok:true,detail:'Read the configured channel. Thread permissions are checked when a request is opened.'}],liveTest:true});}if(name==='GitLab')return (await checkGitLabConnection(store,transport));if(name==='Alertmanager'){await alerts.poll();return ({checks:[{label:'Alertmanager read access',ok:true,detail:'Poll completed. No tickets or silences created.'}],liveTest:true});}if(name==='YouTrack'){const result=await youtrack.list(0);return ({checks:[{label:'YouTrack read access',ok:true,detail:`Read ${result.issues.length} issues from the configured query. No changes sent.`}],liveTest:true});}const result=await testConnection(name,store.snapshot().config,serviceProbe(store));return {checks:[{label:`${name} connection`,ok:result.ok,detail:result.detail}],liveTest:true};};
@@ -331,12 +325,11 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   catch(e){recordHealthProbe(store,name,{ok:false,detail:e instanceof AppError?e.message:'Connection test failed.'},Date.now()-started);throw e;}}
  if(path==='/api/health'&&req.method==='GET')return send(res,{tools:toolHealth(store)});
  if(path==='/api/credential'&&req.method==='POST'){const v=credentialInput.parse(await body(req,kubeconfigBodyLimit));
-  // A Toolbox credential stores the kubeconfig with a configuration generated from the saved Toolbox settings.
-  if('toolbox' in v){const settings=store.snapshot().config.toolbox,setup=await generateToolboxSetup(v.toolbox.kubeconfig,v.toolbox.contexts,settings);return send(res,store.credential('Toolbox',toolboxStoredValue(setup,v.toolbox.kubeconfig,setupHash(settings,v.toolbox.contexts))));}
+  if('kubernetes' in v){if(!store.snapshot().config.kubernetesContexts.some(c=>kubernetesCredential(c.name)===v.name))throw new AppError(409,'Save the Kubernetes context in settings before its token.');return send(res,store.credential(v.name,JSON.stringify(kubernetesSecretSchema.parse(v.kubernetes))));}
  return send(res,'remove' in v?store.removeCredential(v.name):store.credential(v.name,storedCredential(v)));}
  throw new AppError(404,'Not found');});}
  if(req.method!=='GET'&&req.method!=='HEAD')throw new AppError(405,'Method not allowed');
  const file=path==='/'?resolve('dist/index.html'):resolve('dist','.'+decodeURIComponent(path));const rel=relative(resolve('dist'),file);if(rel.startsWith('..')||isAbsolute(rel))throw new AppError(403,'Invalid path');const contents=await readFile(file).catch(()=>{throw new AppError(404,'Not found. Run npm run build first.');});res.writeHead(200,{'Content-Type':({'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'} as Record<string,string>)[extname(file)]??'application/octet-stream'});res.end(req.method==='HEAD'?undefined:contents);
  }catch(e){if(req.url?.startsWith('/api/')&&!req.url.startsWith('/api/logs'))recordDiagnostic(store,{tool:'App',operation:(req.method??'GET')+' '+req.url.split('?')[0],status:'error',durationMs:0,output:e instanceof AppError?e.message:'Request validation or processing failed.'});if(e instanceof z.ZodError)return send(res,{error:e.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; ')},400);send(res,{error:e instanceof AppError?e.message:'The operation failed. No credentials were logged.',...(e instanceof AppError&&e.code?{code:e.code}:{})},e instanceof AppError?e.status:500);}});
 server.listen(port,runtime.bindHost,()=>{console.log(`Support\nOpen: ${origin}\nDeployment: ${runtime.mode}; browser authentication required. Approved GitLab branches and reviewed draft merge requests available. Cluster writes disabled.`)});
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();stopTunnels();void killAllSandbox();clearInterval(notificationTimer);clearInterval(slackTimer);clearInterval(queueTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{sessions.clear();void killAllSandbox();clearInterval(notificationTimer);clearInterval(slackTimer);clearInterval(queueTimer);clearInterval(intakeTimer);clearInterval(alertTimer);clearInterval(healthTimer);health.stop();server.close(()=>{store.close();process.exit(0)});});

@@ -11,15 +11,14 @@ const tunnelDefaults={target:'service/prometheus-operated',port:9090,pathPrefix:
 
 /**
  * Editor for the Prometheus servers the agent can query. A server is reached by URL, with optional credentials saved in
- * the Vault, or through a Toolbox tunnel. **Test** checks a saved server. The list at the end also shows Grafana datasources.
+ * the Vault, or through the API server of a Kubernetes context. **Test** checks a saved server. The list at the end also shows Grafana datasources.
  */
 export function PrometheusSources({sources,onChange,data,busy,dirty,pending,setPending,run,reload}:{sources:PrometheusSource[];onChange:(sources:PrometheusSource[])=>void;data:Snapshot;busy:boolean;dirty:boolean;pending:Partial<Record<CredentialName,unknown>>;setPending:(name:CredentialName,body:unknown)=>void;run:(f:()=>Promise<void>)=>Promise<void>;reload:()=>Promise<Snapshot>}){
  const unlocked=data.vault.unlocked;
- const [contexts,setContexts]=useState<string[]>([]),[listed,setListed]=useState<Listed|null>(null),[checks,setChecks]=useState<Record<string,Check|'running'>>({});
+ const contexts=data.config.kubernetesContexts.map(c=>c.name),[listed,setListed]=useState<Listed|null>(null),[checks,setChecks]=useState<Record<string,Check|'running'>>({});
  const list=useId(),saved=data.config.prometheusSources;
  useEffect(()=>{
   if(!unlocked)return;
-  void api<{contexts?:{name:string}[]}>('/toolbox/status').then(s=>setContexts(s.contexts?.map(c=>c.name)??[])).catch(()=>{});
   void api<Listed>('/prometheus/sources').then(setListed).catch(()=>setListed(null));
  },[unlocked,data.configRevision]);
  const set=(id:string,next:PrometheusSource)=>{onChange(sources.map(s=>s.id===id?next:s));setChecks(c=>{const n={...c};delete n[id];return n;});};
@@ -47,9 +46,9 @@ export function PrometheusSources({sources,onChange,data,busy,dirty,pending,setP
      <Field label="URL" hint="Base URL, without /api/v1. Example: https://prometheus.cluster-a.example.com"><input value={s.endpoint} spellCheck={false} onChange={e=>set(s.id,{...s,endpoint:e.target.value})}/></Field>
      <ServerCredential id={s.id} data={data} busy={busy} dirty={dirty} pending={pending[`Prometheus/${s.id}`]!==undefined} setPending={setPending} run={run} reload={reload}/>
     </>:<div className="prom-source-grid">
-     <Field label="Context"><input value={s.context} list={list} spellCheck={false} onChange={e=>set(s.id,{...s,context:e.target.value})}/></Field>
+     <Field label="Context" hint="A Kubernetes context from Settings → Connections → Kubernetes. Its token needs get on services/proxy in the namespace."><input value={s.context} list={list} spellCheck={false} onChange={e=>set(s.id,{...s,context:e.target.value})}/></Field>
      <Field label="Namespace"><input value={s.namespace} spellCheck={false} onChange={e=>set(s.id,{...s,namespace:e.target.value})}/></Field>
-     <Field label="Target" hint="service/NAME or statefulset/NAME."><input value={s.target} spellCheck={false} onChange={e=>set(s.id,{...s,target:e.target.value})}/></Field>
+     <Field label="Target" hint="service/NAME, or a pod name. Read through the API server proxy."><input value={s.target} spellCheck={false} onChange={e=>set(s.id,{...s,target:e.target.value})}/></Field>
      <Field label="Port"><input inputMode="numeric" value={String(s.port)} onChange={e=>set(s.id,{...s,port:Number(e.target.value.replace(/\D/g,'').slice(0,5))||0})}/></Field>
      <Field label="Path prefix" hint="Only when Prometheus uses --web.route-prefix."><input value={s.pathPrefix} placeholder="/" spellCheck={false} onChange={e=>set(s.id,{...s,pathPrefix:e.target.value})}/></Field>
     </div>}

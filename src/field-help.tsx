@@ -38,7 +38,7 @@ export function credentialHelp(name:ConnectionName):ReactNode{
   case 'Outline':return <>Outline <strong>Settings → API → New API key</strong>, with the scopes:<ul><li><code>documents:read</code></li><li><code>collections:read</code>: not needed if the collection is set by ID</li></ul><Doc href="https://www.getoutline.com/developers">Docs</Doc></>;
   case 'Alertmanager':case 'Prometheus':return <>Only needed when a reverse proxy protects {name}. Use a username and password, or a bearer token.</>;
   case 'Grafana':return <>A user with the Viewer role and query access to the Prometheus datasources. Use its username and password, or a service account token.</>;
-  case 'Toolbox':return <>Prefer a read-only service account, with certificates embedded in the <code>*-data</code> fields. Export one context with <code>kubectl config view --minify --flatten --context NAME</code></>;
+  case 'Kubernetes':return <>A ServiceAccount token bound to a read-only role, such as the <code>view</code> ClusterRole. Support refuses writes, exec and port-forward; RBAC decides which reads succeed. See <code>docs/kubernetes-access.md</code>.</>;
   default:return undefined;
  }
 }

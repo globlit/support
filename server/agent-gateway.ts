@@ -6,6 +6,7 @@ import {AppError,type Store} from './store.js';
 import {modelKey} from './model-api.js';
 import {recordDiagnostic} from './diagnostics.js';
 import type {AgentToolset} from './agent-toolset.js';
+import {agentKubeconfig,enabledContexts,kubernetesRefusal,kubernetesStatus,kubernetesTarget,proxyKubernetes} from './kubernetes.js';
 
 /** One agent session known to the gateway. */
 export type GatewaySession={
@@ -36,7 +37,8 @@ export const resultText=(value:unknown)=>{const t=typeof value==='string'?value:
  * - `/<token>/v1/messages`: model proxy. The placeholder credential of the sandbox is replaced by the real one.
  * - `/<token>/mcp`: Support tools over MCP (streamable HTTP, JSON responses).
  * - `/<token>/tools` and `/<token>/tools/<name>`: the same tools as plain HTTP, for scripts.
- * - `/<token>/kubectl`: read-only kubectl through Toolbox.
+ * - `/<token>/kubeconfig`: kubeconfig of the enabled Kubernetes contexts, pointing at the routes below.
+ * - `/<token>/k8s/<context>/<API path>`: read-only Kubernetes API of a context. The gateway adds the context's token.
  */
 export class AgentGateway {
  private sessions=new Map<string,GatewaySession>();private server?:Server;private address?:string;private port?:number;
@@ -79,10 +81,24 @@ export class AgentGateway {
    if(path==='/tools'&&req.method==='GET')return json(res,200,{tools:session.toolset.definitions.map(d=>({name:d.name,description:d.description,input:d.input_schema}))});
    const tool=path.match(/^\/tools\/([a-z_]{1,64})$/);
    if(tool&&req.method==='POST'){const input=JSON.parse((await readBody(req,1_000_000)).toString('utf8')||'{}');const r=await this.call(session,tool[1],input);return json(res,r.ok?200:400,r.ok?r.value:{error:r.text});}
-   if(path==='/kubectl'&&req.method==='POST'){const {args}=z.object({args:z.unknown()}).parse(JSON.parse((await readBody(req,100_000)).toString('utf8')||'{}'));const r=await session.toolset.kubectl(args);session.onTool?.('kubectl',args,{ok:r.code===0,text:(r.stdout+r.stderr).slice(0,4000)});return json(res,200,r);}
+   if(path==='/kubeconfig'&&req.method==='GET'){const config=this.store.snapshot().config;res.writeHead(200,{'Content-Type':'application/json'});return void res.end(agentKubeconfig(`http://${this.address}:${this.port}/${token}`,enabledContexts(this.store,config).map(c=>c.name)));}
+   if(path.startsWith('/k8s/'))return await this.kubernetes(req,res,session,url);
    recordDiagnostic(this.store,{tool:'Agent',operation:`Agent gateway refused ${req.method} ${path.slice(0,200)}`,status:'error',durationMs:0,output:'This path is not forwarded.'});
    json(res,404,{error:'Not found.'});
   }catch(e){if(!res.headersSent)json(res,e instanceof AppError?e.status:400,{error:e instanceof AppError?e.message:e instanceof z.ZodError?'Invalid request.':'The request failed.'});else res.destroy();}
+ }
+ /**
+  * Forwards a read request of the agent to the Kubernetes API of a context. Refused requests get a Kubernetes Status
+  * answer, which kubectl prints, and are reported to the session.
+  */
+ private async kubernetes(req:IncomingMessage,res:ServerResponse,session:GatewaySession,url:URL){
+  const [,,,encoded='',...rest]=url.pathname.split('/'),apiPath='/'+rest.join('/');
+  const refuse=(code:number,message:string)=>{session.onTool?.('kubernetes',{method:req.method,path:apiPath.slice(0,300)},{ok:false,text:message});res.writeHead(code,{'Content-Type':'application/json'});res.end(kubernetesStatus(code,message));};
+  let context:string;try{context=decodeURIComponent(encoded);}catch{return refuse(400,'The context name is not valid.');}
+  const reason=kubernetesRefusal(req.method??'GET',apiPath,req.headers);
+  if(reason)return refuse(403,reason);
+  let target;try{target=kubernetesTarget(this.store,this.store.snapshot().config,context);}catch(e){return refuse(404,e instanceof AppError?e.message:'Unknown context.');}
+  await proxyKubernetes(req,res,target,apiPath+url.search);
  }
  /** Runs a tool and reports the call to the session. Errors are returned to the caller, which can adapt. */
  private async call(session:GatewaySession,name:string,input:unknown):Promise<{ok:true;value:unknown;text:string}|{ok:false;text:string}>{
@@ -98,7 +114,7 @@ export class AgentGateway {
    if(m.id===undefined)return undefined;
    const reply=(result:unknown)=>({jsonrpc:'2.0',id:m.id,result});
    switch(m.method){
-    case 'initialize':return reply({protocolVersion:m.params?.protocolVersion??'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'support',version:'1.0.0'},instructions:'Support tools: Kubernetes through Toolbox, Prometheus, Grafana, Outline, GitLab, YouTrack, Alertmanager, and the workflow tools ask_engineer, propose_change and submit_result. The same tools are available to scripts with the support command.'});
+    case 'initialize':return reply({protocolVersion:m.params?.protocolVersion??'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'support',version:'1.0.0'},instructions:'Support tools: Prometheus, Grafana, Outline, GitLab, YouTrack, Alertmanager, and the workflow tools ask_engineer, propose_change and submit_result. The same tools are available to scripts with the support command.'});
     case 'ping':return reply({});
     case 'tools/list':return reply({tools:session.toolset.definitions.map(d=>({name:d.name,description:d.description,inputSchema:d.input_schema}))});
     case 'tools/call':{const r=await this.call(session,String(m.params?.name??''),m.params?.arguments??{});return reply({content:[{type:'text',text:r.text}],isError:!r.ok});}

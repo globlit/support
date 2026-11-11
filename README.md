@@ -39,7 +39,7 @@ Set these variables before startup. In a container, pass them with `docker run -
 | `SUPPORT_PUBLIC_ORIGIN` | Listener origin | Browser origin. Required in `container` mode. |
 | `SUPPORT_SESSION_SECONDS` | `43200` | Browser session lifetime, 300 to 43200. |
 | `SUPPORT_DATA_DIR` | `.support-data` | Database, Vault, and logs. Back it up. |
-| `SUPPORT_TOOLBOX_BINARY` | `/usr/local/bin/toolbox` | Toolbox binary path. |
+| `SUPPORT_KUBECTL_BINARY` | `/usr/local/bin/kubectl` | kubectl binary that merges imported kubeconfig files. |
 
 ## Reference
 

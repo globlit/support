@@ -3,13 +3,12 @@ import {configuredModelFetch,modelKey} from './model-api.js';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
-import {readToolbox,toolboxFiles,toolboxContexts,readableResources,startPortForward} from './toolbox.js';
+import {enabledContexts,readKubernetes} from './kubernetes.js';
 import {YouTrack} from './youtrack.js';
 import {OutlineReader,outlineAvailable} from './outline.js';
 import {readTools} from './agent-tools.js';
 import {agentFeed,assertAgentRunning} from './agent-feed.js';
 import {runSandboxCommand,cleanupSandboxRun,sandboxUrl,maxCommandSeconds} from './sandbox.js';
-import {readToolboxLogs} from './toolbox.js';
 import {repoCheckout,proposeChange} from './repo-tools.js';
 import type {GitProxy} from './git-proxy.js';
 import type {AgentGateway} from './agent-gateway.js';
@@ -64,7 +63,7 @@ export class Claude {
  useGateway(gateway:AgentGateway){this.gateway=gateway;}
  private resumeTimers=new Map<string,NodeJS.Timeout>();
  private active=new Map<string,AbortController>();
- constructor(private store:Store,private youtrack:YouTrack,private fetcher:typeof fetch=fetch,private toolboxReader=readToolbox){}
+ constructor(private store:Store,private youtrack:YouTrack,private fetcher:typeof fetch=fetch){}
  status(id:string){const run=this.runs.get(id)??this.store.investigation(id);if(Date.parse(run.startedAt)<Date.now()-this.store.snapshot().config.retentionDays*86400000){this.runs.delete(id);this.store.pruneInvestigations();throw new AppError(404,'Investigation expired.');}if(run.state==='running'&&!this.active.has(id)&&this.store.activeRunId!==id){run.state='failed';run.error='Investigation interrupted. Start a fresh run.';for(const e of run.events)if(e.status==='running')e.status='failed';this.store.saveInvestigation(run);}return structuredClone(this.store.key?run:{...run,events:[],plan:undefined,replyDraft:undefined})}
  async history(id:string){const issue=await this.youtrack.issue(id);return this.store.investigations(issue.connection,id).filter(r=>!r.kind||r.kind==='investigation').map(r=>{const v=this.status(r.id);return {...v,events:[],plan:undefined,replyDraft:undefined}});}
  cancelSource(connection:string,id:string){for(const run of this.runs.values())if(run.connection===connection&&run.issueId===id&&run.state==='running')this.active.get(run.id)?.abort(stopReason('Stopped: the handling of this request changed.'));}
@@ -227,7 +226,7 @@ export class Claude {
   const timeout=setTimeout(()=>controller.abort(stopReason(`Stopped after the ${limits.runMinutes}-minute run limit.`)),limits.runMinutes*60_000);
   agentFeed.start({runId:run.id,title:`${issue.key??issue.id} · ${issue.title}`.slice(0,160),route:{page:sourcePage(issue.connection),issue:issue.id},startedAt:run.startedAt});
   const persist=()=>this.store.saveInvestigation(run);const event=(text:string)=>{run.events.push({at:new Date().toISOString(),text});persist();agentFeed.publish(run.id,'step',text);};
-  const secrets:string[]=[];let closeSources=()=>{};
+  const secrets:string[]=[];
   const gitToken=this.gitProxy?.listening?this.gitProxy.register():undefined;
   const redact=(value:string)=>{let s=value;for(const secret of secrets)if(secret)s=s.split(secret).join('[redacted]');return s.replace(/("(?:password|token|secret|authorization|api[_-]?key)"\s*:\s*)"[^"]*"/gi,'$1"[redacted]"').replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,'[redacted private key]').replace(/\b(password|token|secret|authorization|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi,'$1=[redacted]');};
   const request=async(url:URL,headers:Record<string,string>,body?:unknown)=>{
@@ -239,17 +238,13 @@ export class Claude {
   try {
    secrets.push(...this.store.secretValues());
    const available=[planTool()];
-   const toolboxCredentials=toolboxFiles(this.store),toolboxContextList=config.connections.Toolbox.enabled&&(toolboxCredentials||config.connections.Toolbox.path)?toolboxContexts(config,toolboxCredentials):[];
-   if(toolboxContextList.length){
-    available.push(tool('toolbox_get',`Read sanitized Kubernetes resources through Toolbox. The Toolbox configuration decides which namespaces are allowed. Cluster-scoped resources take no namespace.${config.toolbox.allowConfigMaps?' ConfigMaps are readable.':''} No secrets, logs, raw URLs or writes.`,{context:{type:'string',enum:toolboxContextList},resource:{type:'string',enum:readableResources(config)},namespace:str,name:{type:'string',description:'One resource name. Default: all.'},selector:{type:'string',description:'Label selector, such as app=web.'}},['context','resource']));
-    available.push(tool('toolbox_logs','Read the logs of one pod through Toolbox, sanitized. tail defaults to 200 lines (at most 2,000). since is a duration such as 15m.',{context:{type:'string',enum:toolboxContextList},namespace:str,pod:str,container:str,previous:{type:'boolean'},tail:{type:'integer',minimum:1,maximum:2000},since:str},['context','namespace','pod']));
-    if(config.toolbox.allowPortForward)available.push(tool('toolbox_port_forward','Open a temporary Toolbox tunnel to a pod, service, deployment or StatefulSet (target such as statefulset/NAME). The result lists reachableFromSandbox addresses: use them with run_command, for example curl http://ADDRESS/metrics. Only send read requests through tunnels.',{context:{type:'string',enum:toolboxContextList},namespace:str,target:str,ports:{type:'array',items:str,minItems:1,maxItems:8},durationSeconds:{type:'integer',minimum:1,maximum:config.toolbox.portForwardMaxSeconds}}));
-   }
-   const prom=await PrometheusSources.create(this.store,config,this.fetcher,controller.signal);closeSources=()=>prom.close();check();
+   const kubernetesContexts=enabledContexts(this.store,config).map(c=>c.name);
+   if(kubernetesContexts.length)available.push(tool('kubernetes_read','Read the Kubernetes API of a context with a GET request, read-only. path is an API path with an optional query, for example /api/v1/namespaces/NAME/pods?labelSelector=app%3Dweb, /apis/apps/v1/namespaces/NAME/deployments/NAME, /api/v1/namespaces/NAME/events or /api/v1/namespaces/NAME/pods/POD/log?tailLines=200. Cluster RBAC decides what is readable: Secrets are not.',{context:{type:'string',enum:kubernetesContexts},path:str},['context','path']));
+   const prom=await PrometheusSources.create(this.store,config,this.fetcher,controller.signal);check();
    const promNames=prom.names();
    if(promNames.length){
     const source={type:'string',enum:promNames,description:'Prometheus source. Default: '+promNames[0]};
-    available.push(tool('prometheus_sources','List the Prometheus sources: the direct connection, Grafana datasources and per-cluster servers reached through Kubernetes tunnels.',{},[]));
+    available.push(tool('prometheus_sources','List the Prometheus sources: servers reached by URL, servers inside clusters reached through Kubernetes, and Grafana datasources.',{},[]));
     available.push(tool('prometheus_query','Run an instant PromQL query on one Prometheus source. time is RFC 3339 or Unix seconds (default: now).',{source,query:str,time:str},['query']));
     available.push(tool('prometheus_query_range','Run a PromQL range query on one Prometheus source. start and end are RFC 3339 or Unix seconds. step is a duration such as 60s or 5m.',{source,query:str,start:str,end:str,step:str},['query','start','end','step']));
     available.push(tool('prometheus_api','Read a Prometheus API endpoint on one source. targets returns scrape pools, health and last errors (params.health: up, down or unknown). label_values needs params.label. series needs params["match[]"]. rules and alerts show rule evaluation and firing alerts.',{source,endpoint:{type:'string',enum:[...prometheusEndpoints]},params:{type:'object',additionalProperties:{anyOf:[str,{type:'array',items:str}]}}},['endpoint']));
@@ -345,14 +340,10 @@ export class Claude {
       const r=await runSandboxCommand({runId:run.id,command:i.command,timeoutSeconds:i.timeoutSeconds??limits.commandSeconds,signal:controller.signal,redact,fetcher:this.fetcher,onOutput:text=>{pending+=text;flush();}});flush(true);check();
       agentFeed.publish(run.id,'result',r.timedOut?`Timed out after ${Math.round(r.durationMs/1000)} s`:`Exit ${r.exitCode??r.signal} · ${(r.durationMs/1000).toFixed(1)} s${r.truncated?' · output truncated':''}`);
       result=r;
-     }else if(use.name==='toolbox_logs'){
-      event('Reading pod logs through Toolbox');result=await readToolboxLogs(config,use.input,controller.signal,toolboxFiles(this.store));check();
+     }else if(use.name==='kubernetes_read'){
+      event('Reading the Kubernetes API');result=await readKubernetes(this.store,config,use.input,controller.signal);check();
      }else if(reads.definitions.some(d=>d.name===use.name)){
       event(`Reading with ${use.name}`);result=await reads.run(use.name,use.input);check();
-     }else if(use.name==='toolbox_get'){
-      event('Reading Kubernetes resources through Toolbox');result=await this.toolboxReader(config,use.input,controller.signal,toolboxFiles(this.store));check();
-     }else if(use.name==='toolbox_port_forward'){
-      event('Opening a Toolbox tunnel');result=await startPortForward(config,use.input,toolboxFiles(this.store));check();
      }else if(use.name==='prometheus_sources'){
       result=prom.describe();
      }else if(use.name==='prometheus_query'){
@@ -403,6 +394,6 @@ export class Claude {
     messages.push({role:'user',content:results});
    }
    throw new AppError(409,`Analysis reached its limit of ${limits.maxTurns} turns. No plan saved.`);
-  }catch(e){run.state=controller.signal.aborted?'cancelled':'failed';run.error=controller.signal.aborted&&controller.signal.reason instanceof AppError?controller.signal.reason.message:e instanceof AppError?e.message:'Analysis failed. Check model and tool configuration; no plan was saved.';event(run.error);}finally{clearTimeout(timeout);closeSources();if(gitToken)this.gitProxy?.release(gitToken);run.finishedAt=new Date().toISOString();void cleanupSandboxRun(run.id,this.fetcher);if(run.state==='ready'||run.state==='failed'||run.state==='cancelled')for(const l of this.runListeners)l.finished(run.id,run.state,run.error);agentFeed.end(run.id,run.state==='ready'?'Plan ready for review':run.state==='cancelled'?run.error??'Stopped':`Failed: ${run.error??'unknown error'}`);for(const e of run.events)if(e.status==='running'){e.status='failed';e.conclusion='No result recorded. See the run failure.';}persist();}
+  }catch(e){run.state=controller.signal.aborted?'cancelled':'failed';run.error=controller.signal.aborted&&controller.signal.reason instanceof AppError?controller.signal.reason.message:e instanceof AppError?e.message:'Analysis failed. Check model and tool configuration; no plan was saved.';event(run.error);}finally{clearTimeout(timeout);if(gitToken)this.gitProxy?.release(gitToken);run.finishedAt=new Date().toISOString();void cleanupSandboxRun(run.id,this.fetcher);if(run.state==='ready'||run.state==='failed'||run.state==='cancelled')for(const l of this.runListeners)l.finished(run.id,run.state,run.error);agentFeed.end(run.id,run.state==='ready'?'Plan ready for review':run.state==='cancelled'?run.error??'Stopped':`Failed: ${run.error??'unknown error'}`);for(const e of run.events)if(e.status==='running'){e.status='failed';e.conclusion='No result recorded. See the run failure.';}persist();}
  }
 }

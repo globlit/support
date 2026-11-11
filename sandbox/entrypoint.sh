@@ -27,7 +27,7 @@ check_ipv6_disabled() {
 
 # Rejects outgoing traffic to private, shared and link-local IPv4 ranges.
 # Allowed: replies to incoming connections, loopback (which includes the Docker DNS resolver), DNS to the
-# nameservers of /etc/resolv.conf, and Support's Git proxy (7071), agent gateway (7072) and tunnel relays.
+# nameservers of /etc/resolv.conf, and Support's Git proxy (7071) and agent gateway (7072).
 block_private() {
   local support="${SANDBOX_SUPPORT_ADDRESS:-}"
   local nameserver
@@ -46,11 +46,10 @@ block_private() {
     fi
   done
   iptables -A OUTPUT -d "$support" -p tcp --dport 7071:7072 -j ACCEPT
-  iptables -A OUTPUT -d "$support" -p tcp --dport 32768:60999 -j ACCEPT
   for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
     iptables -A OUTPUT -d "$range" -j REJECT
   done
-  echo "sandbox: outgoing traffic to private networks is rejected, except DNS and the Git proxy, agent gateway and tunnel relays of $support."
+  echo "sandbox: outgoing traffic to private networks is rejected, except DNS and the Git proxy and agent gateway of $support."
 }
 
 check_ipv6_disabled

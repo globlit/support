@@ -1,7 +1,6 @@
 import {z} from 'zod';
 import {AppError,type Store} from './store.js';
 import {readTools,toolDefinition,type ToolDefinition} from './agent-tools.js';
-import {readToolbox,readToolboxLogs,startPortForward,toolboxContexts,toolboxFiles,readableResources,toolboxKubectl} from './toolbox.js';
 import {PrometheusSources,prometheusEndpoints} from './prometheus-sources.js';
 import {OutlineReader,outlineAvailable} from './outline.js';
 import {boundedJSON,serviceBase,projectPath} from './gitlab.js';
@@ -27,20 +26,13 @@ export type ToolsetHooks={
 };
 
 /**
- * Support tools offered to an agent session: Kubernetes through Toolbox, Prometheus and Grafana, Outline, GitLab,
+ * Support tools offered to an agent session: Prometheus and Grafana, Outline, GitLab,
  * YouTrack, Alertmanager, and the workflow tools ask_engineer, propose_change and submit_result. A tool is listed
  * only when its connection is enabled. Every request uses credentials from the Vault; none are returned.
  */
 export async function agentToolset(store:Store,config:Config,youtrack:YouTrack,fetcher:typeof fetch,signal:AbortSignal,hooks:ToolsetHooks){
  const definitions:ToolDefinition[]=[];const handlers=new Map<string,(input:unknown)=>Promise<unknown>>();
  const add=(d:ToolDefinition,h:(input:unknown)=>Promise<unknown>)=>{definitions.push(d);handlers.set(d.name,h);};
- const files=toolboxFiles(store);
- const contexts=config.connections.Toolbox.enabled&&(files||config.connections.Toolbox.path)?toolboxContexts(config,files):[];
- if(contexts.length){
-  add(toolDefinition('toolbox_get','Read Kubernetes resources through Toolbox: the preferred way to read clusters. Sanitized JSON. Give a context, a resource from the list, a namespace for namespaced resources, and optionally a name or a label selector. Allowed namespaces are set by Toolbox; a refusal names the reason.',{context:{type:'string',enum:contexts},resource:{type:'string',enum:readableResources(config)},namespace:str,name:str,selector:str},['context','resource']),input=>readToolbox(config,input,signal,toolboxFiles(store)));
-  add(toolDefinition('toolbox_logs','Read the logs of one pod through Toolbox, sanitized. tail defaults to 200 lines (at most 2,000). since is a duration such as 15m.',{context:{type:'string',enum:contexts},namespace:str,pod:str,container:str,previous:{type:'boolean'},tail:{type:'integer',minimum:1,maximum:2000},since:str},['context','namespace','pod']),input=>readToolboxLogs(config,input,signal,toolboxFiles(store)));
-  if(config.toolbox.allowPortForward)add(toolDefinition('toolbox_port_forward','Open a temporary Toolbox tunnel to a pod, service, deployment or StatefulSet. The result lists addresses reachable from Bash, for example curl http://ADDRESS/metrics. Send only read requests through tunnels.',{context:{type:'string',enum:contexts},namespace:str,target:str,ports:{type:'array',items:str,minItems:1,maxItems:8},durationSeconds:{type:'integer',minimum:1,maximum:config.toolbox.portForwardMaxSeconds}}),input=>startPortForward(config,input,toolboxFiles(store)));
- }
  const prom=await PrometheusSources.create(store,config,fetcher,signal);
  if(prom.names().length){
   const source={type:'string',enum:prom.names()};
@@ -78,8 +70,6 @@ export async function agentToolset(store:Store,config:Config,youtrack:YouTrack,f
  return {
   definitions,
   async run(name:string,input:unknown){const h=handlers.get(name);if(!h)throw new AppError(404,`Tool ${name} is not available in this session.`);return h(input);},
-  kubectl:(args:unknown)=>toolboxKubectl(config,args,signal,toolboxFiles(store)),
-  close(){prom.close();},
  };
 }
 export type AgentToolset=Awaited<ReturnType<typeof agentToolset>>;
