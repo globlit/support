@@ -104,3 +104,14 @@ test('the Prometheus check names the failing server',async()=>{
   assert.equal(r.ok,false);assert.match(r.detail,/^cluster-b: authentication or access denied/);
  }finally{f.close()}
 });
+
+test('the GitLab check tells a rejected token from a token that cannot list projects',async()=>{
+ const f=fixture(['GitLab']);f.store.credential('GitLab','glpat-x');
+ const answer=(self:number,list:number)=>serviceProbe(f.store,async input=>{const p=new URL(String(input)).pathname;return p.endsWith('/personal_access_tokens/self')?(self===200?Response.json({name:'support',active:true,revoked:false,expires_at:new Date(Date.now()+5*86400000).toISOString().slice(0,10)}):new Response('',{status:self})):list===200?Response.json([]):new Response('',{status:list});});
+ try{
+  let r=await answer(200,200)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,true);assert.match(r.detail,/"support"/);assert.match(r.detail,/renew it/);
+  r=await answer(401,401)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,false);assert.match(r.detail,/invalid, expired or revoked/);
+  r=await answer(403,403)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,true);assert.match(r.detail,/cannot list projects/);
+  r=await answer(404,200)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,true);assert.match(r.detail,/project API responds/);
+ }finally{f.close()}
+});

@@ -71,13 +71,31 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
   }
   return {ok:true,detail:`${servers.length===1?servers[0].name+' responds':`${servers.length} Prometheus servers respond`} and accept${servers.length===1?'s':''} the configured authentication.`};
  }
+ if(name==='GitLab'){
+  const base=serviceBase(c.endpoint),auth={Accept:'application/json','PRIVATE-TOKEN':store.readCredential(name)};
+  const get=async(path:string)=>{const r=await fetcher(new URL(path,base),{method:'GET',headers:auth,redirect:'manual',signal});let value:unknown;try{value=JSON.parse(await readResponse(r,signal,131072));}catch{if(signal.aborted)throw signal.reason;value=undefined;}return {status:r.status,value};};
+  // GitLab answers 401 to an invalid, expired or revoked token, and 403 to a valid token that lacks a permission.
+  const self=await get('api/v4/personal_access_tokens/self');
+  if(self.status===401)return {ok:false,code:401,detail:'GitLab rejected the saved token: it is invalid, expired or revoked.'};
+  if(self.status>=300&&self.status<400)return {ok:false,code:self.status,detail:'GitLab redirected the request. Check the service URL.'};
+  const t=self.value as {active?:boolean;revoked?:boolean;expires_at?:string|null;name?:string}|undefined;
+  if(self.status===200&&t&&typeof t==='object'&&typeof t.active==='boolean'){
+   if(t.revoked||t.active===false)return {ok:false,detail:'The saved GitLab token is revoked or inactive.'};
+   const days=t.expires_at?Math.floor((Date.parse(t.expires_at)-Date.now())/86400000):undefined;
+   return {ok:true,code:200,detail:`GitLab accepts the saved token${t.name?` "${t.name}"`:''}.${days!==undefined?days<=14?` It expires in ${Math.max(0,days)} day${days===1?'':'s'} (${t.expires_at}): renew it.`:` It expires on ${t.expires_at}.`:''}`};
+  }
+  const list=await get('api/v4/projects?membership=true&simple=true&per_page=1');
+  if(list.status===200&&Array.isArray(list.value))return {ok:true,code:200,detail:'GitLab project API responds and accepts the saved token.'};
+  if(list.status===401)return {ok:false,code:401,detail:'GitLab rejected the saved token: it is invalid, expired or revoked.'};
+  if(list.status===403)return {ok:true,code:403,detail:'GitLab accepts the saved token. It cannot list projects, so the agent finds projects through search or exact paths only.'};
+  return {ok:false,code:list.status,detail:`GitLab returned HTTP ${list.status}. Check the service URL and the token.`};
+ }
  const base=serviceBase(c.endpoint),headers:Record<string,string>={Accept:'application/json'};
  const optionalToken=()=>store.vaultStatus().credentials.includes(name)?store.readCredential(name):undefined;
  if(name==='Outline'&&store.vaultStatus().credentials.includes('Outline'))return await probeOutline(base,store.readCredential('Outline'),c.scope,fetcher,signal);
  let path='',method:'GET'|'POST'='GET',body:string|undefined,format:'json'|'text'='json',check:(v:any)=>boolean=()=>true,detail='';
  switch(name){
   case 'YouTrack':path='api/users/me?fields=id';headers.Authorization='Bearer '+store.readCredential(name);check=v=>typeof v.id==='string';detail='YouTrack API responds and accepts the saved token.';break;
-  case 'GitLab':{path='api/v4/projects?membership=true&simple=true&per_page=1';headers['PRIVATE-TOKEN']=store.readCredential(name);check=v=>Array.isArray(v);detail='GitLab project API responds and accepts the saved token.';break;}
   case 'Alertmanager':path='api/v2/status';check=v=>typeof v?.versionInfo==='object';detail='Alertmanager API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Grafana':path='api/user';check=v=>typeof v?.login==='string';detail='Grafana API responds and accepts the configured authentication.';Object.assign(headers,serviceAuthHeaders(store,name));break;
   case 'Outline':path='_health';format='text';check=v=>String(v).trim()==='OK';detail='Outline responds. No token saved, so only availability is checked.';break;
