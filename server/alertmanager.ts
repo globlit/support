@@ -23,6 +23,7 @@ export class Alertmanager {
  private lastSuccess?:string;
  private error?:string;
  private pollConnection?:string;
+ readonly kind='alert' as const;
  private ticking=false;
  constructor(private store:Store,private fetcher:typeof fetch=fetch){
   // Require an explicit retry after a restart.

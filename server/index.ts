@@ -1,5 +1,6 @@
 import {sourceKind,sourcePage} from '../src/intake-model.js';
 import {AgentQueue} from './agent-queue.js';
+import {Sources} from './sources.js';
 import {agentFeed,agentHalted,setAgentHalted,type FeedEntry} from './agent-feed.js';
 import {killAllSandbox,sandboxHealth} from './sandbox.js';
 import {GitProxy} from './git-proxy.js';
@@ -64,7 +65,7 @@ claude.onRun({started:r=>agentQueue.started(r),finished:(id,state,error)=>agentQ
 /** Kill switch, running investigations and sandbox status, as shown in the agent console. */
 const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands},queue:agentQueue.counts(),parallelReview:store.snapshot().config.parallelReview,model:claude.modelStatus,gateway:{listening:gateway.listening},kubernetes:toolHealth(store).find(t=>t.name==='Kubernetes'),modelHealth:toolHealth(store).find(t=>t.name==='Model')});
 const notifications=new Notifications(store,()=>aiOverview(store,claude).workflows);
-claude.onQuestion(run=>{const [key,...title]=(run.title??'').split(' · ');notifications.question({key,title:title.join(' · '),source:sourceKind(run.connection??'')==='alert'?'alert':sourceKind(run.connection??'')==='slack'?'slack':'youtrack',route:`#/${sourcePage(run.connection??'')}?issue=${encodeURIComponent(run.issueId)}&step=investigation`});});
+claude.onQuestion(run=>{const [key,...title]=(run.title??'').split(' · ');notifications.question({key,title:title.join(' · '),source:sourceKind(run.connection??''),route:`#/${sourcePage(run.connection??'')}?issue=${encodeURIComponent(run.issueId)}&step=investigation`});});
 const notificationTimer=every(5000,()=>notifications.tick());
 const intake=new InvestigationQueue(store,youtrack,agentQueue);
 const intakeTimer=every(5000,()=>intake.tick());
@@ -74,18 +75,22 @@ const handoffs=new AlertHandoffs(store,alerts,youtrack);
 const alertTimer=every(5000,()=>alerts.tick(claude,agentQueue));
 const slack=new Slack(store,transport);
 const slackTickets=new AlertTickets(store,slack,youtrack,slack);
-const resolveSource=(id:string,connection?:string)=>id.startsWith('alert:')?alerts.issue(id.slice(6)):id.startsWith('slack:')?slack.issue(id.slice(6)):connection?.startsWith('alertmanager:')?alerts.issue(id):connection?.startsWith('slack:')?slack.issue(id):youtrack.issue(id);
+const sources=new Sources()
+ .register({kind:'youtrack',issue:id=>youtrack.issue(id),work:id=>youtrack.work(id),start:(id,expected,basis)=>claude.start(id,expected,youtrack,basis)})
+ .register({kind:'alert',issue:id=>alerts.issue(id),work:id=>alerts.work(id),case:id=>store.alert(id),start:(id,expected,basis)=>alerts.analyze(id,expected,claude,basis),onStartError:(id,error)=>alerts.recordStartFailure(id,error)})
+ .register({kind:'slack',issue:id=>slack.issue(id),work:id=>slack.work(id),case:id=>slack.getCase(id),reply:{destination:'Slack',post:(id,text,clientId)=>slack.postReply(id,text,clientId),confirm:(id,text,clientId,ts)=>slack.confirmReply(id,text,clientId,ts)},start:(id,expected,basis)=>claude.start(id,expected,slack,basis)});
+const resolveSource=(id:string,connection?:string)=>sources.issue(id,connection);
 const changes=new Changes(store,youtrack,transport,resolveSource);
 const pipelines=new Pipelines(store,youtrack,transport,resolveSource);
 const resolutions=new Resolutions(store,youtrack,transport,resolveSource);
-const replies=new IncomingReplies(store,resolveSource,slack,resolutions,transport);
+const replies=new IncomingReplies(store,resolveSource,sources,resolutions,transport);
 const slackTimer=every(5000,()=>slack.tick(agentQueue));
 /** Starts a run of a request on `basis`, through the source that owns the request (YouTrack, alerts or Slack). */
 async function startRun(connection:string,issueId:string,basis:RunBasis){
- const kind=sourceKind(connection);
- const detail=kind==='alert'?await alerts.work(issueId):kind==='slack'?await slack.work(issueId):await youtrack.work(issueId);
+ const source=sources.forConnection(connection);
+ const detail=await source.work(issueId);
  const expected={revision:detail.session.revision,sourceUpdated:detail.issue.updated};
- return kind==='alert'?alerts.analyze(issueId,expected,claude,basis):claude.start(issueId,expected,kind==='slack'?slack:youtrack,basis);
+ return source.start(issueId,expected,basis);
 }
 /**
  * Continues the session of a run with the engineer's text (`continue`), or rechecks the request in it (`recheck`).
@@ -106,9 +111,7 @@ async function continueRun(runId:string,text:string,by:string,kind:'continue'|'r
  return {run};
 }
 claude.onResume((run,prompt)=>continueRun(run.id,prompt,'Support'));
-agentQueue.register('youtrack',{load:id=>youtrack.work(id),start:(id,expected)=>claude.start(id,expected)});
-agentQueue.register('alert',{load:id=>alerts.work(id),start:(id,expected)=>alerts.analyze(id,expected,claude),onStartError:(id,error)=>alerts.recordStartFailure(id,error)});
-agentQueue.register('slack',{load:id=>slack.work(id),start:(id,expected)=>claude.start(id,expected,slack)});
+for(const kind of ['youtrack','alert','slack'] as const){const source=sources.get(kind);agentQueue.register(kind,{load:id=>source.work(id),start:(id,expected)=>source.start(id,expected),onStartError:source.onStartError});}
 const queueTimer=every(5000,()=>agentQueue.tick());
 let attempts:{time:number;count:number}={time:Date.now(),count:0};
 function rateLimit(){if(Date.now()-attempts.time>60_000)attempts={time:Date.now(),count:0};if(++attempts.count>20)throw new AppError(429,'Too many attempts. Try again in a minute.');}
@@ -217,7 +220,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  }
 
  const incoming=path.match(/^\/api\/(alerts|slack)\/([a-f0-9]{64})\/(changes|investigations|reply)(?:\/(prepare|save|send|reconcile))?$/);
- if(incoming){const [_,kind,id,action,verb]=incoming;const source=kind==='alerts'?alerts:slack;const ref=(kind==='alerts'?'alert:':'slack:')+id;
+ if(incoming){const [_,kind,id,action,verb]=incoming;const source=kind==='alerts'?alerts:slack;const ref=Sources.reference(kind==='alerts'?'alert':'slack',id);
   if(action==='changes'&&req.method==='GET')return send(res,await changes.list(ref));
   if(action==='changes'&&req.method==='POST')return send(res,await changes.prepare(ref,prepareSchema.parse(await body(req))));
   if(action==='investigations'&&req.method==='GET'){const issue=kind==='alerts'?alerts.source(store.alert(id)):slack.source(slack.getCase(id));return send(res,store.investigations(issue.connection,id).filter(r=>!r.kind||r.kind==='investigation').map(r=>({...claude.status(r.id),events:[],plan:undefined,replyDraft:undefined})));}

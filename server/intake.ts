@@ -23,7 +23,9 @@ export function assertHandling(store:Store,issue:Pick<SourceIssue,'connection'|'
  const h=handling(store,issue);if(!allowed.includes(h.mode))throw new AppError(409,`This request is ${h.mode==='human'?'being handled by an engineer':h.mode==='refused'?'refused':h.mode==='done'?'resolved locally':'waiting for an intake decision'}. Return it to the agent before continuing.`);
  if(isIgnored(store,issue))throw new AppError(409,'This request matches an active ignore rule. Remove the rule or wait for it to expire before continuing.');
 }
-export function assertAgentWork(store:Store,issue:Pick<SourceIssue,'connection'|'id'>){assertHandling(store,issue);const kind=sourceKind(issue.connection),c=kind==='alert'?store.alertCases().find(c=>c.id===issue.id):kind==='slack'?store.get<AlertCase>('slack:'+issue.id):undefined;if(c?.ticket)throw new AppError(409,'Continue agent work in the linked YouTrack ticket.');}
+/** Stored case of an alert or Slack request. Undefined for YouTrack tickets and unknown cases. */
+function storedCase(store:Store,issue:Pick<SourceIssue,'connection'|'id'>){const kind=sourceKind(issue.connection);return kind==='alert'?store.alertCases().find(c=>c.id===issue.id):kind==='slack'?store.get<AlertCase>('slack:'+issue.id):undefined;}
+export function assertAgentWork(store:Store,issue:Pick<SourceIssue,'connection'|'id'>){assertHandling(store,issue);if(storedCase(store,issue)?.ticket)throw new AppError(409,'Continue agent work in the linked YouTrack ticket.');}
 export function rules(store:Store){return store.get<IgnoreRule[]>('ignoreRules')??[];}
 export function matchedRules(store:Store,source:'alert'|'slack',kind:string,labels:Record<string,string>){const endpoint=store.snapshot().config.connections[source==='alert'?'Alertmanager':'Slack'].endpoint.replace(/\/+$/,'');return rules(store).filter(r=>ruleMatches(r,source,endpoint,kind,labels));}
 export function isIgnored(store:Store,issue:Pick<SourceIssue,'connection'|'id'>){

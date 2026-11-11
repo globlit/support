@@ -1,3 +1,4 @@
+import {Sources} from '../server/sources.js';
 import {test} from './authenticated-fixture.js';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -23,7 +24,7 @@ function fixture(){const dir=mkdtempSync(join(tmpdir(),'support-slack-'));const 
  if(u.pathname.endsWith('conversations.replies'))return Response.json({ok:true,messages:remote.messages,response_metadata:{next_cursor:''}});
  assert.ok(u.pathname.endsWith('chat.postMessage'));remote.posts++;const payload=JSON.parse(String(opts?.body));assert.equal(payload.channel,'C12345');assert.equal(payload.thread_ts,remote.messages[0].ts);assert.equal(payload.unfurl_links,false);remote.messages.push({ts:'1794132001.000002',text:payload.text,client_msg_id:payload.client_msg_id});if(remote.lost)throw new Error('lost response');return Response.json({ok:true,channel:'C12345',ts:'1794132001.000002'});
  }) as typeof fetch;
- const slack=new Slack(store,fetcher),yt=new YouTrack(store,fetcher),resolver=(id:string)=>slack.issue(id.replace('slack:','')),resolutions=new Resolutions(store,yt,fetcher,resolver),replies=new IncomingReplies(store,resolver,slack,resolutions,fetcher),tickets=new AlertTickets(store,slack,yt,slack);
+ const slack=new Slack(store,fetcher),yt=new YouTrack(store,fetcher),resolver=(id:string)=>slack.issue(id.replace('slack:','')),resolutions=new Resolutions(store,yt,fetcher,resolver),replies=new IncomingReplies(store,resolver,new Sources().register({kind:'slack',issue:resolver,work:id=>slack.work(id),start:async()=>{},case:id=>slack.getCase(id),reply:{destination:'Slack',post:(id,t,c)=>slack.postReply(id,t,c),confirm:(id,t,c,ts)=>slack.confirmReply(id,t,c,ts)}}),resolutions,fetcher),tickets=new AlertTickets(store,slack,yt,slack);
  async function decision(mode:'investigate'|'ticket'|'reply'|'human'){const d=await slack.work(slack.cases()[0].id);setHandling(store,d.issue,{mode,reason:'Engineer decision',revision:d.session.revision,sourceUpdated:d.issue.updated});return slack.work(d.issue.id)}
  return {store,remote,slack,replies,tickets,decision,done(){store.close();rmSync(dir,{recursive:true,force:true})}};
 }

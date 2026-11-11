@@ -1,3 +1,4 @@
+import {Sources} from '../server/sources.js';
 import {withAiLabel} from '../server/ai-label.js';
 import {setHandling} from '../server/intake.js';
 import {localAction} from '../server/youtrack.js';
@@ -96,7 +97,7 @@ test('an alert without a ticket uses the same plan, branch, MR and verified loca
  f.store.saveAlert({id:issue.id,connection:issue.connection,title:'ServiceDown',severity:'warning',labels:{alertname:'ServiceDown'},members:[],active:true,suppressed:false,episodes:1,firstSeen:new Date().toISOString(),lastSeen:new Date().toISOString(),updated:issue.updated,digest:'fixture'});
  let w=f.store.workSession(issue);setHandling(f.store,issue,{mode:'investigate',reason:'No ticket needed',revision:w.revision,sourceUpdated:issue.updated});w=f.store.workSession(issue);
  const resolver=async()=>issue,changes=new Changes(f.store,f.yt,f.fetcher,resolver),resolutions=new Resolutions(f.store,f.yt,f.fetcher,resolver);
- const replies=new IncomingReplies(f.store,resolver,new Slack(f.store,f.fetcher),resolutions,f.fetcher);
+ const replies=new IncomingReplies(f.store,resolver,new Sources().register({kind:'alert',issue:resolver,work:async()=>{throw new Error('unused');},start:async()=>{},case:id=>f.store.alert(id)}),resolutions,f.fetcher);
  let d=localAction(f.store,issue,{action:'plan',text:'Scale deployment to two replicas',revision:w.revision,sourceUpdated:issue.updated});
  const input=()=>({...f.input,revision:d.session.revision,sourceUpdated:issue.updated});
  await assert.rejects(changes.prepare('alert:'+issue.id,input()),/Approve/);assert.deepEqual(f.remote.writes,[]);

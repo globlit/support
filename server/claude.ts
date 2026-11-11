@@ -14,7 +14,7 @@ import type {GitProxy} from './git-proxy.js';
 import type {AgentGateway} from './agent-gateway.js';
 import {agentEngineReady,runClaudeCode} from './claude-code.js';
 import {replyRule,workLanguageRule,requestLanguage} from './agent-language.js';
-import {sourcePage} from '../src/intake-model.js';
+import {sourcePage,type SourceKind} from '../src/intake-model.js';
 import {PrometheusSources,prometheusEndpoints} from './prometheus-sources.js';
 import type {AnalysisRun,RunBasis,SourceIssue} from '../src/model.js';
 
@@ -104,7 +104,7 @@ export class Claude {
   * Starts a run of a request. `basis` says what it builds on; see RunBasis. Without it, a request that already has an
   * agent session is rechecked in its latest session, and other requests get a first investigation.
   */
- async start(id:string,expected:{revision:number;sourceUpdated:number},source:Pick<YouTrack,'work'|'issue'>=this.youtrack,basis?:RunBasis){
+ async start(id:string,expected:{revision:number;sourceUpdated:number},source:Pick<YouTrack,'work'|'issue'>&{kind?:SourceKind}=this.youtrack,basis?:RunBasis){
   assertAgentRunning(this.store);
   const config=this.store.snapshot().config;
   const model=config.connections.Model;
@@ -113,7 +113,7 @@ export class Claude {
   const revision=this.store.snapshot().configRevision,epoch=this.store.credentialEpoch;
   // Reserve before authentication awaits; enforce capacity and one run per source.
   const run:AnalysisRun={id:randomUUID(),issueId:id,state:'running',events:[],startedAt:new Date().toISOString()};
-  const release=this.store.claimAnalysis((source===this.youtrack?'youtrack:':'alert:')+id,run.id);
+  const release=this.store.claimAnalysis((source.kind??'youtrack')+':'+id,run.id);
   const controller=new AbortController();this.active.set(run.id,controller);
   const agentEngine=agentEngineReady(this.store.snapshot().config,this.gateway);
   if(basis&&!['start','over'].includes(basis.kind)&&!agentEngine)throw new AppError(409,'Continuing a session needs the Claude Code engine: Claude provider, agent commands on, and the sandbox and gateway available.');

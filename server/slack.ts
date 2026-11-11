@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
+import {withAiLabel} from './ai-label.js';
 import {serviceBase} from './gitlab.js';
 import {localAction} from './youtrack.js';
 import {assertHandling,handling,isIgnored} from './intake.js';
@@ -11,6 +12,7 @@ const message=z.object({client_msg_id:z.string().optional(),ts:z.string().regex(
 export type SlackCase=AlertCase&{channel:string;threadTs:string;messages:z.infer<typeof message>[]};
 export class Slack {
  private autoOffset=0;private tickBusy=false;private lastTick=0;private last=0;private busy=false;private backoff=0;private error?:string;
+ readonly kind='slack' as const;
  constructor(private store:Store,private fetcher:typeof fetch=fetch){}
  context(){const s=this.store.snapshot(),c=s.config.connections.Slack;if(!c.enabled||!c.endpoint||!c.scope)throw new AppError(400,'Configure and enable Slack with its API base URL and channel ID.');if(!/^[CGD][A-Z0-9]+$/.test(c.scope))throw new AppError(400,'Set the Slack channel ID (for example C0123456789), not its name.');const base=serviceBase(c.endpoint);return {base,channel:c.scope,connection:'slack:'+hash([base.href,c.scope]),revision:s.configRevision,epoch:this.store.credentialEpoch,token:this.store.readCredential('Slack')};}
  private check(c:ReturnType<Slack['context']>){if(!this.store.key||this.store.credentialEpoch!==c.epoch||this.store.snapshot().configRevision!==c.revision)throw new AppError(409,'Slack connection or Vault changed. Refresh.');}
@@ -22,6 +24,10 @@ export class Slack {
  }
  cases(){if(!this.store.key)return [];const ctx=this.context();return (this.store.get<string[]>('slackIds')??[]).map(id=>this.store.get<SlackCase>('slack:'+id)!).filter(c=>c&&c.connection===ctx.connection);}
  getCase(id:string){const c=this.store.get<SlackCase>('slack:'+id);if(!c||c.connection!==this.context().connection)throw new AppError(404,'Slack thread unavailable in the configured channel.');return c;}
+ /** Posts a reply in the thread of a case. Returns the Slack timestamp of the message. */
+ async postReply(id:string,text:string,clientId:string){const c=this.getCase(id);const raw=await this.request('chat.postMessage',{},{channel:c.channel,thread_ts:c.threadTs,text:withAiLabel(text,'slack'),client_msg_id:clientId,unfurl_links:false,unfurl_media:false,parse:'none'});if(raw.channel!==c.channel||typeof raw.ts!=='string')throw new Error('Unexpected Slack response.');return raw.ts;}
+ /** Returns the timestamp of the single thread message that matches a posted reply. */
+ confirmReply(id:string,text:string,clientId:string,remoteTs?:string){const matches=this.getCase(id).messages.filter(m=>m.text===withAiLabel(text,'slack')&&(m.client_msg_id===clientId||!!remoteTs&&m.ts===remoteTs));if(matches.length!==1)throw new AppError(409,'The reply could not be uniquely confirmed. Inspect Slack; nothing was resent.');return matches[0].ts;}
  saveCase(c:AlertCase){this.store.put('slack:'+c.id,c);const ids=this.store.get<string[]>('slackIds')??[];if(!ids.includes(c.id))this.store.put('slackIds',[...ids,c.id]);}
  private clean(text:string){for(const secret of this.store.secretValues())text=text.split(secret).join('[redacted]');return text.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,'[redacted private key]').replace(/\b(password|token|secret|authorization|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi,'$1=[redacted]');}
  private saveMessages(ctx:ReturnType<Slack['context']>,ts:string,messages:z.infer<typeof message>[]){this.check(ctx);const id=hash([ctx.connection,ts]),old=this.store.get<SlackCase>('slack:'+id);const clean=messages.map(m=>({...m,text:this.clean(m.text)}));const digest=hash(clean),now=new Date().toISOString();const c:SlackCase={...old,id,connection:ctx.connection,sourceKind:'slack',channel:ctx.channel,threadTs:ts,messages:clean,title:clean[0]?.text.slice(0,180)||'Slack request',severity:'Unspecified',labels:{channel:ctx.channel},members:[],active:true,suppressed:false,episodes:1,firstSeen:old?.firstSeen??now,lastSeen:now,updated:old?.digest===digest?old.updated:Math.max(Date.now(),(old?.updated??0)+1),digest};this.saveCase(c);this.store.saveWorkSession(this.store.workSession(this.source(c)));return c;}
