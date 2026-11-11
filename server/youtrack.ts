@@ -19,7 +19,7 @@ function display(v:unknown):string{if(v==null)return '';if(Array.isArray(v))retu
 /** YouTrack refused a creation request (4xx). Nothing was created. */
 export class TicketRejected extends AppError{constructor(reason:string){super(409,`YouTrack refused the ticket: ${reason}. Nothing was created.`);}}
 /** Issue field type to send for each project field type. */
-const issueFieldTypes:Record<string,string>={EnumProjectCustomField:'SingleEnumIssueCustomField',StateProjectCustomField:'StateIssueCustomField',OwnedProjectCustomField:'SingleOwnedIssueCustomField',VersionProjectCustomField:'SingleVersionIssueCustomField',BuildProjectCustomField:'SingleBuildIssueCustomField',UserProjectCustomField:'SingleUserIssueCustomField'};
+const issueFieldTypes:Record<string,[single:string,multi?:string]>={EnumProjectCustomField:['SingleEnumIssueCustomField','MultiEnumIssueCustomField'],StateProjectCustomField:['StateIssueCustomField'],OwnedProjectCustomField:['SingleOwnedIssueCustomField','MultiOwnedIssueCustomField'],VersionProjectCustomField:['SingleVersionIssueCustomField','MultiVersionIssueCustomField'],BuildProjectCustomField:['SingleBuildIssueCustomField','MultiBuildIssueCustomField'],UserProjectCustomField:['SingleUserIssueCustomField','MultiUserIssueCustomField']};
 export class YouTrack{
  constructor(private store:Store,private fetcher:typeof fetch=fetch){}
  context(){const config=this.store.snapshot().config.connections.YouTrack;if(!config.enabled||!config.endpoint||!config.scope.trim())throw new AppError(400,'Configure and enable YouTrack with an instance URL and a search query first.');const base=new URL(config.endpoint.replace(/\/+$/,'' )+'/');if(base.protocol!=='https:'&&!['127.0.0.1','localhost','[::1]'].includes(base.hostname))throw new AppError(400,'Use HTTPS for YouTrack. HTTP is allowed only on loopback.');if(/\/(api|mcp)\/?$/.test(base.pathname))throw new AppError(400,'Use the YouTrack instance URL, not its /api or /mcp endpoint.');const token=this.store.readCredential('YouTrack');return {base,token,query:config.scope,revision:this.store.get<number>('configRevision'),epoch:this.store.credentialEpoch,connection:createHash('sha256').update(base.href).digest('hex')};}
@@ -73,13 +73,13 @@ export class YouTrack{
   */
  async projectFields(projectId:string):Promise<TicketField[]>{
   const ctx=this.context();
-  const raw=z.array(z.object({$type:z.string(),canBeEmpty:z.boolean().optional(),field:z.object({name:z.string()}),defaultValues:z.array(z.object({name:z.string().optional(),login:z.string().optional()}).passthrough()).nullish(),bundle:z.object({values:z.array(z.object({name:z.string().optional(),login:z.string().optional(),archived:z.boolean().optional()}).passthrough()).nullish()}).passthrough().nullish()}).passthrough())
-   .parse(await this.request('api/admin/projects/'+encodeURIComponent(projectId)+'/customFields',{fields:'$type,canBeEmpty,field(name),defaultValues(name,login),bundle(values(name,login,archived))',$top:'200'},ctx));
+  const raw=z.array(z.object({id:z.string().optional(),$type:z.string(),canBeEmpty:z.boolean().optional(),field:z.object({name:z.string(),fieldType:z.object({isMultiValue:z.boolean().optional()}).passthrough().nullish()}),defaultValues:z.array(z.object({name:z.string().optional(),login:z.string().optional()}).passthrough()).nullish(),bundle:z.object({values:z.array(z.object({name:z.string().optional(),login:z.string().optional(),archived:z.boolean().optional()}).passthrough()).nullish()}).passthrough().nullish()}).passthrough())
+   .parse(await this.request('api/admin/projects/'+encodeURIComponent(projectId)+'/customFields',{fields:'id,$type,canBeEmpty,field(name,fieldType(isMultiValue)),defaultValues(name,login),bundle(values(name,login,archived))',$top:'200'},ctx));
   return raw.filter(f=>f.canBeEmpty===false).map(f=>{
-   const issueType=issueFieldTypes[f.$type];
+   const multi=f.field.fieldType?.isMultiValue===true,types=issueFieldTypes[f.$type],issueType=types?(multi?types[1]:types[0]):undefined;
    const options=(f.bundle?.values??[]).filter(v=>!v.archived).map(v=>v.name??v.login??'').filter(Boolean);
    const defaults=(f.defaultValues??[]).map(v=>v.name??v.login??'').filter(Boolean);
-   return {name:f.field.name,issueType,options,value:defaults[0]??''};
+   return {id:f.id,name:f.field.name,issueType,multi,options,value:defaults[0]??''};
   });
  }
  /** Projects of the connection, from a cache refreshed every 30 minutes or when `refresh` is set. */

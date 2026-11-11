@@ -114,7 +114,7 @@ export type AlertQueue={cases:(AlertCase&{session:WorkSession})[];enabled:boolea
 
 export type YouTrackProject={id:string;name:string;shortName:string;archived:boolean};
 /** Required custom field of a YouTrack project. `issueType` is the YouTrack type to send, or undefined when YouTrack sets the value itself. */
-export type TicketField={name:string;issueType?:string;options:string[];value:string};
+export type TicketField={id?:string;name:string;issueType?:string;multi?:boolean;options:string[];value:string};
 export type AlertTicketDraft={fields?:TicketField[];state:'draft'|'pending'|'created';revision:number;hash:string;connection:string;endpoint:string;project:YouTrackProject;title:string;description:string;marker:string;sourceUpdated:number;sessionRevision:number;configRevision:number;message:string;remoteId?:string;approval?:{hash:string;actor:string;actorId?:string;workspaceId?:string;at:string}};
 
 export type AlertHandoff={id:string;requestHash:string;alertId:string;alertConnection:string;alertTitle:string;alertUpdated:number;alertActive:boolean;occurrences:number;sourcePlanVersion:number;sourceRevision:number;targetPlanVersion:number;at:string;actor:string;actorId?:string;workspaceId?:string;notes:WorkSession['notes'];replyDraft:string;analysis?:WorkSession['analysis']};

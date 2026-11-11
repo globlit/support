@@ -147,3 +147,16 @@ test('annotation updates and unrelated settings saves do not make a ticket draft
   const c=await f.tickets.approve(f.id,d.hash);assert.equal(c.ticket?.key,'INFRA-42');assert.equal(f.remote.posts,1);
  }finally{f.done()}
 });
+
+test('multi-value fields are sent as lists with their multi type, and errors name fields instead of IDs',async()=>{
+ const f=await fixture();
+ try{
+  f.remote.fields=[{id:'127-323',$type:'EnumProjectCustomField',canBeEmpty:false,field:{name:'Cluster',fieldType:{isMultiValue:true}},defaultValues:[{name:'all'}],bundle:{values:[{name:'all'},{name:'mars-shared'}]}},{id:'127-1',$type:'EnumProjectCustomField',canBeEmpty:false,field:{name:'Type',fieldType:{isMultiValue:false}},defaultValues:[{name:'tache'}],bundle:{values:[{name:'tache'}]}}];
+  const d=await f.draft();
+  f.remote.reject='Incompatible field type: 127-323';
+  let c=await f.tickets.approve(f.id,d.hash);
+  assert.match(c.ticketCreation!.message,/Incompatible field type: Cluster \(127-323\)/);
+  assert.deepEqual(f.remote.lastPayload?.customFields,[{name:'Cluster',$type:'MultiEnumIssueCustomField',value:[{name:'all'}]},{name:'Type',$type:'SingleEnumIssueCustomField',value:{name:'tache'}}]);
+  f.remote.reject='';c=await f.tickets.approve(f.id,c.ticketCreation!.hash);assert.equal(c.ticket?.key,'INFRA-42');
+ }finally{f.done()}
+});

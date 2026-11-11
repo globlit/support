@@ -108,20 +108,25 @@ export class AlertTickets {
    if(hash(await this.project(d.project.id,ctx))!==hash(d.project))throw new AppError(409,'The destination project changed. Prepare a fresh draft.');
    const existing=await this.existing(d.marker,ctx);this.guard(id,d,ctx);
    if(existing)return this.link(id,existing,ctx,'Existing ticket found. No creation request sent.');
+   // Field types are read again, so that a draft prepared with outdated types is sent correctly.
+   const latest=new Map((await this.youtrack.projectFields(d.project.id)).map(f=>[f.name,f]));
+   d.fields=(d.fields??[]).map(f=>{const c=latest.get(f.name);return c?{...c,value:f.value}:f;});
    const missing=(d.fields??[]).filter(f=>f.issueType&&!f.value).map(f=>f.name);
    if(missing.length)throw new AppError(400,`Choose a value for ${missing.join(', ')} before creating the ticket.`);
    this.safeText(d.title+'\n'+this.text(d));
    // Persist intent before the POST. Pending never returns to draft.
    d.state='pending';d.approval={hash:expectedHash,...humanAttribution(this.store),at:new Date().toISOString()};d.message='Creation requested. Check status if interrupted.';
    this.persist(id,d);intended=true;
-   const customFields=(d.fields??[]).filter(f=>f.issueType&&f.value).map(f=>({name:f.name,$type:f.issueType,value:f.issueType==='SingleUserIssueCustomField'?{login:f.value}:{name:f.value}}));
+   const customFields=(d.fields??[]).filter(f=>f.issueType&&f.value).map(f=>{const one=/UserIssueCustomField$/.test(f.issueType!)?{login:f.value}:{name:f.value};return {name:f.name,$type:f.issueType,value:f.multi?[one]:one};});
    const remoteId=await this.youtrack.createAlertTicket({project:{id:d.project.id},summary:d.title,description:this.text(d),...(customFields.length?{customFields}:{})},ctx);
    // Merge operation metadata only. Polling may have updated the case.
    const current=this.case(id).ticketCreation!;current.remoteId=remoteId;this.persist(id,current);
    return await this.finish(id,ctx);
   }catch(e){
    // A refused creation created nothing: the draft becomes editable again.
-   if(intended&&e instanceof TicketRejected){const d=this.case(id).ticketCreation!;d.state='draft';delete d.approval;d.message=e.message;return this.persist(id,d);}
+   if(intended&&e instanceof TicketRejected){const d=this.case(id).ticketCreation!;d.state='draft';delete d.approval;
+    // YouTrack names fields by internal ID in its errors; show their names.
+    let message=e.message;for(const f of d.fields??[])if(f.id)message=message.split(f.id).join(`${f.name} (${f.id})`);d.message=message;return this.persist(id,d);}
    if(intended){const d=this.case(id).ticketCreation!;d.message=e instanceof AppError?e.message:'Creation response could not be verified. Check YouTrack status; no automatic retry.';return this.persist(id,d);}
    throw e;
   }finally{release();}
