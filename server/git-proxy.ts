@@ -6,7 +6,12 @@ import {serviceBase} from './gitlab.js';
 
 const project=/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*(?:\/[a-zA-Z0-9_-][a-zA-Z0-9_.-]*)+$/;
 const route=/^\/([A-Za-z0-9_-]{32,64})\/(.+?)\.git\/(info\/refs|git-upload-pack)$/;
-const forwarded=['content-type','content-encoding','git-protocol','accept','accept-encoding'];
+/**
+ * Request headers passed to GitLab. Accept-Encoding is not passed: fetch negotiates compression itself and returns a
+ * decompressed body, so the client must receive an uncompressed response without a Content-Encoding header.
+ * Content-Encoding is passed because it describes the request body, which is forwarded unchanged.
+ */
+const forwarded=['content-type','content-encoding','git-protocol','accept'];
 
 /**
  * Read-only Git HTTP proxy for sandbox commands. Forwards `git clone` and `git fetch` (upload-pack) to GitLab with the
@@ -48,7 +53,7 @@ export class GitProxy {
    for(const h of forwarded){const v=req.headers[h];if(typeof v==='string')headers[h]=v;}
    const upstream=await this.fetcher(target,{method:req.method,headers,redirect:'manual',...(req.method==='POST'?{body:Readable.toWeb(req) as ReadableStream,duplex:'half'}:{})} as RequestInit);
    if(upstream.status===401||upstream.status===403||upstream.status===404||(upstream.status>=300&&upstream.status<400)){await upstream.body?.cancel();return deny(upstream.status===404?404:403,`GitLab refused access to ${path} (HTTP ${upstream.status}).`);}
-   const out:Record<string,string>={};for(const h of ['content-type','content-encoding','cache-control'])if(upstream.headers.get(h))out[h]=upstream.headers.get(h)!;
+   const out:Record<string,string>={};for(const h of ['content-type','cache-control'])if(upstream.headers.get(h))out[h]=upstream.headers.get(h)!;
    res.writeHead(upstream.status,out);
    if(upstream.body)for await(const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>)if(!res.write(chunk))await new Promise(r=>res.once('drain',r));
    res.end();
