@@ -233,15 +233,26 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
    if(verb==='send')return send(res,await replies.send(ref,v.hash));
   }
  }
- if(path==='/api/slack'&&req.method==='GET')return send(res,slack.queue());
- if(path==='/api/slack/poll'&&req.method==='POST'){await slack.poll();return send(res,slack.queue());}
- const slackTicket=path.match(/^\/api\/slack\/([a-f0-9]{64})\/ticket\/(prepare|save|approve|reconcile)$/);
- if(slackTicket&&req.method==='POST'){const id=slackTicket[1],action=slackTicket[2];if(action==='reconcile'){await body(req);return send(res,await slackTickets.reconcile(id));}if(action==='prepare'){const v=z.object({projectId:z.string().min(1).max(100)}).strict().parse(await body(req));return send(res,await slackTickets.prepare(id,v.projectId));}if(action==='save')return send(res,await slackTickets.save(id,alertDraftInput.parse(await body(req))));const v=z.object({hash:z.string().length(64)}).strict().parse(await body(req));return send(res,await slackTickets.approve(id,v.hash));}
- const slackMatch=path.match(/^\/api\/slack\/([a-f0-9]{64})(?:\/(analyze|action))?$/);
- if(slackMatch){const id=slackMatch[1],action=slackMatch[2];if(!action&&req.method==='GET')return send(res,await slack.work(id));if(req.method==='POST'){if(action==='analyze'){const v=z.object({revision:z.number().int(),sourceUpdated:z.number()}).strict().parse(await body(req));return send(res,await claude.start(id,v,slack),202);}if(action==='action'){const v=z.object({action:z.enum(['note','draft','plan','approve','unapprove','revise','delete-note']),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional(),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional()}).strict().parse(await body(req));return send(res,await slack.action(id,v));}}}
+ const incomingRoute=path.match(/^\/api\/(alerts|slack)(?:\/([a-f0-9]{64}))?(?:\/(poll|analyze|action|link|ticket\/(?:prepare|save|approve|reconcile)))?$/);
+ if(incomingRoute){
+  const [,collection,id,action]=incomingRoute,kind=collection==='alerts'?'alert':'slack',service=collection==='alerts'?alerts:slack,tickets=collection==='alerts'?alertTickets:slackTickets,queue=()=>collection==='alerts'?alerts.queue(claude):slack.queue();
+  if(!id&&!action&&req.method==='GET')return send(res,queue());
+  if(!id&&action==='poll'&&req.method==='POST'){await service.poll();return send(res,queue());}
+  if(id&&!action&&req.method==='GET')return send(res,await sources.get(kind).work(id));
+  if(id&&req.method==='POST'){
+   if(action==='analyze'){const v=z.object({revision:z.number().int(),sourceUpdated:z.number()}).strict().parse(await body(req));return send(res,await sources.get(kind).start(id,v),202);}
+   if(action==='action'){const v=z.object({action:z.enum(['note','draft','plan','approve','unapprove','revise','delete-note']),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional(),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional()}).strict().parse(await body(req));return send(res,await service.action(id,v));}
+   if(action==='link'&&collection==='alerts'){const v=z.object({ticketId:z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/)}).strict().parse(await body(req));return send(res,await alerts.link(id,v.ticketId,youtrack));}
+   if(action?.startsWith('ticket/')){
+    const step=action.slice('ticket/'.length);
+    if(step==='reconcile'){await body(req);return send(res,await tickets.reconcile(id));}
+    if(step==='prepare'){const v=z.object({projectId:z.string().min(1).max(100)}).strict().parse(await body(req));return send(res,await tickets.prepare(id,v.projectId));}
+    if(step==='save')return send(res,await tickets.save(id,alertDraftInput.parse(await body(req))));
+    const v=z.object({hash:z.string().length(64)}).strict().parse(await body(req));return send(res,await tickets.approve(id,v.hash));
+   }
+  }
+ }
 
- if(path==='/api/alerts'&&req.method==='GET')return send(res,alerts.queue(claude));
- if(path==='/api/alerts/poll'&&req.method==='POST'){await alerts.poll();return send(res,alerts.queue(claude));}
  if(path==='/api/youtrack/projects'&&req.method==='GET'){const cache=await youtrack.cachedProjects(url.searchParams.get('refresh')==='1');return send(res,{projects:cache.projects,loadedAt:cache.at,defaultProjectId:store.snapshot().config.youtrackTicketDefaults.projectId});}
  const projectFieldsMatch=path.match(/^\/api\/youtrack\/projects\/([A-Za-z0-9_.-]{1,100})\/fields$/);
  if(projectFieldsMatch&&req.method==='GET')return send(res,{fields:await youtrack.projectFields(projectFieldsMatch[1])});
@@ -249,24 +260,6 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(handoff&&req.method==='POST'){
   if(handoff[2]==='preview')return send(res,await handoffs.preview(handoff[1]));
   const input=z.object({hash:z.string().length(64)}).strict().parse(await body(req));return send(res,await handoffs.carry(handoff[1],input.hash));
- }
- const ticketCreation=path.match(/^\/api\/alerts\/([a-f0-9]{64})\/ticket\/(prepare|save|approve|reconcile)$/);
- if(ticketCreation&&req.method==='POST'){
-  const id=ticketCreation[1],action=ticketCreation[2];
-  if(action==='reconcile')return send(res,await alertTickets.reconcile(id));
-  if(action==='prepare'){const v=z.object({projectId:z.string().min(1).max(100)}).strict().parse(await body(req));return send(res,await alertTickets.prepare(id,v.projectId));}
-  if(action==='save')return send(res,await alertTickets.save(id,alertDraftInput.parse(await body(req))));
-  const v=z.object({hash:z.string().length(64)}).strict().parse(await body(req));return send(res,await alertTickets.approve(id,v.hash));
- }
- const alertMatch=path.match(/^\/api\/alerts\/([a-f0-9]{64})(?:\/(analyze|action|link))?$/);
- if(alertMatch){
-  const id=alertMatch[1],action=alertMatch[2];
-  if(!action&&req.method==='GET')return send(res,await alerts.work(id));
-  if(req.method==='POST'){
-   if(action==='analyze'){const v=z.object({revision:z.number().int(),sourceUpdated:z.number()}).strict().parse(await body(req));return send(res,await alerts.analyze(id,v,claude),202);}
-   if(action==='action'){const v=z.object({action:z.enum(['note','draft','plan','approve','unapprove','revise','delete-note']),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional(),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional()}).strict().parse(await body(req));return send(res,await alerts.action(id,v));}
-   if(action==='link'){const v=z.object({ticketId:z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/)}).strict().parse(await body(req));return send(res,await alerts.link(id,v.ticketId,youtrack));}
-  }
  }
  const changesMatch=path.match(/^\/api\/youtrack\/issues\/([a-zA-Z0-9_-]+)\/changes$/);
  if(changesMatch&&req.method==='GET')return send(res,await changes.list(changesMatch[1]));

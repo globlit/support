@@ -1,5 +1,5 @@
 import {assertAgentRunning} from './agent-feed.js';
-import {humanAttribution} from './identity.js';
+import {approval} from './identity.js';
 import {configuredModelFetch,modelKey} from './model-api.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {z} from 'zod';
@@ -61,7 +61,7 @@ export class Pipelines extends Changes {
   const g=this.git(c);await this.guard(c,g);const t=await this.read(c,g);this.eligible(c,t);if(t.head!==f.head||t.targetHead!==f.targetHead||this.fingerprint(t)!==f.snapshotHash)throw new AppError(409,'Commit or pipeline changed. Diagnose again.');
   for(const file of f.files)if(await g.file(file.path,f.head)!==file.before||await g.lastCommit(file.path,f.head)!==file.lastCommit)throw new AppError(409,'File changed. Diagnose again.');
   await this.guard(c,g);if((await g.branch(c.branch))?.id!==f.head)throw new AppError(409,'Branch changed. Diagnose again.');
-  f.state='pushing';f.approval={hash:f.hash,...humanAttribution(this.store),at:new Date().toISOString()};f.message='Push requested. Check remote status if interrupted.';this.store.saveChange(c);
+  f.state='pushing';f.approval=approval(this.store,f.hash);f.message='Push requested. Check remote status if interrupted.';this.store.saveChange(c);
   await g.request('repository/commits',{}, {branch:c.branch,force:false,commit_message:'Support fix '+f.id,actions:f.files.map(file=>({action:'update',file_path:file.path,content:file.after,encoding:'text',last_commit_id:file.lastCommit}))});
   return await this.verifyPush(c,f,g);
  }catch(e){if(c&&f?.state==='pushing'){f.message=e instanceof AppError?e.message:'Push result could not be verified. Check remote status; do not retry the push.';this.store.saveChange(c);return c;}throw e;}finally{release();}}

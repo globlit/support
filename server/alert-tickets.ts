@@ -1,5 +1,5 @@
 import {withAiLabel} from './ai-label.js';
-import {humanAttribution} from './identity.js';
+import {approval} from './identity.js';
 import {assertHandling,handling} from './intake.js';
 import type {AlertCase} from '../src/model.js';
 import {markdownText} from './markdown.js';
@@ -115,7 +115,7 @@ export class AlertTickets {
    if(missing.length)throw new AppError(400,`Choose a value for ${missing.join(', ')} before creating the ticket.`);
    this.safeText(d.title+'\n'+this.text(d));
    // Persist intent before the POST. Pending never returns to draft.
-   d.state='pending';d.approval={hash:expectedHash,...humanAttribution(this.store),at:new Date().toISOString()};d.message='Creation requested. Check status if interrupted.';
+   d.state='pending';d.approval=approval(this.store,expectedHash);d.message='Creation requested. Check status if interrupted.';
    this.persist(id,d);intended=true;
    const customFields=(d.fields??[]).filter(f=>f.issueType&&f.value).map(f=>{const one=/UserIssueCustomField$/.test(f.issueType!)?{login:f.value}:{name:f.value};return {name:f.name,$type:f.issueType,value:f.multi?[one]:one};});
    const remoteId=await this.youtrack.createAlertTicket({project:{id:d.project.id},summary:d.title,description:this.text(d),...(customFields.length?{customFields}:{})},ctx);

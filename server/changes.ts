@@ -1,6 +1,6 @@
 import {withAiLabel} from './ai-label.js';
 import {assertAgentRunning} from './agent-feed.js';
-import {humanAttribution} from './identity.js';
+import {approval,humanAttribution} from './identity.js';
 import {assertAgentWork} from './intake.js';
 import {configuredModelFetch,modelKey} from './model-api.js';
 import {randomUUID,createHash} from 'node:crypto';
@@ -97,7 +97,7 @@ export class Changes {
    const g=this.git(c);await this.guard(c,g);await this.inspect(c,g);if(this.digest(c)!==reviewHash||(await g.branch(c.target))?.id!==c.base)throw new AppError(409,'Source, target or diff changed. Review again.');
    if(await this.findMR(c,g))throw new AppError(409,'A merge request already exists for this branch. Inspect GitLab before creating another.');
    await this.guard(c,g);
-   c.approval={hash:reviewHash,...humanAttribution(this.store),at:new Date().toISOString()};c.state='mr_pending';c.message='Merge request creation requested. Check remote status if interrupted.';this.store.saveChange(c);
+   c.approval=approval(this.store,reviewHash);c.state='mr_pending';c.message='Merge request creation requested. Check remote status if interrupted.';this.store.saveChange(c);
    const result=mrSchema.parse(await g.request('merge_requests',{}, {source_branch:c.branch,target_branch:c.target,title:c.title,description:withAiLabel(c.description),remove_source_branch:false}));
    await this.recordMR(c,g,result);return c;
   }catch(e){if(c?.state==='mr_pending'){c.message=e instanceof AppError?e.message:'Merge request response could not be verified. Check remote status; do not retry creation.';this.store.saveChange(c);return c;}throw e;}finally{release();}}

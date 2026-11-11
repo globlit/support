@@ -1,7 +1,7 @@
 import {withAiLabel} from './ai-label.js';
 import {replyRule} from './agent-language.js';
 import {assertAgentRunning} from './agent-feed.js';
-import {humanAttribution} from './identity.js';
+import {approval} from './identity.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {Store,AppError} from './store.js';
@@ -29,7 +29,7 @@ export class IncomingReplies{
  async send(ref:string,expected:string){const release=this.store.claimWork();try{const issue=await this.source(ref),r=this.get(issue);if(!r||r.state!=='draft'||r.hash!==expected)throw new AppError(409,'Review the current reply before sending.');this.current(issue,r);this.safe(r.text);
  // Recheck merged pipeline proof before replying.
  if(r.changeId){const c=this.store.change(r.changeId);if(!c.resolution||c.resolution.state!=='draft'||c.resolution.sourceUpdated!==issue.updated)throw new AppError(409,'Implementation summary changed. Prepare again.');await this.resolutions.verifyReply(c.id);this.current(await this.source(ref),r);}
- r.approval={...humanAttribution(this.store),hash:expected,at:new Date().toISOString()};r.state='pending';r.message='Reply requested. Check status if the response is interrupted; no automatic retry.';this.store.put(this.key(issue),r);
+ r.approval=approval(this.store,expected);r.state='pending';r.message='Reply requested. Check status if the response is interrupted; no automatic retry.';this.store.put(this.key(issue),r);
  const channel=this.sources.replyChannel(issue.connection);if(channel){try{r.remoteTs=await channel.post(issue.id,r.text,r.id);}catch{this.store.put(this.key(issue),r);return r;}}
  r.state='sent';r.message=channel?`Approved reply sent to the ${channel.destination} thread.`:'Approved resolution recorded locally. This source has no reply channel.';this.store.put(this.key(issue),r);return r;}finally{release();}}
  async reconcile(ref:string){const issue=await this.source(ref),r=this.get(issue),channel=this.sources.replyChannel(issue.connection);if(!r||r.state!=='pending'||!channel)throw new AppError(409,'No pending reply.');r.remoteTs=channel.confirm(issue.id,r.text,r.id,r.remoteTs);r.state='sent';r.message=`Reply confirmed in ${channel.destination}.`;this.store.put(this.key(issue),r);return r;}

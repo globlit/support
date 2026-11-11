@@ -17,3 +17,5 @@ export function humanAttribution(store:Store){
  if(current.principal.workspaceId!==workspaceIdentity(store).workspaceId)throw new AppError(403,'This identity belongs to another workspace.');
  return {actor:current.principal.name,actorId:current.principal.id,workspaceId:current.principal.workspaceId};
 }
+/** Approval record of the signed-in engineer for the content with `hash`. Throws 401 or 403 like `humanAttribution`. */
+export function approval(store:Store,hash:string){return {hash,...humanAttribution(store),at:new Date().toISOString()};}
