@@ -28,7 +28,8 @@ export const runCli:CliRunner=async(path,args,input,signal)=>{
   const chunks:Buffer[]=[];let size=0,failure:Error|undefined;
   const stop=(message:string)=>{failure??=new AppError(502,message);try{if(child.pid)process.kill(-child.pid,'SIGKILL')}catch{child.kill('SIGKILL')}};
   const cancel=()=>stop('Claude request cancelled. No result was applied.');
-  const timer=setTimeout(()=>stop('Claude CLI did not finish within 60 seconds. Check the CLI where Support runs before retrying.'),60000);
+  // A model turn with a long investigation history can take several minutes, as with the API connection.
+  const timer=setTimeout(()=>stop('Claude CLI did not finish within 5 minutes. Check the CLI where Support runs before retrying.'),300_000);
   signal?.addEventListener('abort',cancel,{once:true});
   child.stdout.on('data',(chunk:Buffer)=>{size+=chunk.length;if(size>1_000_000)stop('Claude CLI output exceeded its size limit. No result was applied.');else chunks.push(chunk)});
   // Discard stderr.

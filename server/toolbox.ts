@@ -67,6 +67,25 @@ function toolboxBinary(){
  if(!isAbsolute(binary))throw new AppError(400,'SUPPORT_TOOLBOX_BINARY must be an absolute path.');
  return binary;
 }
+/**
+ * Returns the error to report for a failed Toolbox run. Toolbox prints a JSON result with an `error` field and exits
+ * with code 1 when it refuses or kubectl fails, and prints a single line on stderr when it rejects its arguments or
+ * configuration. That reason is kept, so the agent and the engineer see why the read failed.
+ */
+export function toolboxFailure(e:unknown,action:string,signal?:AbortSignal){
+ if(signal?.aborted)return new AppError(409,'Toolbox read stopped.');
+ const err=e as {stdout?:unknown;stderr?:unknown;code?:unknown;killed?:boolean};
+ if(err?.code==='ERR_CHILD_PROCESS_STDIO_MAXBUFFER')return new AppError(502,`${action}: the response is larger than Support accepts. Narrow the request with a name, a selector or a smaller tail.`);
+ if(err?.code==='ENOENT'||err?.code==='EACCES')return new AppError(502,`${action}: the Toolbox binary cannot run where Support runs. Check SUPPORT_TOOLBOX_BINARY.`);
+ if(err?.killed)return new AppError(504,`${action}: Toolbox did not answer in time.`);
+ let result:{error?:unknown;diagnostics?:unknown}|undefined;
+ try{const v=JSON.parse(String(err?.stdout??''));if(v&&typeof v==='object')result=v;}catch{result=undefined;}
+ const clean=(v:unknown)=>String(v).replace(/[\x00-\x08\x0b-\x1f\x7f]/g,'').trim().slice(0,600);
+ if(typeof result?.error==='string'&&result.error.trim())return new AppError(502,`${action}: ${clean(result.error)}${typeof result.diagnostics==='string'&&result.diagnostics.trim()?` (${clean(result.diagnostics).slice(0,300)})`:''}`);
+ const line=String(err?.stderr??'').split('\n').map(l=>l.trim()).find(Boolean);
+ if(line)return new AppError(502,`${action}: Toolbox refused the request: ${clean(line)}`);
+ return new AppError(502,`${action}: Toolbox failed without a reason. Check its binary, configuration and context access where Support runs.`);
+}
 /** Runs one Toolbox read. Pasted files go to a private temporary folder, deleted after the run. */
 /** Input of `toolbox_logs`: one pod's container logs. */
 export const logsInput=z.object({
@@ -92,7 +111,7 @@ export async function readToolboxLogs(config:Config,input:unknown,signal:AbortSi
   run=await toolboxRunConfig(config,files);
   const {stdout}=await exec(binary,toolboxLogsArgs(config,input,run.configPath,allowed),{signal,timeout:30000,maxBuffer:2_000_000,encoding:'utf8',shell:false,env:run.env});
   try{return JSON.parse(stdout);}catch{return {logs:stdout.slice(-20000)};}
- }catch{throw new AppError(502,'Toolbox could not read the logs. Check the pod, container, context access and response size.');}
+ }catch(e){throw toolboxFailure(e,'Toolbox could not read the logs',signal);}
  finally{await run?.cleanup();}
 }
 export async function readToolbox(config:Config,input:unknown,signal:AbortSignal,files:ToolboxFiles|null=null){
@@ -103,7 +122,7 @@ export async function readToolbox(config:Config,input:unknown,signal:AbortSignal
  try{
   run=await toolboxRunConfig(config,files);
   const {stdout}=await exec(binary,toolboxArgs(config,input,run.configPath,allowed),{signal,timeout:20000,maxBuffer:512000,encoding:'utf8',shell:false,env:run.env});return JSON.parse(stdout);
- }catch{throw new AppError(502,'Toolbox read failed. Check its binary, configuration, context access and response size where Support runs.');}
+ }catch(e){throw e instanceof SyntaxError?new AppError(502,'Toolbox read failed: the output is not JSON.'):toolboxFailure(e,'Toolbox read failed',signal);}
  finally{await run?.cleanup();}
 }
 /**

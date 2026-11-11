@@ -123,3 +123,12 @@ test('the old Prometheus credential moves to its server, and removed servers los
   assert.deepEqual(store.vaultStatus().credentials.filter(c=>c.startsWith('Prometheus')),[]);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('a failed Toolbox read reports the reason Toolbox gave',async()=>{
+ const {toolboxFailure}=await import('../server/toolbox.js');
+ assert.match(toolboxFailure({code:1,stdout:JSON.stringify({context:'dev',error:'namespace "kube-system" is not allowed for context dev',redactions:0,untrusted:true})+'\n',stderr:''},'Toolbox read failed').message,/^Toolbox read failed: namespace "kube-system" is not allowed for context dev$/);
+ assert.match(toolboxFailure({code:1,stdout:'',stderr:'option is not permitted. Run toolbox --help\n'},'Toolbox read failed').message,/Toolbox refused the request: option is not permitted/);
+ assert.match(toolboxFailure({code:'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'},'Toolbox read failed').message,/larger than Support accepts/);
+ assert.match(toolboxFailure({code:'ENOENT'},'Toolbox read failed').message,/SUPPORT_TOOLBOX_BINARY/);
+ const stopped=new AbortController();stopped.abort();assert.equal(toolboxFailure({},'x',stopped.signal).status,409);
+});

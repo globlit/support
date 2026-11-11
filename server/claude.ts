@@ -281,7 +281,7 @@ export class Claude {
      }catch(e){
       // A failed tool call is reported to the model, which can adapt. Stops, cancellations and source changes end the run.
       check();if(controller.signal.aborted||e instanceof UnavailableTool||!(e instanceof AppError||e instanceof z.ZodError))throw e;
-      const message=e instanceof z.ZodError?'Invalid input: '+e.issues.map(i=>`${i.path.join('.')||'input'} ${i.message}`).join('; '):e.message;
+      const message=redact(e instanceof z.ZodError?'Invalid input: '+e.issues.map(i=>`${i.path.join('.')||'input'} ${i.message}`).join('; '):e.message);
       trace.result=message;trace.status='failed';persist();agentFeed.publish(run.id,'error',`${use.name}: ${message}`);
       results.push({type:'tool_result',tool_use_id:use.id,content:message,is_error:true});continue;
      }

@@ -102,7 +102,7 @@ function ToolboxEditor(props:EditorProps){
   {working&&<p className="small muted" role="status">{working==='Generating'?'Listing the namespaces of each context and validating the configuration…':`${working}…`}</p>}
   {status&&<p className="small muted" role="status">{status}</p>}
   {preview&&<div className="toolbox-preview">{!ready&&<p className="small amber">The kubeconfig, contexts or behaviour changed. Generate again.</p>}
-   <ul>{preview.result.contexts.map(c=><li key={c.name}><code>{c.name}</code> · {c.namespaces.length} namespaces allowed{c.excluded?`, ${c.excluded} excluded`:''}</li>)}</ul>
+   <ContextTable contexts={preview.result.contexts.map(c=>({name:c.name,namespaces:c.namespaces.length,excluded:c.excluded}))}/>
    <details><summary>Show the generated configuration</summary><pre className="code-input">{preview.result.config}</pre></details></div>}
   {settingsDirty&&<p className="small muted">The configuration uses the behaviour as it is when you click Save settings.</p>}
   <Actions props={props} body={{name:'Toolbox',toolbox:{kubeconfig,contexts:selected}}} ready={ready} onClose={onClose} remove={saved?{label:'Remove kubeconfig and configuration',body:{name:'Toolbox',remove:true}}:undefined}/>
@@ -121,8 +121,7 @@ function ToolboxSaved({data,settingsDirty,reload}:{data:Snapshot;settingsDirty?:
  if(status.source==='path')return <p className="small amber">A configuration file set by path is in use. Add a kubeconfig below to generate a configuration from the behaviour above.</p>;
  if(status.source!=='generated')return null;
  return <div className="toolbox-saved">
-  <ul>{status.contexts.map(c=><li key={c.name}><code>{c.name}</code> · {c.namespaces} namespaces allowed{c.excluded?`, ${c.excluded} excluded`:''}</li>)}</ul>
-  <p className="small muted">Generated {new Date(status.generatedAt).toLocaleString()}.</p>
+  <ContextTable contexts={status.contexts} generatedAt={status.generatedAt}/>
   {status.stale&&<div className="notice"><span>The saved behaviour changed since this configuration was generated.</span> <button type="button" disabled={working||settingsDirty} onClick={()=>void apply()}>{working?'Generating…':'Apply current settings'}</button>{settingsDirty&&<small> Save settings first.</small>}</div>}
   {error&&<p className="small error" role="alert">{error}</p>}
  </div>;
@@ -136,5 +135,17 @@ export function ServerCredential({id,data,busy,pending,setPending,run,reload,dir
   <div className="server-credential-row"><span className="small"><i className={'credential-dot'+(saved?' saved':'')} aria-hidden="true"/>{status}{pending?' · Change pending until you save settings':''}</span>
    {data.vault.unlocked?<button type="button" className="text-button" disabled={busy} onClick={()=>setOpen(v=>!v)}>{open?'Close':saved?'Change':'Add credentials'}</button>:<button type="button" className="text-button" onClick={openVaultSettings}>Unlock Vault</button>}</div>
   {open&&data.vault.unlocked&&<ServiceAuthEditor name={name} data={data} busy={busy} pending={pending} setPending={setPending} run={run} reload={reload} dirty={dirty} saved={saved} onClose={()=>setOpen(false)}/>}
+ </div>;
+}
+
+/** Contexts of a Toolbox configuration with their allowed and excluded namespace counts, as a compact table. */
+function ContextTable({contexts,generatedAt}:{contexts:{name:string;namespaces:number;excluded:number}[];generatedAt?:string}){
+ const allowed=contexts.reduce((n,c)=>n+c.namespaces,0),excluded=contexts.reduce((n,c)=>n+c.excluded,0);
+ return <div className="context-table">
+  <div className="context-table-summary"><strong>{contexts.length} context{contexts.length===1?'':'s'}</strong><span className="small muted">{allowed} namespaces allowed · {excluded} excluded{generatedAt?` · Generated ${new Date(generatedAt).toLocaleString()}`:''}</span></div>
+  <div className="context-table-scroll"><table>
+   <thead><tr><th scope="col">Context</th><th scope="col">Allowed</th><th scope="col">Excluded</th></tr></thead>
+   <tbody>{contexts.map(c=><tr key={c.name}><td><code>{c.name}</code></td><td>{c.namespaces}</td><td className={c.excluded?'':'muted'}>{c.excluded||'–'}</td></tr>)}</tbody>
+  </table></div>
  </div>;
 }
