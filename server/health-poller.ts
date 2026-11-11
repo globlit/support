@@ -87,7 +87,7 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
   const list=await get('api/v4/projects?membership=true&simple=true&per_page=1');
   if(list.status===200&&Array.isArray(list.value))return {ok:true,code:200,detail:'GitLab project API responds and accepts the saved token.'};
   if(list.status===401)return {ok:false,code:401,detail:'GitLab rejected the saved token: it is invalid, expired or revoked.'};
-  if(list.status===403)return {ok:true,code:403,detail:'GitLab accepts the saved token. It cannot list projects, so the agent finds projects through search or exact paths only.'};
+  if(list.status===403)return {ok:true,code:403,detail:'GitLab accepts the saved token, but it cannot list projects. Add Project: Read and Group: Read under User to the token so the agent can list them.'};
   return {ok:false,code:list.status,detail:`GitLab returned HTTP ${list.status}. Check the service URL and the token.`};
  }
  const base=serviceBase(c.endpoint),headers:Record<string,string>={Accept:'application/json'};

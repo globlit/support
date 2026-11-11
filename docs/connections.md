@@ -16,11 +16,23 @@ Unlock the Vault, then open **Settings → Connections → `<connection>`**. The
 
 ## GitLab permissions
 
-The token decides which projects Support can reach. Fine-grained token permissions ([GitLab documentation](https://docs.gitlab.com/auth/tokens/fine_grained_access_tokens_rest/)):
+The token decides which projects Support can reach. A fine-grained token has two parts ([GitLab REST permissions](https://docs.gitlab.com/auth/tokens/fine_grained_access_tokens_rest/)).
+
+**User:**
 
 | Resource | Permission | Needed for |
 | --- | --- | --- |
-| Project, Pipeline, Job, Repository | Read | Investigations. |
+| Project | Read | Listing the projects the token can reach (`GET /projects`). Without it, the agent finds projects through search or exact paths only. |
+| Group | Read | Listing groups (`GET /groups`). |
+| Personal access token | Read | The health check: token name and expiry. |
+| Global search | Use | Searching code across all projects (`GET /search`). |
+
+**Support's groups or projects:**
+
+| Resource | Permission | Needed for |
+| --- | --- | --- |
+| Project, Repository, Pipeline, Job | Read | Investigations: files, trees, pipelines, job logs, clones. |
+| Global search | Use | Searching code in a group or project. |
 | Merge request | Read, Create | Draft merge requests. |
 | Branch | Read, Create | Change branches. |
 | Commit | Create | Prepared changes. |

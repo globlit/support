@@ -111,7 +111,7 @@ test('the GitLab check tells a rejected token from a token that cannot list proj
  try{
   let r=await answer(200,200)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,true);assert.match(r.detail,/"support"/);assert.match(r.detail,/renew it/);
   r=await answer(401,401)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,false);assert.match(r.detail,/invalid, expired or revoked/);
-  r=await answer(403,403)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,true);assert.match(r.detail,/cannot list projects/);
+  r=await answer(403,403)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,true);assert.match(r.detail,/cannot list projects. Add Project: Read/);
   r=await answer(404,200)('GitLab',f.config,new AbortController().signal);assert.equal(r.ok,true);assert.match(r.detail,/project API responds/);
  }finally{f.close()}
 });
