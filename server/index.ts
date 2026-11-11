@@ -4,6 +4,7 @@ import {agentFeed,agentHalted,setAgentHalted,type FeedEntry} from './agent-feed.
 import {killAllSandbox,sandboxHealth} from './sandbox.js';
 import {GitProxy} from './git-proxy.js';
 import {AgentGateway} from './agent-gateway.js';
+import {requestLanguage,setRequestLanguage,switchMessage} from './agent-language.js';
 import {PrometheusSources} from './prometheus-sources.js';
 import {deployment} from './deployment.js';
 import {Sessions} from './sessions.js';
@@ -148,6 +149,14 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  }
  const agentMessage=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/message$/);
  const requestInput=z.object({connection:z.string().min(1).max(300),issueId:z.string().min(1).max(300)});
+ if(path==='/api/agent/language'&&req.method==='GET'){const v=requestInput.strict().parse(Object.fromEntries(url.searchParams));return send(res,{language:requestLanguage(store,v.connection,v.issueId)});}
+ if(path==='/api/agent/language'&&req.method==='POST'){
+  const v=requestInput.extend({language:z.enum(['en','fr'])}).strict().parse(await body(req));
+  setRequestLanguage(store,v.connection,v.issueId,v.language);
+  // A running session switches at its next turn.
+  const live=claude.activeRunFor(v.connection,v.issueId);if(live)claude.message(live.id,{text:switchMessage(v.language)},session.principal.name);
+  return send(res,{language:v.language,running:!!live});
+ }
  if(path==='/api/agent/implement'&&req.method==='POST'){
   const v=requestInput.strict().parse(await body(req));
   const w=store.getWorkSession(v.connection,v.issueId);if(!w?.approval)throw new AppError(409,'Approve the plan before asking the agent to implement it.');

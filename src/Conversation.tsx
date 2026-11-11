@@ -62,6 +62,7 @@ export function Conversation({detail,run,running,error,disabled,start,cancel,ref
   <header className="conversation-head">
    <div><h2>Investigation</h2><span className="small muted">{all.length?`${all.length} run${all.length===1?'':'s'}${tree.length>1?` · ${tree.length} branches`:''}`:automatic?`Queued for automatic investigation · up to ${maxRuns} at a time`:'No run yet'}</span></div>
    <div className="actions">
+    <LanguageSwitch connection={detail.issue.connection} issueId={detail.issue.id} disabled={disabled}/>
     {tree.length>1&&<Select aria-label="Branch" value={branch?.leaf} onChange={e=>{setLeaf(e.target.value);setAtBottom(true);}}>{tree.map((b,i)=><option key={b.leaf} value={b.leaf}>Branch {tree.length-i} of {tree.length} · {b.label}</option>)}</Select>}
     {(running||live)&&<button onClick={()=>{if(running)cancel();else if(live)void api('/analysis/'+live.id+'/cancel','POST',{}).catch(e=>setReadError(e.message));}}>Stop</button>}
    </div>
@@ -178,5 +179,24 @@ function Questions({run,live=false,answerable,onSent}:{run:AnalysisRun;live?:boo
     </>}
    </li>;})}</ol>
   {!live&&answerable&&ready.length>0&&<div className="actions"><button className="primary" disabled={sending} onClick={()=>void sendAll()}>{sending?'Sending…':`Send ${ready.length} answer${ready.length===1?'':'s'} and continue`}</button><span className="small muted">Unanswered questions stay open. The agent continues with everything it already found.</span></div>}
+ </div>;
+}
+
+/**
+ * Language of the agent's work for this request (notes, reports, plans, questions to the engineer). A running session
+ * switches at its next turn. Replies to the requester always follow the language of the request.
+ */
+function LanguageSwitch({connection,issueId,disabled}:{connection:string;issueId:string;disabled:boolean}){
+ const api=useWorkspaceApi(),feedback=useFeedback();
+ const [language,setLanguage]=useState<'en'|'fr'|null>(null);
+ useEffect(()=>{let alive=true;void api<{language:'en'|'fr'}>(`/agent/language?connection=${encodeURIComponent(connection)}&issueId=${encodeURIComponent(issueId)}`).then(r=>{if(alive)setLanguage(r.language);}).catch(()=>{});return()=>{alive=false};},[connection,issueId]);
+ async function choose(next:'en'|'fr'){
+  if(next===language)return;const before=language;setLanguage(next);
+  try{const r=await api<{running:boolean}>('/agent/language','POST',{connection,issueId,language:next});feedback.success(`The agent works in ${next==='fr'?'French':'English'}${r.running?' from its next step':''}. Replies to the requester follow the ticket's language.`);}
+  catch(e){setLanguage(before);feedback.error(e);}
+ }
+ if(!language)return null;
+ return <div className="segmented language-switch" role="group" aria-label="Language of the agent's work" title="Language of the agent's notes, reports and questions to you. Replies to the requester always follow the ticket's language.">
+  {(['fr','en'] as const).map(l=><button key={l} type="button" aria-pressed={language===l} disabled={disabled} onClick={()=>void choose(l)}>{l.toUpperCase()}</button>)}
  </div>;
 }

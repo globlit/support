@@ -5,6 +5,7 @@ import {runAgentSession,agentInput,sandboxUrl} from './sandbox.js';
 import {agentToolset,type AgentResult} from './agent-toolset.js';
 import {resultText,type AgentGateway} from './agent-gateway.js';
 import {sourceKind} from '../src/intake-model.js';
+import {replyRule,workLanguageRule,requestLanguage} from './agent-language.js';
 import type {YouTrack} from './youtrack.js';
 import type {GitProxy} from './git-proxy.js';
 import type {AnalysisRun,Config,SourceIssue} from '../src/model.js';
@@ -22,6 +23,8 @@ export function workFolder(issue:Pick<SourceIssue,'connection'|'id'|'key'>){
 }
 const pathEnv='/opt/support-agent/bin:/home/admin/.local/bin:/home/admin/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
+/** Fixed rules, then the language of the work, then the engineer's agent instructions under their own heading. */
+export const systemRules=(language:string,instructions:string)=>{const rules=[agentRules,replyRule,language].join('\n\n');return instructions.trim()?`${rules}\n\n# Instructions from the engineer\n${instructions.trim()}`:rules;};
 /** Rules that the engineer's agent instructions cannot change. */
 export const agentRules=[
  'You are the investigation agent of Support, working for an infrastructure engineer on a ticket, alert or chat request.',
@@ -75,7 +78,7 @@ export async function runClaudeCode(ctx:Ctx){
  const pending=new Map<string,AnalysisRun['events'][number]>();
  const shared=sharedFolder()!;
  const args=['-p','--input-format','stream-json','--output-format','stream-json','--verbose','--model',ctx.model,'--permission-mode','bypassPermissions','--max-turns',String(limits.maxTurns),
-  '--append-system-prompt',[agentRules,config.agentInstructions.trim()].filter(Boolean).join('\n\n# Instructions from the engineer\n'),
+  '--append-system-prompt',systemRules(workLanguageRule(requestLanguage(store,run.connection!,run.issueId)),config.agentInstructions),
   '--mcp-config',JSON.stringify({mcpServers:{support:{type:'http',url:`${gw.url}/mcp`}}}),
   ...(ctx.resume?['--resume',ctx.resume.sessionId,...(ctx.resume.fork?['--fork-session']:[])]:[])];
  const env:Record<string,string>={ANTHROPIC_BASE_URL:gw.url,CLAUDE_CONFIG_DIR:`${shared}/.claude`,SUPPORT_TOOLS_URL:gw.url,SUPPORT_RUN_ID:run.id,PATH:pathEnv,DISABLE_AUTOUPDATER:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',

@@ -14,6 +14,7 @@ import {repoCheckout,proposeChange} from './repo-tools.js';
 import type {GitProxy} from './git-proxy.js';
 import type {AgentGateway} from './agent-gateway.js';
 import {agentEngineReady,runClaudeCode} from './claude-code.js';
+import {replyRule,workLanguageRule,requestLanguage} from './agent-language.js';
 import {sourcePage} from '../src/intake-model.js';
 import {PrometheusSources,prometheusEndpoints} from './prometheus-sources.js';
 import type {AnalysisRun,RunBasis,SourceIssue} from '../src/model.js';
@@ -31,7 +32,7 @@ const CORE_PROMPT=[
  'Call prepare_plan once, at the end, on its own. Include one factual finding per useful tool call, referencing its exact callId.',
 ].join('\n');
 /** Returns the system prompt: the fixed rules, then the engineer's agent instructions from Settings → Model. */
-export const systemPrompt=(instructions:string)=>instructions.trim()?`${CORE_PROMPT}\n\n# Instructions from the engineer\n${instructions.trim()}`:CORE_PROMPT;
+export const systemPrompt=(instructions:string,language:'en'|'fr'='en')=>{const core=[CORE_PROMPT,replyRule,workLanguageRule(language)].join('\n');return instructions.trim()?`${core}\n\n# Instructions from the engineer\n${instructions.trim()}`:core;};
 /** Ends a run whose model keeps requesting tools that do not exist. */
 class UnavailableTool extends AppError{constructor(){super(403,'Model repeatedly requested unavailable tools. No action was taken.');}}
 const inputSchema=z.object({plan:z.string().trim().min(1).max(16000),replyDraft:z.string().max(16000),findings:z.array(z.object({callId:z.string(),summary:z.string().max(4000)}).strict()).max(200).optional()}).strict();
@@ -90,6 +91,8 @@ export class Claude {
  private runListeners:{started(r:{runId:string;connection:string;id:string;title:string;fingerprint?:string}):void;finished(runId:string,state:'ready'|'failed'|'cancelled',error?:string):void}[]=[];
  /** Calls `listener` when an investigation starts and when it ends. */
  onRun(listener:Claude['runListeners'][number]){this.runListeners.push(listener);}
+ /** Returns the running run of a request, if any. */
+ activeRunFor(connection:string,id:string){for(const r of this.runs.values())if(r.connection===connection&&r.issueId===id&&r.state==='running'&&this.active.has(r.id))return r;return undefined;}
  /** True while the run is in progress in this process. */
  isActive(runId:string){return this.active.has(runId);}
  cancel(id:string){this.status(id);this.active.get(id)?.abort(stopReason('Stopped by the engineer (Stop run).'));return this.status(id)}
@@ -278,7 +281,7 @@ export class Claude {
    let calls=0,unavailable=0;
    const anthropicKey=config.modelProvider==='anthropic'&&config.modelAuth==='api_key';
    const serverTools=config.agentWebSearch&&anthropicKey?webTools(model):[];
-   const system=systemPrompt(config.agentInstructions);
+   const system=systemPrompt(config.agentInstructions,requestLanguage(this.store,issue.connection,issue.id));
    /** Adds undelivered engineer messages to the user turn about to be sent. */
    const deliver=()=>{
     const pending=(run.messages??[]).filter(m=>!m.delivered);if(!pending.length)return;
