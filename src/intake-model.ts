@@ -1,4 +1,3 @@
-import type {WorkSession} from './model.js';
 export type SourceKind='youtrack'|'alert'|'slack';
 export type HandlingMode='pending'|'ticket'|'investigate'|'reply'|'human'|'refused'|'done';
 export type HandlingEvent={mode:HandlingMode;reason:string;at:string;actor:string};
@@ -12,10 +11,4 @@ export function sourcePage(connection:string){return sourceKind(connection)==='a
 export function handlingLabel(mode:HandlingMode){return ({pending:'Choose next step',ticket:'Create a ticket',investigate:'Agent handling',reply:'Reply directly',human:'Engineer handling',refused:'Refused',done:'Resolved by engineer'})[mode]}
 export function ruleMatches(rule:IgnoreRule,source:'alert'|'slack',endpoint:string,kind:string,labels:Record<string,string>,now=Date.now()){
  return rule.source===source&&rule.endpoint===endpoint&&rule.kind===kind&&(!rule.expiresAt||Date.parse(rule.expiresAt)>now)&&Object.entries(rule.labels).every(([k,values])=>values.includes(labels[k]));
-}
-
-/** Older handoffs already contain a verified local source identity. */
-export function requestOrigin(session:Pick<WorkSession,'origin'|'alertHandoffs'>):SourceOrigin|undefined{
- const handoff=session.alertHandoffs?.[0];
- return session.origin??(handoff?{kind:'alert',id:handoff.alertId,title:handoff.alertTitle,connection:handoff.alertConnection}:undefined);
 }

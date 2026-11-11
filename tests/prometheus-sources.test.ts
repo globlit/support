@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {Store} from '../server/store.js';
-import {defaults,configSchema,type Config} from '../src/model.js';
+import {defaults,type Config} from '../src/model.js';
 import {PrometheusSources,serviceProxyPath} from '../server/prometheus-sources.js';
 import {Grafana} from '../server/grafana.js';
 import {systemPrompt} from '../server/claude.js';
@@ -98,29 +98,8 @@ test('servers inside a cluster are read through the service or pod proxy of the 
  assert.throws(()=>serviceProxyPath({...source,target:'statefulset/prometheus'},'query'),/use service\/NAME or a pod name/);
 });
 
-test('agent instructions follow the fixed rules, and older configurations gain the new settings',()=>{
+test('agent instructions follow the fixed rules',()=>{
  const p=systemPrompt('Federation runs in context monitoring.');
  assert.ok(p.indexOf('untrusted data')<p.indexOf('Federation runs in context monitoring.'));
  assert.ok(!systemPrompt('  ').includes('Instructions from the engineer'));
- const old=structuredClone(defaults) as Record<string,unknown>;delete old.prometheusSources;delete old.agentInstructions;delete (old.connections as Record<string,unknown>).Grafana;
- const parsed=configSchema.parse(old);
- assert.deepEqual(parsed.prometheusSources,[]);assert.equal(parsed.agentInstructions,defaults.agentInstructions);assert.equal(parsed.connections.Grafana.enabled,false);
- const legacy=configSchema.parse({...old,connections:{...(old.connections as object),Prometheus:{endpoint:'https://prom.internal',scope:'',path:'',enabled:true}},prometheusSources:[{name:'fed',context:'monitoring',namespace:'mon',target:'service/prometheus-operated',port:9090}]});
- assert.deepEqual(legacy.prometheusSources.map(s=>[s.id,s.name,s.kind]),[['legacy','prometheus','url'],[legacy.prometheusSources[1].id,'fed','tunnel']]);
- assert.equal(legacy.connections.Prometheus.endpoint,'');assert.deepEqual(configSchema.parse(legacy),legacy,'migration is stable');
-});
-
-test('the old Prometheus credential moves to its server, and removed servers lose their credential',()=>{
- const dir=mkdtempSync(join(tmpdir(),'support-prom-cred-')),store=new Store(dir);
- try{
-  store.unlock('an isolated prometheus passphrase',true);
-  store.credential('Prometheus',JSON.stringify({v:1,scheme:'basic',username:'u',password:'old-secret'}));
-  const s=store.snapshot();store.config({...s.config,connections:{...s.config.connections,Prometheus:{...s.config.connections.Prometheus,enabled:true,endpoint:'https://prom.internal'}}},s.configRevision);
-  store.lock();store.unlock('an isolated prometheus passphrase');
-  assert.deepEqual(store.vaultStatus().credentials.filter(c=>c.startsWith('Prometheus')),['Prometheus/legacy']);
-  assert.equal(store.vaultStatus().authSchemes['Prometheus/legacy'],'basic');
-  assert.ok(store.secretValues().includes('old-secret'));
-  const next=store.snapshot();store.config({...next.config,prometheusSources:[]},next.configRevision);
-  assert.deepEqual(store.vaultStatus().credentials.filter(c=>c.startsWith('Prometheus')),[]);
- }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });

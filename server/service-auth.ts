@@ -24,7 +24,7 @@ export function bearerCredential(token:string){return JSON.stringify({v:1,scheme
 /** Returns the stored value for Basic auth. Throws a ZodError on invalid input. */
 export function basicCredential(input:unknown){const {username,password}=basicCredentialSchema.parse(input);return JSON.stringify({v:1,scheme:'basic',username,password});}
 
-/** Parses a stored credential. A non-JSON value is a legacy bearer token. */
+/** Parses a stored credential. A value that is not a JSON credential is read as a bearer token. */
 export function parseServiceAuth(raw:string):ServiceAuth{
  if(raw.startsWith('{')){try{const parsed=storedSchema.safeParse(JSON.parse(raw));if(parsed.success)return parsed.data;}catch{}}
  return {v:1,scheme:'bearer',token:raw};

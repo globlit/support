@@ -19,8 +19,7 @@ apt-get clean
 rm -rf /var/lib/apt/lists/*
 EOF
 
-# Binary tools in /usr/local/bin. kubectl, Helm, yq, Flux and kustomize use the same versions and checksums as
-# the claude-jail image.
+# Binary tools in /usr/local/bin, each pinned by version and SHA-256 checksum.
 ARG TARGETARCH
 ARG KUBECTL_VERSION=v1.34.13
 ARG HELM_VERSION=v4.3.1

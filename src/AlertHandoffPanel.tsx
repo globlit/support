@@ -1,4 +1,4 @@
-import {Markdown,MarkdownPreview} from './Markdown';
+import {Markdown} from './Markdown';
 import {useState} from 'react';
 import {useWorkspaceApi} from './WorkspaceRuntime';
 import type {AlertCase,AlertHandoff,HandoffReview,HandoffResult} from './model';

@@ -9,14 +9,7 @@ type Session={principal:Principal;csrf:string;expires:number;epoch:number};
 /** Session secrets are never persisted. */
 export class Sessions{
  private entries=new Map<string,Session>();
- constructor(private store:Store,private config:Deployment,private clock=Date.now){workspaceIdentity(store);
-  if(!store.get('security.plan-identity-migration.v1'))store.transaction(()=>{
-   for(const row of store.db.prepare('SELECT value FROM work_sessions').all() as {value:string}[]){
-    const work=JSON.parse(row.value);if(work.approval&&!work.approval.actorId){store.put('security.legacy-approval:'+work.connection+':'+work.issueId,work.approval);work.approval=null;work.revision++;store.saveWorkSession(work);}
-   }
-   store.put('security.plan-identity-migration.v1',true);
-  });
- }
+ constructor(private store:Store,private config:Deployment,private clock=Date.now){workspaceIdentity(store);}
  private cookie(req:IncomingMessage){const values=(req.headers.cookie??'').split(';').map(v=>v.trim()).filter(v=>v.startsWith(this.config.cookieName+'='));return values.length===1?values[0].slice(this.config.cookieName.length+1):'';}
  private prune(){for(const [id,s] of this.entries)if(this.clock()>=s.expires||s.epoch!==this.store.vaultEpoch||!this.store.key)this.entries.delete(id);}
  current(req:IncomingMessage){this.prune();const value=this.cookie(req);return /^[A-Za-z0-9_-]{43}$/.test(value)?this.entries.get(digest(value)):undefined;}

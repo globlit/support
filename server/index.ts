@@ -29,7 +29,7 @@ import {gitLabProjects} from './gitlab.js';
 import {checkContext,importKubeconfigs,kubernetesSecretSchema} from './kubernetes.js';
 /** Request size limit for kubeconfig loading, generation and saving: 8 MiB. */
 const kubeconfigBodyLimit=8*1024*1024;
-import { resolve,join,extname,relative,isAbsolute } from 'node:path';
+import { resolve,extname,relative,isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { Store,AppError } from './store.js';
 import { Resolutions } from './resolution.js';
@@ -42,9 +42,13 @@ import { Claude } from './claude.js';
 import { YouTrack } from './youtrack.js';
 import { connectionNames,configSchema,kubernetesCredential,type RunBasis} from '../src/model.js';
 import {credentialInput,storedCredential} from './service-auth.js';
+import {storedConfigProblem} from './startup-check.js';
 process.umask(0o077);
 const runtime=deployment(),{port}=runtime,origin=runtime.publicOrigin;
-const store=new Store(resolve(process.env.SUPPORT_DATA_DIR??'.support-data'));
+const dataDir=resolve(process.env.SUPPORT_DATA_DIR??'.support-data');
+const store=new Store(dataDir);
+const configProblem=storedConfigProblem(store,dataDir);
+if(configProblem){console.error(configProblem);store.close();process.exit(1);}
 const sessions=new Sessions(store,runtime);
 const transport=loggedFetch(store);
 const health=new HealthPoller(store);
@@ -58,7 +62,7 @@ if(process.env.SUPPORT_RELAY_BIND?.trim())gateway.listen(process.env.SUPPORT_REL
 const agentQueue=new AgentQueue(store,id=>claude.isActive(id));
 claude.onRun({started:r=>agentQueue.started(r),finished:(id,state,error)=>agentQueue.finished(id,state,error)});
 /** Kill switch, running investigations and sandbox status, as shown in the agent console. */
-const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands},queue:agentQueue.counts(),parallelReview:store.snapshot().config.parallelReview});
+const agentState=async()=>({halted:agentHalted(store),running:[...agentFeed.running.values()],sandbox:{...await sandboxHealth(),commandsEnabled:store.snapshot().config.agentCommands},queue:agentQueue.counts(),parallelReview:store.snapshot().config.parallelReview,model:claude.modelStatus,gateway:{listening:gateway.listening},kubernetes:toolHealth(store).find(t=>t.name==='Kubernetes'),modelHealth:toolHealth(store).find(t=>t.name==='Model')});
 const notifications=new Notifications(store,()=>aiOverview(store,claude).workflows);
 claude.onQuestion(run=>{const [key,...title]=(run.title??'').split(' · ');notifications.question({key,title:title.join(' · '),source:sourceKind(run.connection??'')==='alert'?'alert':sourceKind(run.connection??'')==='slack'?'slack':'youtrack',route:`#/${sourcePage(run.connection??'')}?issue=${encodeURIComponent(run.issueId)}&step=investigation`});});
 const notificationTimer=setInterval(()=>notifications.tick(),5000);notificationTimer.unref();
@@ -111,7 +115,6 @@ function rateLimit(){if(Date.now()-attempts.time>60_000)attempts={time:Date.now(
 /** Reads a JSON request body of at most `limit` bytes. Kubeconfig requests use a larger limit. */
 async function body(req:IncomingMessage,limit=262144){if(!req.headers['content-type']?.startsWith('application/json'))throw new AppError(415,'JSON required');let size=0;const chunks:Buffer[]=[];for await(const chunk of req){size+=chunk.length;if(size>limit)throw new AppError(413,'Request too large');chunks.push(chunk)}assertActiveRequest();try{return JSON.parse(Buffer.concat(chunks).toString())}catch{throw new AppError(400,'Invalid JSON')}}
 function send(res:ServerResponse,value:unknown,status=200){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value))}
-const actionSchema=z.object({action:z.enum(['revise','sample-revision','approve','changed','note','draft','reopen']),revision:z.number().int(),text:z.string().max(16000).optional(),stepId:z.string().max(100).optional()}).strict();
 const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeout:30000,keepAliveTimeout:5000},async(req,res)=>{res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");try{
  if(req.headers.host!==runtime.host)throw new AppError(403,'Use the configured Support address.');
  if(!['GET','HEAD'].includes(req.method??'')&&req.headers.origin!==origin)throw new AppError(403,'Invalid request origin.');
@@ -299,7 +302,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  const ytMatch=path.match(/^\/api\/youtrack\/issues\/([a-zA-Z0-9_-]+)(\/action)?$/);
  if(ytMatch&&req.method==='GET'&&!ytMatch[2])return send(res,await youtrack.work(ytMatch[1]));
  if(ytMatch&&req.method==='POST'&&ytMatch[2]){const input=z.object({action:z.enum(['note','draft','plan','approve','unapprove','revise','delete-note']),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional(),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional()}).strict().parse(await body(req));return send(res,await youtrack.action(ytMatch[1],input));}
- if(path==='/api/state'&&req.method==='GET'){const s=store.snapshot();return send(res,{...s,tickets:[],runtime:{...s.runtime,mode:'Live workspace',deployment:runtime.mode,workspaceId:workspaceIdentity(store).workspaceId,principal:session.principal}});}
+ if(path==='/api/state'&&req.method==='GET'){const s=store.snapshot();return send(res,{...s,runtime:{...s.runtime,mode:'Live workspace',deployment:runtime.mode,workspaceId:workspaceIdentity(store).workspaceId,principal:session.principal}});}
  if(path==='/api/config'&&req.method==='PUT'){const data=z.object({config:z.unknown(),revision:z.number().int()}).strict().parse(await body(req));return send(res,store.config(data.config,data.revision));}
  if(path==='/api/config/export'&&req.method==='GET'){const state=store.snapshot();return send(res,{format:1,config:state.config});}
  if(path==='/api/gitlab/projects'&&req.method==='GET'){const {search}=z.object({search:z.string().trim().max(200).optional()}).strict().parse(Object.fromEntries(url.searchParams));return send(res,{projects:await gitLabProjects(store,transport,search??'')});}

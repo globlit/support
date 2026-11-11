@@ -45,7 +45,6 @@ export function Alerts({data,openTicket,initialAlert}:{initialAlert?:string;data
 
  useEffect(()=>{if(initialAlert&&initialAlert!==detail?.issue.id&&data.vault.unlocked)void run(()=>open(initialAlert));},[initialAlert,data.vault.unlocked,data.configRevision]);
  const rows=(queue?.cases??[]).filter(c=>c.title.toLowerCase().includes(titleFilter.toLowerCase())&&(!instances.length||instances.includes(String(c.members.length)))&&(!links.length||links.includes(ticketLabel(c)))&&(severity==='all'||c.severity===severity)&&(state==='all'||stage(c)===state)&&JSON.stringify([c.title,c.labels]).toLowerCase().includes(search.toLowerCase()));
- const selected=queue?.cases.find(c=>c.id===detail?.issue.id);
  const choose=(id:string)=>{void run(()=>open(id));};
  const pollingLabel=!queue?'Checking polling':queue.paused?'Polling paused · Vault locked':!queue.enabled?'Polling off':queue.error?'Polling failed':queue.polling?'Polling now':`Polling every ${queue.pollSeconds}s`;
  const pollingState=queue?.error?'error':queue?.enabled&&!queue.paused&&queue.lastSuccess?'active':'paused';

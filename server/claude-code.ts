@@ -102,11 +102,10 @@ export async function runClaudeCode(ctx:Ctx){
   '--append-system-prompt',systemRules(workLanguageRule(requestLanguage(store,run.connection!,run.issueId)),config.agentInstructions),
   '--mcp-config',JSON.stringify({mcpServers:{support:{type:'http',url:`${gw.url}/mcp`}}}),
   ...(ctx.resume?['--resume',ctx.resume.sessionId,...(ctx.resume.fork?['--fork-session']:[])]:[])];
- const env:Record<string,string>={ANTHROPIC_BASE_URL:gw.url,CLAUDE_CONFIG_DIR:`${shared}/.claude`,SUPPORT_TOOLS_URL:gw.url,SUPPORT_RUN_ID:run.id,PATH:pathEnv,DISABLE_AUTOUPDATER:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',
+ const env:Record<string,string>={...(config.modelAuth==='api_key'?{ANTHROPIC_BASE_URL:gw.url,ANTHROPIC_API_KEY:'support-gateway'}:{}),CLAUDE_CONFIG_DIR:`${shared}/.claude`,SUPPORT_TOOLS_URL:gw.url,SUPPORT_RUN_ID:run.id,PATH:pathEnv,DISABLE_AUTOUPDATER:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',
   // Support tools are listed to the model from the first turn instead of behind tool search.
   ENABLE_TOOL_SEARCH:'false',
-  ...(kubeconfig?{KUBECONFIG:kubeconfig}:{}),
-  ...(config.modelAuth==='api_key'?{ANTHROPIC_API_KEY:'support-gateway'}:{CLAUDE_CODE_OAUTH_TOKEN:'support-gateway'})};
+  ...(kubeconfig?{KUBECONFIG:kubeconfig}:{})};
  const onLine=(line:{type:'stdout'|'stderr';data:string})=>{
   if(line.type==='stderr'){const t=ctx.redact(line.data).trim();if(t)agentFeed.publish(run.id,'output',t.slice(0,2000));return;}
   let m:{type?:string;subtype?:string;session_id?:string;message?:{content?:unknown[]};result?:string;is_error?:boolean;api_error_status?:number|null};

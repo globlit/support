@@ -1,4 +1,4 @@
-import {sourceKind,handlingLabel,requestOrigin} from './intake-model';
+import {sourceKind,handlingLabel} from './intake-model';
 import {latestChange,replyStatus} from './reply-state';
 import type {AnalysisRun,ChangeSet,LiveDetail} from './model';
 export type ReviewStage='request'|'ticket'|'investigation'|'plan'|'implementation'|'message';
@@ -19,7 +19,7 @@ export function currentStage(detail:LiveDetail,changes:ChangeSet[],running=false
  return 'request';
 }
 export function IssueFlow({detail,changes,loaded,error,running,selected,onSelect,disabled,latestRun}:{latestRun?:AnalysisRun|null;detail:LiveDetail;changes:ChangeSet[];loaded:boolean;error:string;running:boolean;selected:ReviewStage;onSelect:(s:ReviewStage)=>void;disabled:boolean}){
- const s=detail.session,origin=requestOrigin(s),c=latestChange(changes),incoming='alert' in detail?(detail as import('./model').AlertDetail).alert:undefined;const ignored=!!incoming?.ignored&&(sourceKind(detail.issue.connection)==='slack'||incoming.ignored>=incoming.members.length);
+ const s=detail.session,origin=s.origin,c=latestChange(changes),incoming='alert' in detail?(detail as import('./model').AlertDetail).alert:undefined;const ignored=!!incoming?.ignored&&(sourceKind(detail.issue.connection)==='slack'||incoming.ignored>=incoming.members.length);
  const recorded=!!s.analysis||!!s.alertHandoffs?.some(h=>h.analysis);
  const items:{id:ReviewStage;title:string;status:string;at?:string}[]=[
  {id:'request',title:origin?`${origin.kind==='alert'?'Alert':'Slack'} → Ticket`:sourceKind(detail.issue.connection)==='alert'?'Alert received':sourceKind(detail.issue.connection)==='slack'?'Slack message':'YouTrack request',status:ignored?'Ignored':detail.session.handling&&detail.session.handling.mode!=='investigate'?handlingLabel(detail.session.handling.mode):detail.issue.status,at:new Date(detail.issue.updated).toISOString()},

@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import type {Store} from './store.js';
 import {AppError} from './store.js';
 import {networkReason} from './network-reason.js';
-import type {Diagnostic,LogTool,LogPage} from '../src/diagnostics-model.js';
+import type {Diagnostic,LogPage} from '../src/diagnostics-model.js';
 const captureLimit=24*1024;
 const kib=(bytes:number)=>`${(bytes/1024).toFixed(bytes<10240?1:0)} KB`;
 /** Returns the start of a long text, cut to fit the 24 KB log limit, followed by a line that gives the shown and total sizes. */
@@ -52,7 +52,7 @@ export function loggedFetch(store:Store,fetcher:typeof fetch=fetch):typeof fetch
   const prometheus=config.prometheusSources.some(s=>{if(s.kind!=='url')return false;try{return new URL(s.endpoint).origin===url.origin;}catch{return false;}})||(url.hostname==='127.0.0.1'&&url.pathname.includes('/api/v1/'));
   const tool=named??(prometheus?'Prometheus' as const:undefined);
   if(!tool||!store.key)return fetcher(input,init);
-  const revision=store.snapshot().configRevision,credentialEpoch=store.credentialEpoch,epoch=store.vaultEpoch,secrets=store.secretValues(),start=Date.now();
+  const epoch=store.vaultEpoch,secrets=store.secretValues(),start=Date.now();
   const path=url.pathname;const query=Object.fromEntries([...url.searchParams].map(([k,v])=>[k,sensitive.test(k)?'[redacted]':v]));
   const request=JSON.stringify({method:init?.method??'GET',path,query,...(tool!=='Model'&&typeof init?.body==='string'&&Buffer.byteLength(init.body)<=captureLimit?{body:init.body}:{})});
   let finished=false;const done=(status:Diagnostic['status'],output:string,code?:number,truncated=false)=>{if(finished)return;finished=true;if(store.vaultEpoch===epoch)recordDiagnostic(store,{tool,operation:(init?.method??'GET')+' '+path,status,durationMs:Date.now()-start,code,request,output,truncated},secrets)};

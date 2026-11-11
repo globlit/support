@@ -4,11 +4,11 @@ export type Branch={leaf:string;runs:AnalysisRun[];label:string;latestAt:string}
 
 /**
  * Returns the run that `run` builds on: the run named by its basis, or for a restart the run that produced the plan
- * version. A run without a basis (recorded before bases existed) builds on the previous such run.
+ * version.
  */
-export function parentOf(run:AnalysisRun,runs:AnalysisRun[],plans:WorkSession['plans']):string|undefined{
+export function parentOf(run:AnalysisRun,plans:WorkSession['plans']):string|undefined{
  const b=run.basedOn;
- if(!b){const legacy=runs.filter(r=>!r.basedOn&&r.startedAt<run.startedAt);return legacy.at(-1)?.id;}
+ if(!b)return undefined;
  if(b.kind==='start'||b.kind==='over')return undefined;
  if(b.kind==='restart')return plans.find(p=>p.version===b.planVersion)?.runId;
  return b.runId;
@@ -22,7 +22,7 @@ export function parentOf(run:AnalysisRun,runs:AnalysisRun[],plans:WorkSession['p
 export function branches(runs:AnalysisRun[],plans:WorkSession['plans']):Branch[]{
  const sorted=[...runs].sort((a,b)=>a.startedAt.localeCompare(b.startedAt));
  const byId=new Map(sorted.map(r=>[r.id,r]));
- const parent=new Map(sorted.map(r=>[r.id,parentOf(r,sorted,plans)]));
+ const parent=new Map(sorted.map(r=>[r.id,parentOf(r,plans)]));
  const hasChild=new Set([...parent.values()].filter((p):p is string=>!!p&&byId.has(p)));
  const out:Branch[]=[];
  for(const leaf of sorted.filter(r=>!hasChild.has(r.id))){

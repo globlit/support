@@ -51,7 +51,7 @@ test('the agent kubeconfig lists enabled contexts with a token, pointing at the 
 });
 
 test('the gateway forwards agent reads with the context token and drops client credentials and impersonation',async()=>{
- const api=await apiServer(),f=fixture(api.url),gw=new AgentGateway(f.store,fetch,undefined);
+ const api=await apiServer(),f=fixture(api.url),gw=new AgentGateway(f.store,fetch);
  try{
   await gw.listen('127.0.0.1',0);
   const session=gw.register({runId:'r1',toolset});

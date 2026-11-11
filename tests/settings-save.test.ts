@@ -28,7 +28,7 @@ test('a failed save keeps later credentials pending and a failed configuration s
  assert.equal(credentialCalls,0);
 });
 test('a pending credential is shown on its connection without a separate save button',()=>{
- const data={config:{},configRevision:1,tickets:[],vault:{initialized:true,unlocked:true,credentials:['YouTrack']},runtime:{mode:'Test',platform:'linux',liveExecution:false}} as unknown as Snapshot;
+ const data={config:{},configRevision:1,vault:{initialized:true,unlocked:true,credentials:['YouTrack']},runtime:{mode:'Test',platform:'linux',liveExecution:false}} as unknown as Snapshot;
  const props={name:'YouTrack' as const,data,run:async()=>{},reload:async()=>data,busy:false,dirty:true,setPending:()=>{}};
  const pending=renderToStaticMarkup(createElement(ConnectionCredential,{...props,pending:true}));
  assert.match(pending,/Change pending until you save settings/);

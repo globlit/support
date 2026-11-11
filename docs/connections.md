@@ -12,7 +12,7 @@ Unlock the Vault, then open **Settings → Connections → `<connection>`**. The
 | Prometheus | Per server: none, Basic auth or bearer token. See [Prometheus servers](#prometheus-servers). |
 | Grafana | Username and password, or service account token. Viewer role with query access to the Prometheus datasources. |
 | Kubernetes | Per context: ServiceAccount token, optional CA certificates. See [Kubernetes access](kubernetes-access.md). |
-| Model | API key, Claude Code login or ChatGPT sign-in, in **Settings → Model**. |
+| Model | API key, Claude subscription (Claude Code signed in inside the sandbox) or ChatGPT sign-in, in **Settings → Model**. See [Claude subscription](container.md#claude-subscription-login). |
 
 ## YouTrack tickets
 
@@ -68,5 +68,3 @@ Leave **Allowed collection** empty to let the agent search every collection the 
 Each Prometheus datasource of the Grafana connection is also available, as `grafana/<datasource>`.
 
 Example for a federation Prometheus deployed by kube-prometheus-stack, through Kubernetes: context `monitoring`, namespace `monitoring-federation`, target `service/prometheus-operated`, port `9090`. Save the settings, then click **Test** to read the Prometheus build information.
-
-The Prometheus URL of earlier versions becomes a URL server named `prometheus`, with its saved credential.

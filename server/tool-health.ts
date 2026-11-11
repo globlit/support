@@ -23,6 +23,6 @@ export function toolHealth(store:Store,now=Date.now()):ToolHealth[]{
   const common={...base,at:o.at,failures:o.failures,durationMs:o.durationMs};
   if(o.failures)return {...common,state:o.failures>=2?'red':'yellow',label:o.failures>=2?'Failed':'Stale',detail:`${o.failures} consecutive failed check${o.failures===1?'':'s'}. ${o.result.detail}`};
   if(now-Date.parse(o.at)>healthIntervalMs+healthTimeouts[name]+10000)return {...common,state:'yellow',label:'Stale',detail:'The next scheduled check is overdue. '+o.result.detail};
-  return {...common,state:'green',label:snapshot.config.modelAuth==='claude_cli'&&name==='Model'?'Local tool ready':'Reachable',detail:o.result.detail};
+  return {...common,state:'green',label:snapshot.config.modelAuth==='claude_subscription'&&name==='Model'?'Signed in (sandbox)':'Reachable',detail:o.result.detail};
  });
 }

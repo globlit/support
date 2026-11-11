@@ -4,7 +4,6 @@ import {Store,AppError} from './store.js';
 import {serviceBase} from './gitlab.js';
 import {localAction} from './youtrack.js';
 import {assertHandling,handling,isIgnored} from './intake.js';
-import type {Claude} from './claude.js';
 import type {AgentQueue} from './agent-queue.js';
 import type {AlertCase,AlertDetail,SourceIssue} from '../src/model.js';
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');

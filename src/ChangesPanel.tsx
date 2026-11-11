@@ -4,7 +4,7 @@ import {SafeLink} from './SafeLink';
 import {sourcePath} from './intake-model';
 import {ErrorNotice,ErrorRecoveryAction} from './ErrorNotice';
 import {latestChange,replyStatus} from './reply-state';
-import {Markdown,MarkdownPreview} from './Markdown';
+import {MarkdownPreview} from './Markdown';
 import {useEffect,useRef,useState} from 'react';
 import {ResolutionPanel} from './ResolutionPanel';
 import {PipelinePanel} from './PipelinePanel';

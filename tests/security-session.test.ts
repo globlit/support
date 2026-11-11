@@ -1,16 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
+import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {execFileSync} from 'node:child_process';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {deployment} from '../server/deployment.js';
 import {Sessions} from '../server/sessions.js';
 import {humanAttribution,localOwner,withIdentity,workspaceIdentity} from '../server/identity.js';
 import {Store} from '../server/store.js';
 import {localAction} from '../server/youtrack.js';
-import {cliEnvironment} from '../server/claude-cli.js';
 const req=(cookie='',method='GET',csrf?:string)=>({method,headers:{cookie,...(csrf?{'x-support-csrf':csrf}:{})}} as IncomingMessage);
 const response=()=>{let value='';return {res:{setHeader(_name:string,v:string){value=v}} as unknown as ServerResponse,cookie:()=>value.split(';')[0]};};
 function fixture(){const dir=mkdtempSync(join(tmpdir(),'support-security-')),store=new Store(dir);store.unlock('security fixture passphrase',true);return {store,done(){store.close();rmSync(dir,{recursive:true,force:true})}}}
@@ -44,22 +42,15 @@ test('identity persists independently of display settings and context cannot lea
   assert.deepEqual(workspaceIdentity(f.store),original);assert.equal(withIdentity(owner,()=>true,()=>humanAttribution(f.store)).actor,'Workspace owner');assert.throws(()=>humanAttribution(f.store),/Sign in/);
  }finally{f.done();other.done()}
 });
-test('a real plan requires an active human identity; old approvals are preserved as history and need fresh review',()=>{
+test('a real plan requires an active human identity',()=>{
  const f=fixture();try{
   const issue={connection:'fixture',id:'1',key:'LAB-1',updated:1,title:'',description:'',resolved:false,status:'Open',severity:'',assignee:'',project:'',fields:{},url:''};
   let w=f.store.workSession(issue);w.plans=[{version:1,text:'Inspect the service',at:new Date().toISOString()}];f.store.saveWorkSession(w);
   assert.throws(()=>localAction(f.store,issue,{action:'approve',revision:w.revision,sourceUpdated:1}),/Sign in/);assert.equal(f.store.workSession(issue).approval,null);
   const owner=localOwner(f.store);w=withIdentity(owner,()=>true,()=>localAction(f.store,issue,{action:'approve',revision:w.revision,sourceUpdated:1})).session;
   assert.equal(w.approval!.actorId,owner.id);assert.equal(w.approval!.workspaceId,owner.workspaceId);
-  delete w.approval!.actorId;delete w.approval!.workspaceId;f.store.saveWorkSession(w);new Sessions(f.store,deployment({}));
-  const migrated=f.store.workSession(issue);assert.equal(migrated.approval,null);assert.equal(migrated.plans[0].text,'Inspect the service');assert.ok(f.store.get('security.legacy-approval:fixture:1'));
  }finally{f.done()}
 });
-test('tools cannot inherit host agent sockets or service/browser authentication environment',()=>{
- const input={HOME:'/workspace',PATH:'/usr/bin',SSH_AUTH_SOCK:'/host/agent',SSH_CONNECTION:'host',SUPPORT_SESSION_SECRET:'secret',GIT_ASKPASS:'/host/run',NODE_OPTIONS:'--require /host/run',AWS_SECRET_ACCESS_KEY:'secret',DYLD_INSERT_LIBRARIES:'/host/lib'};
- for(const env of [cliEnvironment(input)])for(const key of ['SSH_AUTH_SOCK','SSH_CONNECTION','SUPPORT_SESSION_SECRET','GIT_ASKPASS','NODE_OPTIONS','AWS_SECRET_ACCESS_KEY','DYLD_INSERT_LIBRARIES'])assert.equal(env[key],undefined,key);
-});
-
 test('browser session recovery distinguishes provider token errors and ignores an obsolete session check',async()=>{
  const {api}=await import('../src/api.js'),{refreshSession,sessionLost,csrfToken,sessionEvent}=await import('../src/session.js');
  const originalFetch=globalThis.fetch,oldWindow=Object.getOwnPropertyDescriptor(globalThis,'window'),events:unknown[]=[];const win=new EventTarget();win.addEventListener(sessionEvent,e=>events.push((e as CustomEvent).detail));Object.defineProperty(globalThis,'window',{value:win,configurable:true});

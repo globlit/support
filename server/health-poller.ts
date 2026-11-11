@@ -7,7 +7,7 @@ import {serviceBase} from './gitlab.js';
 import {serviceAuthHeaders,serverAuthHeaders} from './service-auth.js';
 import {checkContext,enabledContexts} from './kubernetes.js';
 import {modelKey} from './model-api.js';
-import {claudeCliStatus} from './claude-cli.js';
+import {claudeLoginStatus} from './claude-login.js';
 import {recordDiagnostic} from './diagnostics.js';
 import {healthIntervalMs,healthTimeouts,recordHealthProbe,toolHealth,type HealthResult} from './tool-health.js';
 export type HealthProbe=(name:ConnectionName,config:Config,signal:AbortSignal)=>Promise<HealthResult>;
@@ -52,8 +52,8 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
   const failed=results.filter(r=>!r.ok);
   return failed.length?{ok:false,detail:`${failed.length} of ${results.length} contexts failed. ${failed.slice(0,3).map(r=>r.detail).join(' ')}`}:{ok:true,detail:results.length===1?results[0].detail:`${results.length} contexts answer: ${contexts.map(x=>x.name).join(', ')}.`};
  }
- if(name==='Model'&&config.modelAuth==='claude_cli'){
-  const status=await claudeCliStatus(c.path,undefined,signal);return {ok:status.connected,detail:status.connected?'Local Claude CLI responds and is signed in. No generation or remote model request performed.':'Local Claude CLI is not signed in with a subscription.'};
+ if(name==='Model'&&config.modelAuth==='claude_subscription'){
+  const status=await claudeLoginStatus(undefined,signal);return {ok:status.connected,detail:status.connected?'Claude Code in the sandbox is signed in. No generation or remote model request performed.':'Claude Code in the sandbox is not signed in with a subscription.'};
  }
  if(name==='Prometheus'){
   const servers=config.prometheusSources.filter(s=>s.kind==='url');
@@ -88,7 +88,6 @@ export function serviceProbe(store:Store,fetcher:typeof fetch=fetch):HealthProbe
   return {ok:false,code:list.status,detail:`GitLab returned HTTP ${list.status}. Check the service URL and the token.`};
  }
  const base=serviceBase(c.endpoint),headers:Record<string,string>={Accept:'application/json'};
- const optionalToken=()=>store.vaultStatus().credentials.includes(name)?store.readCredential(name):undefined;
  if(name==='Outline'&&store.vaultStatus().credentials.includes('Outline'))return await probeOutline(base,store.readCredential('Outline'),c.scope,fetcher,signal);
  let path='',method:'GET'|'POST'='GET',body:string|undefined,format:'json'|'text'='json',check:(v:any)=>boolean=()=>true,detail='';
  switch(name){

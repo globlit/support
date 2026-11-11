@@ -18,9 +18,9 @@ export function errorRecovery(message:string,context?:ConnectionName):RecoveryAc
  if(/rate.limit|usage allowance|insufficient_quota|usage_limit_exceeded|temporarily unavailable|provider could not process|provider rejected the model request|signing in again will not|response reached its output limit/i.test(m))return logs(context??(/provider|ChatGPT|Claude/i.test(m)?'Model':undefined));
  // Changed settings need a fresh read, never a write retry.
  if(/changed.*(?:review|refresh|again)|(?:ticket|plan|approval|source|session).*(?:changed|stale)|remote status before retry|pending.*(?:write|creation)|namespace excluded/i.test(m))return null;
- if(/^(?:Continue with ChatGPT|ChatGPT sign-in requires|ChatGPT authentication expired|ChatGPT token exchange|This account has not granted ChatGPT|Sign in to Claude Code|Local Claude requires|Set the absolute path to the Claude|Claude executable|Could not start Claude CLI|Claude CLI could not report login status|Save an API key for the selected model|Select a model from this ChatGPT|Enable Model|The local Claude connection)/i.test(m)||/Settings\s*→\s*Model|selected account|selected model provider/i.test(m))return model();
+ if(/^(?:Continue with ChatGPT|ChatGPT sign-in requires|ChatGPT authentication expired|ChatGPT token exchange|This account has not granted ChatGPT|The Claude subscription|Claude Code in the sandbox|Set SUPPORT_CLAUDE_ACCESS_PATH|Save an API key for the selected model|Select a model from this ChatGPT|Enable Model|The local Claude connection)/i.test(m)||/Settings\s*→\s*Model|selected account|selected model provider/i.test(m))return model();
  if(/^(?:YouTrack rejected the token|The token cannot read this YouTrack resource)/i.test(m))return credentials('YouTrack','Review YouTrack token');
- if(/rejected.*(?:credential|API key)|authentication expired|sign.in (?:expired|required|failed)|check login or usage in Claude Code/i.test(m))return context==='Model'||/ChatGPT|Claude|provider/i.test(m)?model():context&&context!=='Kubernetes'?credentials(context):null;
+ if(/rejected.*(?:credential|API key)|authentication expired|sign.in (?:expired|required|failed)|check login or usage in Claude Code|sign in inside the sandbox/i.test(m))return context==='Model'||/ChatGPT|Claude|provider/i.test(m)?model():context&&context!=='Kubernetes'?credentials(context):null;
  if(context==='Model'&&/^(?:Connection returned HTTP|Use HTTPS for model and tool)/.test(m))return logs('Model');
  const named=services.find(tool=>new RegExp('\\b'+tool+'\\b','i').test(m));
  const tool=named??context;
@@ -32,11 +32,8 @@ export function errorRecovery(message:string,context?:ConnectionName):RecoveryAc
  return null;
 }
 
-/** Older stored failures sometimes mention the former location of model credentials. */
+/** Rewrites the message of a model configuration failure into the setting that fixes it. */
 export function recoveryMessage(message:string){
- if(message==='ChatGPT response failed or reached a limit. Check your ChatGPT usage or sign in again. No result was applied.')return 'This earlier ChatGPT request failed without a detailed error. Review the model logs before retrying. No result was applied.';
- if(message==='Save the Model credential in the Vault first.')return 'Add the model API key in Settings → Model.';
- if(message==='Save the ChatGPT credential in the Vault first.')return 'Connect your ChatGPT account in Settings → Model.';
  if(message==='Enable Model in Connections and set its API base URL, model ID and vault API key.')return 'Configure and enable the model in Settings → Model. Select a model and connect an account or add its API key.';
  return message;
 }

@@ -35,7 +35,7 @@ test('local shell needs no startup token, but every workspace API requires a bro
   for(const headers of [{Origin:'https://attacker.test'},{'Sec-Fetch-Site':'cross-site'},{'Sec-Fetch-Site':'same-site'}] as Record<string,string>[])assert.equal((await c.get('/api/session',headers)).status,403);
   const badHost=await new Promise<number>((resolve,reject)=>{const r=request(f.origin+'/api/session',{headers:{Host:'attacker.test','X-Forwarded-Host':new URL(f.origin).host}},res=>{res.resume();resolve(res.statusCode!)});r.on('error',reject);r.end()});assert.equal(badHost,403);
   const init=await c.post('/api/vault',{action:'initialize',passphrase});assert.equal(init.status,200);assert.match(init.headers.get('set-cookie')!,/HttpOnly; SameSite=Lax/);
-  const snapshot=await (await c.get('/api/state')).json();assert.deepEqual(snapshot.tickets,[]);assert.equal(snapshot.vault.unlocked,true);assert.equal(snapshot.runtime.deployment,'local');assert.ok(snapshot.runtime.workspaceId);assert.equal(snapshot.runtime.principal.role,'owner');
+  const snapshot=await (await c.get('/api/state')).json();assert.equal('tickets' in snapshot,false);assert.equal(snapshot.vault.unlocked,true);assert.equal(snapshot.runtime.deployment,'local');assert.ok(snapshot.runtime.workspaceId);assert.equal(snapshot.runtime.principal.role,'owner');
   assert.equal((await fetch(f.origin+'/api/state',{headers:{'X-Forwarded-User':'admin','X-Support-CSRF':'forged'}})).status,401);
   assert.equal((await c.post('/api/chatgpt/cancel',{}, {'X-Support-CSRF':''})).status,403);
   assert.equal((await c.post('/api/chatgpt/cancel',{}, {'X-Support-CSRF':'a'.repeat(43)})).status,403);

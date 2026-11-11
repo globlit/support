@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {Store} from '../server/store.js';
 import {configuredModelFetch} from '../server/model-api.js';
 import {recordDiagnostic,readLogs} from '../server/diagnostics.js';
-import {dashboard,backfillUsage} from '../server/dashboard.js';
+import {dashboard} from '../server/dashboard.js';
 import {tokenUsage} from '../server/model-telemetry.js';
 
 function fixture(){
@@ -29,17 +29,6 @@ test('token usage survives log pruning and settings saved during a call, and cou
   assert.equal(d.usage?.responses,1);assert.equal(d.usage?.input,105);assert.equal(d.usage?.output,20);assert.equal(d.usage?.webSearches,2);
  }finally{f.close()}
 });
-
-test('usage from earlier log entries is copied once',()=>{
- const f=fixture();
- try{
-  f.store.put('modelUsageBackfilled',false);f.store.db.exec('DELETE FROM model_usage');
-  recordDiagnostic(f.store,{id:'old-1',tool:'Model',operation:'Model usage',status:'ok',durationMs:0,output:'',telemetry:{usage:{input:10,output:3},limits:[],provider:'anthropic',auth:'api_key',model:'m'}});
-  backfillUsage(f.store);backfillUsage(f.store);f.store.put('modelUsageBackfilled',false);backfillUsage(f.store);
-  assert.equal((f.store.db.prepare('SELECT count(*) AS n FROM model_usage').get() as {n:number}).n,1);
- }finally{f.close()}
-});
-
 test('web search requests are read from Claude usage',()=>{
  assert.equal(tokenUsage({input_tokens:1,output_tokens:1,server_tool_use:{web_search_requests:3}},'anthropic')?.webSearches,3);
  assert.equal(tokenUsage({input_tokens:1,output_tokens:1},'anthropic')?.webSearches,undefined);

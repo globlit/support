@@ -26,7 +26,7 @@ async function fixture(){
  async function sourceAction(action:'plan'|'note'|'draft'|'revise'|'approve',text?:string){const d=await am.work(id);return am.action(id,{action,text,revision:d.session.revision,sourceUpdated:d.issue.updated});}
  await sourceAction('plan','1. Inspect development rollout.\n2. Prepare a Flux change.\n3. Validate and retain rollback.\n'+'Detailed check. '.repeat(700));
  await sourceAction('note','Keep the previous image tag.');await sourceAction('draft','Please confirm the intended image.');await sourceAction('approve');
- const source=await am.work(id);source.session.analysis={model:'fixture-model',events:[{at:new Date().toISOString(),text:'Read Prometheus restart rate'},{at:new Date().toISOString(),text:'Read scoped Toolbox pod status'}]};store.saveWorkSession(source.session);
+ const source=await am.work(id);source.session.analysis={model:'fixture-model',events:[{at:new Date().toISOString(),text:'Read Prometheus restart rate'},{at:new Date().toISOString(),text:'Read scoped Kubernetes pod status'}]};store.saveWorkSession(source.session);
  return {id,remote,fetcher,sourceAction,get store(){return store},get am(){return am},get yt(){return yt},get handoff(){return handoff},
   restart(){store.close();store=new Store(dir);store.unlock('temporary test passphrase');am=new Alertmanager(store,fetcher);yt=new YouTrack(store,fetcher);handoff=new AlertHandoffs(store,am,yt);},
   done(){store.close();rmSync(dir,{recursive:true,force:true});}};

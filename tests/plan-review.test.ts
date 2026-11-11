@@ -14,7 +14,6 @@ test('plan history stays in selector; only latest body and approval are shown',(
 test('selected passages use compact rich previews instead of manufactured blockquotes',()=>{
  const html=renderToStaticMarkup(createElement(PlanComment,{note:{id:'note-1',at:'2026-11-07T12:00:00Z',text:'Revision requested: [Plan v1]\nRequested change:\nCheck this',annotation:{version:1,kind:'comment',quote:'Service health checks',markdown:'**Service** *health* `checks`\n\n- [x] Ready\n- Check logs\n\n```sh\nkubectl get pods\n```'}},queued:true,disabled:false,onDelete:()=>{}}));
  assert.match(html,/<strong>Service<\/strong>/);assert.match(html,/<em>health<\/em>/);assert.match(html,/<code>checks<\/code>/);assert.match(html,/type="checkbox"/);assert.match(html,/language-sh/);assert.doesNotMatch(html,/<blockquote/);assert.match(html,/Delete plan comment/);
- const legacy=renderToStaticMarkup(createElement(PlanComment,{note:{at:'2026-11-07T12:00:00Z',text:'Revision requested: [Plan v1]\nSelected text:\n> Prometheus\n\nRequested change:\nRecheck'},queued:true,disabled:false,onDelete:()=>{}}));assert.match(legacy,/<span>Prometheus<\/span>/);assert.doesNotMatch(legacy,/<blockquote/);
 });
 
 test('both plan approval controls honor pending revisions, editing and existing approval guards',()=>{

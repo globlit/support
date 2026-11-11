@@ -1,6 +1,5 @@
 import {createServer,type IncomingMessage,type Server,type ServerResponse} from 'node:http';
 import {randomBytes} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
 import {z} from 'zod';
 import {AppError,type Store} from './store.js';
 import {modelKey} from './model-api.js';
@@ -34,7 +33,7 @@ export const resultText=(value:unknown)=>{const t=typeof value==='string'?value:
 /**
  * HTTP server on the relay address, reachable from the agent sandbox only. Each path starts with a session token
  * that is valid while its session runs:
- * - `/<token>/v1/messages`: model proxy. The placeholder credential of the sandbox is replaced by the real one.
+ * - `/<token>/v1/messages`: model proxy for API key mode. The placeholder credential of the sandbox is replaced by the key of the Vault.
  * - `/<token>/mcp`: Support tools over MCP (streamable HTTP, JSON responses).
  * - `/<token>/tools` and `/<token>/tools/<name>`: the same tools as plain HTTP, for scripts.
  * - `/<token>/kubeconfig`: kubeconfig of the enabled Kubernetes contexts, pointing at the routes below.
@@ -42,7 +41,7 @@ export const resultText=(value:unknown)=>{const t=typeof value==='string'?value:
  */
 export class AgentGateway {
  private sessions=new Map<string,GatewaySession>();private server?:Server;private address?:string;private port?:number;
- constructor(private store:Store,private fetcher:typeof fetch=fetch,private tokenFile=process.env.SUPPORT_CLAUDE_TOKEN_FILE){}
+ constructor(private store:Store,private fetcher:typeof fetch=fetch){}
  get listening(){return !!this.port;}
  listen(address:string,port=7072){
   return new Promise<number>((resolve,reject)=>{
@@ -60,15 +59,12 @@ export class AgentGateway {
   return {token,url:`http://${this.address}:${this.port}/${token}`};
  }
  release(token:string){this.sessions.delete(token);}
- /** Credential header for the model provider, by connection mode. */
+ /** Upstream and credential header of the model provider. Only API key mode uses the gateway. */
  private async credential():Promise<{upstream:URL;headers:Record<string,string>}>{
   const c=this.store.snapshot().config;
   if(c.modelProvider!=='anthropic')throw new AppError(400,'The agent engine requires the Claude provider.');
-  if(c.modelAuth==='api_key'){const base=new URL(c.connections.Model.endpoint.replace(/\/+$/,'')+'/');return {upstream:base,headers:{'x-api-key':await modelKey(this.store)}};}
-  if(!this.tokenFile)throw new AppError(503,'No Claude subscription token is available to Support. Set SUPPORT_CLAUDE_TOKEN_FILE.');
-  const token=(await readFile(this.tokenFile,'utf8').catch(()=>{throw new AppError(503,'The Claude subscription token file cannot be read.');})).trim();
-  if(!/^[A-Za-z0-9_-]+$/.test(token))throw new AppError(503,'The Claude subscription token file is empty or invalid.');
-  return {upstream:new URL('https://api.anthropic.com/'),headers:{authorization:'Bearer '+token}};
+  if(c.modelAuth!=='api_key')throw new AppError(400,'The model route of the gateway serves API key mode only. The Claude subscription signs in inside the sandbox.');
+  const base=new URL(c.connections.Model.endpoint.replace(/\/+$/,'')+'/');return {upstream:base,headers:{'x-api-key':await modelKey(this.store)}};
  }
  private async handle(req:IncomingMessage,res:ServerResponse){
   try{

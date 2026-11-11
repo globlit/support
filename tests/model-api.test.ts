@@ -40,7 +40,7 @@ test('OpenAI analysis reads a tool and persists only an unapproved plan',async()
  const {Claude}=await import('../server/claude.js');const {YouTrack}=await import('../server/youtrack.js');
  const dir=mkdtempSync(join(tmpdir(),'support-openai-analysis-'));const store=new Store(dir);
  try{
-  store.unlock('analysis test passphrase',true);const s=store.snapshot();store.config({...s.config,modelProvider:'openai',connections:{...s.config.connections,Model:{enabled:true,endpoint:'https://model.internal',scope:'account-model',path:''},Prometheus:{enabled:true,endpoint:'https://metrics.internal',scope:'',path:''}}},s.configRevision);store.credential('Model','openai-test-key');
+  store.unlock('analysis test passphrase',true);const s=store.snapshot();store.config({...s.config,modelProvider:'openai',connections:{...s.config.connections,Model:{enabled:true,endpoint:'https://model.internal',scope:'account-model',path:''},Prometheus:{enabled:true,endpoint:'',scope:'',path:''}},prometheusSources:[{id:'legacy',name:'prometheus',kind:'url',endpoint:'https://metrics.internal'}]},s.configRevision);store.credential('Model','openai-test-key');
   const issue={id:'3-0',key:'LAB-1',title:'Test',description:'Manual fixture',updated:1000,resolved:false,status:'Open',severity:'Low',assignee:'',project:'LAB',fields:{},url:'https://yt.internal/issue/LAB-1',connection:'fixture'};
   const source={issue:async()=>issue,work:async()=>({issue,session:store.workSession(issue)})};let calls=0;
   const ai=new Claude(store,new YouTrack(store),async(url,init)=>{

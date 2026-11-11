@@ -4,7 +4,7 @@ import {serviceBase} from './gitlab.js';
 import {serverAuthHeaders} from './service-auth.js';
 import {Grafana,grafanaAvailable,readJSON} from './grafana.js';
 import {enabledContexts,kubernetesJSON,kubernetesTarget} from './kubernetes.js';
-import {prometheusCredential,type Config,type PrometheusSource} from '../src/model.js';
+import {type Config,type PrometheusSource} from '../src/model.js';
 type TunnelSource=Extract<PrometheusSource,{kind:'tunnel'}>;
 
 /** Prometheus HTTP API endpoints that `prometheus_api` may read. All are GET requests under /api/v1. */

@@ -1,6 +1,6 @@
 import {test} from './authenticated-fixture.js';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {TestStore as Store} from './authenticated-fixture.js';
@@ -27,7 +27,7 @@ test('the gateway replaces the placeholder credential, records usage, and serves
  const upstream=(async(input:RequestInfo|URL,init?:RequestInit)=>{seen.push({url:String(input),headers:init?.headers as Record<string,string>,body:String(init?.body)});
   const sse='event: message_start\ndata: {"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":12,"cache_read_input_tokens":3,"output_tokens":1}}}\n\nevent: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":7}}\n\n';
   return new Response(sse,{headers:{'content-type':'text/event-stream'}});}) as typeof fetch;
- const gw=new AgentGateway(f.store,upstream,undefined);
+ const gw=new AgentGateway(f.store,upstream);
  try{
   await gw.listen('127.0.0.1',0);const calls:unknown[]=[];const s=gw.register({runId:'r1',toolset:stubToolset(calls)});
   const r=await fetch(s.url+'/v1/messages?beta=true',{method:'POST',headers:{authorization:'Bearer placeholder','x-api-key':'placeholder','anthropic-beta':'x','content-type':'application/json'},body:'{"stream":true}'});
@@ -50,11 +50,11 @@ test('the gateway replaces the placeholder credential, records usage, and serves
  }finally{gw.close();f.done();}
 });
 
-test('in subscription mode the gateway sends the provisioned OAuth token',async()=>{
- const f=fixture();const tokenFile=join(f.dir,'token');writeFileSync(tokenFile,'oauth-real-token\n');
- const s0=f.store.snapshot();f.store.config({...s0.config,modelAuth:'claude_cli'},s0.configRevision);
- let auth='';const gw=new AgentGateway(f.store,(async(_u:RequestInfo|URL,init?:RequestInit)=>{auth=(init?.headers as Record<string,string>).authorization;return Response.json({usage:{input_tokens:1,output_tokens:1}});}) as typeof fetch,tokenFile);
- try{await gw.listen('127.0.0.1',0);const s=gw.register({runId:'r',toolset:stubToolset()});await (await fetch(s.url+'/v1/messages',{method:'POST',headers:{authorization:'Bearer placeholder'},body:'{}'})).text();assert.equal(auth,'Bearer oauth-real-token');}
+test('in subscription mode the gateway refuses the model route and sends nothing upstream',async()=>{
+ const f=fixture();
+ const s0=f.store.snapshot();f.store.config({...s0.config,modelAuth:'claude_subscription'},s0.configRevision);
+ let calls=0;const gw=new AgentGateway(f.store,(async()=>{calls++;return Response.json({});}) as typeof fetch);
+ try{await gw.listen('127.0.0.1',0);const s=gw.register({runId:'r',toolset:stubToolset()});const r=await fetch(s.url+'/v1/messages',{method:'POST',headers:{authorization:'Bearer placeholder'},body:'{}'});assert.equal(r.status,400);assert.match((await r.json() as {error:string}).error,/API key mode only/);assert.equal(calls,0);}
  finally{gw.close();f.done();}
 });
 
@@ -63,8 +63,8 @@ test('usage is read from non-streamed responses too',()=>{
  assert.deepEqual(u.result(),{input:5,output:2,cacheRead:0,cacheWrite:0,webSearches:1,model:'m'});
 });
 
-test('a Claude Code session streams into the run, gets a review on its first result, and becomes a plan after checks',async()=>{
- const f=fixture();const shared=join(f.dir,'shared');
+for(const mode of ['api_key','claude_subscription'] as const)test(`a Claude Code session streams into the run, gets a review on its first result, and becomes a plan after checks (${mode})`,async()=>{
+ const f=fixture();if(mode!=='api_key'){const s0=f.store.snapshot();f.store.config({...s0.config,modelAuth:mode},s0.configRevision);}const shared=join(f.dir,'shared');
  const env={SUPPORT_SANDBOX_URL:process.env.SUPPORT_SANDBOX_URL,SUPPORT_CLAUDE_ACCESS_PATH:process.env.SUPPORT_CLAUDE_ACCESS_PATH};
  process.env.SUPPORT_SANDBOX_URL='http://sandbox.internal';process.env.SUPPORT_CLAUDE_ACCESS_PATH=shared;
  const gw=new AgentGateway(f.store,(async()=>Response.json({})) as typeof fetch);
@@ -97,7 +97,9 @@ test('a Claude Code session streams into the run, gets a review on its first res
   assert.equal(s.state,'ready',s.error);assert.equal(s.outcome,'plan');assert.ok(s.planVersion);assert.equal(s.sessionId,'sess-1');
   assert.match(reviews[0],/^Before this is final/);assert.match(reviews[1],/^Recorded/);
   assert.ok(started!.cwd.startsWith(shared+'/.support-agent/work/youtrack-INFRA-42'));
-  assert.equal(started!.env.CLAUDE_CONFIG_DIR,shared+'/.claude');assert.equal(started!.env.ANTHROPIC_API_KEY,'support-gateway');
+  assert.equal(started!.env.CLAUDE_CONFIG_DIR,shared+'/.claude');if(mode==='api_key'){assert.equal(started!.env.ANTHROPIC_API_KEY,'support-gateway');assert.ok(started!.env.ANTHROPIC_BASE_URL.startsWith('http://'));}
+  else for(const key of ['ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','CLAUDE_CODE_OAUTH_TOKEN'])assert.equal(started!.env[key],undefined,key+' is not set: Claude Code signs in by itself in the sandbox');
+  assert.ok(started!.env.SUPPORT_TOOLS_URL.startsWith('http://'));assert.equal(started!.env.CLAUDE_CODE_OAUTH_TOKEN,undefined);
   assert.ok(!JSON.stringify(started).includes('Model-private-credential'),'the real credential never reaches the sandbox');
   assert.ok(!JSON.stringify(started!.input).includes('never-send-this'),'secret-looking ticket text is redacted');
   assert.ok(s.events.some(e=>e.tool==='Bash'&&e.status==='complete'&&e.result==='policy deny-all found'));

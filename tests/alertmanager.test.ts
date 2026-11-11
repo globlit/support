@@ -74,7 +74,7 @@ test('stored and model-visible alert content redacts vault values and sensitive 
  }finally{f.done();}
 });
 test('Claude investigates alerts with read tools, saves plans for review, and supports revisions',async()=>{
- const f=fixture();try{const s=f.store.snapshot();f.store.config({...s.config,connections:{...s.config.connections,Prometheus:{enabled:true,endpoint:'https://metrics.internal',scope:'',path:''}}},s.configRevision);await f.alerts.poll();let turns=0,reads=0;
+ const f=fixture();try{const s=f.store.snapshot();f.store.config({...s.config,connections:{...s.config.connections,Prometheus:{enabled:true,endpoint:'',scope:'',path:''}},prometheusSources:[{id:'legacy',name:'prometheus',kind:'url',endpoint:'https://metrics.internal'}]},s.configRevision);await f.alerts.poll();let turns=0,reads=0;
   const c=new Claude(f.store,new YouTrack(f.store),(async(url,options)=>{const u=new URL(String(url));if(u.hostname==='metrics.internal'){reads++;assert.equal(options?.method,'GET');return Response.json({status:'success',data:{result:[]}});}assert.equal(u.hostname,'model.internal');assert.ok(!String(options?.body).includes('private-bearer'));if(turns++===0)return Response.json({stop_reason:'tool_use',content:[{type:'tool_use',id:'read',name:'prometheus_query',input:{query:'up'}}]});return plan();}) as typeof fetch);
   await f.allow();let d=await f.alerts.work(f.alerts.queue().cases[0].id);const run=await f.alerts.analyze(d.issue.id,{revision:d.session.revision,sourceUpdated:d.issue.updated},c);assert.equal((await wait(c,run.id)).state,'ready');assert.equal(reads,1);
   d=await f.alerts.work(d.issue.id);assert.equal(d.session.plans.length,1);assert.equal(d.session.approval,null);

@@ -34,20 +34,3 @@ export function AgentComposer({targets,target,onTarget,reply,onClearReply,onSent
   </div>
  </div>;
 }
-
-/** Questions the agent asked during a run, with their answers, and a message box for the run while it is running. */
-export function RunConversation({run}:{run:{id:string;title?:string;state:string;questions?:{id:string;text:string;at:string;answer?:{text:string}}[];messages?:{id:string;text:string;at:string;delivered?:string;replyTo?:string}[]}}){
- const [reply,setReply]=useState<Reply|null>(null);
- const questions=run.questions??[],messages=(run.messages??[]).filter(m=>!m.replyTo);
- const live=run.state==='running';
- if(!live&&!questions.length&&!messages.length)return null;
- return <div className="run-conversation">
-  {questions.map(q=><div key={q.id} className={'run-question'+(q.answer?' answered':'')}>
-   <span className="run-question-label">Agent question</span><p>{q.text}</p>
-   {(()=>{const pending=run.messages?.find(m=>m.replyTo===q.id);return q.answer||pending?<p className="run-answer"><span>Your answer</span>{q.answer?.text??pending!.text}{!q.answer&&<small>queued</small>}</p>:null;})()}
-   {q.answer||run.messages?.some(m=>m.replyTo===q.id)?null:live?<button type="button" className="text-button" onClick={()=>setReply({id:q.id,text:q.text})}>Reply</button>:<p className="small muted">Not answered. Listed in the plan.</p>}
-  </div>)}
-  {messages.map(m=><p key={m.id} className="run-message"><span>You</span>{m.text}<small>{m.delivered?'delivered':'queued'}</small></p>)}
-  {live&&<AgentComposer compact targets={[{runId:run.id,key:(run.title??'').split(' · ')[0]}]} reply={reply} onClearReply={()=>setReply(null)}/>}
- </div>;
-}

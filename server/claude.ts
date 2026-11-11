@@ -94,6 +94,8 @@ export class Claude {
  activeRunFor(connection:string,id:string){for(const r of this.runs.values())if(r.connection===connection&&r.issueId===id&&r.state==='running'&&this.active.has(r.id))return r;return undefined;}
  /** True while the run is in progress in this process. */
  isActive(runId:string){return this.active.has(runId);}
+ /** Outcome of the latest agent runs. `limit` stays set until a later run succeeds. `resetAt` is an ISO time when the provider reported one. */
+ readonly modelStatus:{lastOkAt?:string;lastError?:string;limit?:{at:string;resetAt?:string}}={};
  cancel(id:string){this.status(id);this.active.get(id)?.abort(stopReason('Stopped by the engineer (Stop run).'));return this.status(id)}
  /** Aborts every running investigation. Returns how many were running. */
  cancelAll(){for(const c of this.active.values())c.abort(stopReason('Stopped by the kill switch (Stop all).'));return this.active.size;}
@@ -117,7 +119,7 @@ export class Claude {
   if(basis&&!['start','over'].includes(basis.kind)&&!agentEngine)throw new AppError(409,'Continuing a session needs the Claude Code engine: Claude provider, agent commands on, and the sandbox and gateway available.');
   const check=()=>{if(agentEngine){if(controller.signal.aborted)throw new AppError(409,'Analysis cancelled.');if(!this.store.key)throw new AppError(409,'The Vault was locked.');if(run.connection)assertAgentWork(this.store,{connection:run.connection,id});return;}if(run.connection){assertAgentWork(this.store,{connection:run.connection,id});const w=this.store.getWorkSession(run.connection,id);if(w&&w.revision!==expected.revision)throw new AppError(409,'Handling or local work changed. Start a new investigation.');}if(controller.signal.aborted)throw new AppError(409,'Analysis cancelled.');if(revision!==this.store.snapshot().configRevision||epoch!==this.store.credentialEpoch||!this.store.key)throw new AppError(409,'Settings or vault changed. Start a new analysis.');};
   try {
-   const key=agentEngine&&config.modelAuth==='claude_cli'?'':await modelKey(this.store);check();
+   const key=agentEngine&&config.modelAuth==='claude_subscription'?'':await modelKey(this.store);check();
    const detail=await source.work(id);assertAgentWork(this.store,detail.issue);check();
    if(detail.issue.resolved||detail.issue.updated!==expected.sourceUpdated||detail.session.revision!==expected.revision)throw new AppError(409,'The ticket or work session changed. Refresh before analyzing.');
    Object.assign(run,{connection:detail.issue.connection,sourceUpdated:detail.issue.updated,sourceFingerprint:detail.issue.sourceFingerprint,model:model.scope,title:`${detail.issue.key} · ${detail.issue.title}`});this.runs.set(run.id,run);this.store.saveInvestigation(run);
@@ -133,7 +135,7 @@ export class Claude {
      :latest?{kind:'recheck',runId:latest.id,text:'Recheck the request with its current data.'}:{kind:'start'};
    }
    run.basedOn={...basis,at:basis.at??run.startedAt};if(basis.runId)run.parentRunId=basis.runId;this.store.saveInvestigation(run);
-   void (agentEngine?this.executeAgent(run,detail.issue,expected.revision,model.scope,config,controller,check,source,run.basedOn):this.execute(run,detail.issue,expected.revision,base,key,model.scope,config,controller,check,source)).finally(()=>{this.active.delete(run.id);release();});
+   void (agentEngine?this.executeAgent(run,detail.issue,model.scope,config,controller,check,source,run.basedOn):this.execute(run,detail.issue,expected.revision,base,key,model.scope,config,controller,check,source)).finally(()=>{this.active.delete(run.id);release();});
    return this.status(run.id);
   } catch(e){this.active.delete(run.id);release();throw e;}
  }
@@ -142,7 +144,7 @@ export class Claude {
   * (or, for a restart, of the run that produced the chosen plan version), so that each run keeps its own session.
   * A result with outcome plan becomes a plan version for review only when the session had successful checks.
   */
- private async executeAgent(run:AnalysisRun,issue:SourceIssue,sessionRevision:number,model:string,config:ReturnType<Store['snapshot']>['config'],controller:AbortController,check:()=>void,source:Pick<YouTrack,'work'|'issue'>,basis:RunBasis){
+ private async executeAgent(run:AnalysisRun,issue:SourceIssue,model:string,config:ReturnType<Store['snapshot']>['config'],controller:AbortController,check:()=>void,source:Pick<YouTrack,'work'|'issue'>,basis:RunBasis){
   run.engine='claude-code';
   // An implementation run attaches its proposals to the approved plan version and creates no new version.
   if(basis.kind==='implement')run.planVersion=basis.planVersion;
@@ -174,7 +176,7 @@ export class Claude {
     resume:sessionId?{sessionId,fork:true}:undefined,
     signal:controller.signal,redact,persist,
     onQuestion:q=>{for(const l of this.questionListeners)l(run,q);},
-    onLimit:resetAt=>{limited=true;limitedUntil=resetAt;}});
+    onLimit:resetAt=>{limited=true;limitedUntil=resetAt;this.modelStatus.limit={at:new Date().toISOString(),resetAt};}});
    check();
    const r=outcome.result;
    if(!r)throw new AppError(502,'The agent ended without a result. Its notes are in the timeline.');
@@ -197,11 +199,11 @@ export class Claude {
     event('Plan ready for engineer review');
    }else if(r.outcome==='plan'){run.outcome='inconclusive';run.report=`${r.report}\n\n> Support did not create a plan version: no check of this session succeeded.`;event('Plan refused: no successful check');}
    else event(r.outcome==='diagnosis'?'Diagnosis ready':r.outcome==='needs_input'?'Questions for the engineer':'Investigation inconclusive');
-   run.state='ready';
+   run.state='ready';this.modelStatus.lastOkAt=new Date().toISOString();this.modelStatus.lastError=undefined;if(!limited)this.modelStatus.limit=undefined;
   }catch(e){
    run.state=controller.signal.aborted?'cancelled':'failed';
    run.error=limited?`The model usage limit was reached${limitedUntil?`. It resets at ${new Date(limitedUntil).toLocaleString('en-GB',{timeZone:config.timezone})}`:''}. The session continues automatically after the reset.`:controller.signal.aborted&&controller.signal.reason instanceof AppError?controller.signal.reason.message:e instanceof AppError?e.message:'The agent session failed.';
-   event(run.error);
+   event(run.error);if(!limited&&!controller.signal.aborted)this.modelStatus.lastError=run.error;
    if(limited&&run.connection)this.scheduleResume(run,limitedUntil);
   }finally{
    clearTimeout(timeout);clearTimeout(saveTimer);run.finishedAt=new Date().toISOString();

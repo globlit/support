@@ -24,7 +24,7 @@ export async function runSandboxCommand({runId,command,timeoutSeconds,signal,onO
  if(!base)throw new AppError(400,'No command sandbox is configured. Set SUPPORT_SANDBOX_URL.');
  let response:Response;
  try{response=await fetcher(new URL('v1/exec',base),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId,command,timeoutSeconds}),signal,redirect:'manual'});}
- catch(e){if(signal.aborted)throw new AppError(409,'Command stopped.');throw new AppError(502,'The command sandbox is unreachable. Check the support-sandbox service.');}
+ catch(e){if(signal.aborted)throw new AppError(409,'Command stopped.');throw new AppError(502,'The command sandbox is unreachable. Check the sandbox service.');}
  if(!response.ok){const text=await response.text().catch(()=>'');let detail='';try{detail=JSON.parse(text).error??''}catch{}throw new AppError(502,`The command sandbox refused the command (HTTP ${response.status}). ${detail}`.trim());}
  if(!response.body)throw new AppError(502,'The command sandbox returned no output.');
  let output='',dropped=false,pending='',exit:Partial<CommandResult>&{code?:number|null}|undefined;
@@ -55,17 +55,18 @@ async function call(path:string,method:string,fetcher:typeof fetch,base=sandboxU
 export async function killAllSandbox(fetcher:typeof fetch=fetch){try{await call('v1/kill-all','POST',fetcher);}catch{}}
 /** Kills the run's commands and deletes its working folder in the sandbox. Errors are ignored. */
 export async function cleanupSandboxRun(runId:string,fetcher:typeof fetch=fetch){if(/^[A-Za-z0-9_-]{1,100}$/.test(runId))try{await call('v1/runs/'+runId,'DELETE',fetcher);}catch{}}
-/** Returns whether the sandbox is configured and answers its health check. */
+/** Returns whether the sandbox is configured and answers its health check, and the time of its last successful answer since Support started. */
 export async function sandboxHealth(fetcher:typeof fetch=fetch){
  if(!sandboxUrl())return {configured:false,reachable:false};
- try{const v=await call('v1/health','GET',fetcher);return {configured:true,reachable:v?.ok===true};}catch{return {configured:true,reachable:false};}
+ try{const v=await call('v1/health','GET',fetcher);if(v?.ok===true)lastSandboxOk=new Date().toISOString();return {configured:true,reachable:v?.ok===true,lastOkAt:lastSandboxOk};}catch{return {configured:true,reachable:false,lastOkAt:lastSandboxOk};}
 }
+let lastSandboxOk:string|undefined;
 
 export type RepoChange={path:string;status:string;content:string|null};
 /** Uploads a repository archive (.tar.gz stream) into the run's folder in the sandbox as repos/<name>. Returns the folder and file count. */
 export async function uploadRepo(runId:string,name:string,archive:ReadableStream<Uint8Array>,signal:AbortSignal,fetcher:typeof fetch=fetch,base=sandboxUrl()){
  if(!base)throw new AppError(400,'No command sandbox is configured. Set SUPPORT_SANDBOX_URL.');
- const response=await fetcher(new URL(`v1/runs/${runId}/repos/${name}`,base),{method:'PUT',headers:{'Content-Type':'application/gzip'},body:archive,duplex:'half',signal,redirect:'manual'} as RequestInit).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the support-sandbox service.');});
+ const response=await fetcher(new URL(`v1/runs/${runId}/repos/${name}`,base),{method:'PUT',headers:{'Content-Type':'application/gzip'},body:archive,duplex:'half',signal,redirect:'manual'} as RequestInit).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the sandbox service.');});
  const value=await response.json().catch(()=>({})) as {path?:string;files?:number;error?:string};
  if(!response.ok)throw new AppError(502,'The sandbox refused the repository: '+(value.error??`HTTP ${response.status}`));
  return {path:value.path??`repos/${name}`,files:value.files??0};
@@ -73,7 +74,7 @@ export async function uploadRepo(runId:string,name:string,archive:ReadableStream
 /** Returns the files changed in a sandbox checkout since its base commit. Content is base64, null for deleted files. */
 export async function repoChanges(runId:string,name:string,fetcher:typeof fetch=fetch,base=sandboxUrl()):Promise<RepoChange[]>{
  if(!base)throw new AppError(400,'No command sandbox is configured. Set SUPPORT_SANDBOX_URL.');
- const response=await fetcher(new URL(`v1/runs/${runId}/repos/${name}/changes`,base),{method:'GET',signal:AbortSignal.timeout(60000),redirect:'manual'}).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the support-sandbox service.');});
+ const response=await fetcher(new URL(`v1/runs/${runId}/repos/${name}/changes`,base),{method:'GET',signal:AbortSignal.timeout(60000),redirect:'manual'}).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the sandbox service.');});
  const text=await boundedText(response,12_000_000);let value:unknown;try{value=JSON.parse(text);}catch{value={};}
  if(!response.ok)throw new AppError(response.status===404?404:400,String((value as {error?:unknown}).error??`The sandbox returned HTTP ${response.status}.`).slice(0,500));
  return changeList.parse(value).files;
@@ -93,7 +94,7 @@ async function boundedText(response:Response,limit:number){
 export async function folderChanges(dir:string,base:string,fetcher:typeof fetch=fetch,url=sandboxUrl()):Promise<RepoChange[]>{
  if(!url)throw new AppError(400,'No command sandbox is configured. Set SUPPORT_SANDBOX_URL.');
  const u=new URL('v1/changes',url);u.searchParams.set('dir',dir);u.searchParams.set('base',base);
- const response=await fetcher(u,{method:'GET',signal:AbortSignal.timeout(60000),redirect:'manual'}).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the support-sandbox service.');});
+ const response=await fetcher(u,{method:'GET',signal:AbortSignal.timeout(60000),redirect:'manual'}).catch(()=>{throw new AppError(502,'The command sandbox is unreachable. Check the sandbox service.');});
  const text=await boundedText(response,12_000_000);let value:unknown;try{value=JSON.parse(text);}catch{value={};}
  if(!response.ok)throw new AppError(response.status===404?404:400,String((value as {error?:unknown}).error??`The sandbox returned HTTP ${response.status}.`).slice(0,500));
  return changeList.parse(value).files;
@@ -108,7 +109,7 @@ export async function runAgentSession({runId,cwd,args,env,input,timeoutSeconds,s
  if(!base)throw new AppError(400,'No command sandbox is configured. Set SUPPORT_SANDBOX_URL.');
  let response:Response;
  try{response=await fetcher(new URL('v1/agent',base),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId,cwd,args,env,timeoutSeconds,input}),signal,redirect:'manual'});}
- catch{if(signal.aborted)throw new AppError(409,'Agent session stopped.');throw new AppError(502,'The command sandbox is unreachable. Check the support-sandbox service.');}
+ catch{if(signal.aborted)throw new AppError(409,'Agent session stopped.');throw new AppError(502,'The command sandbox is unreachable. Check the sandbox service.');}
  if(!response.ok){const text=await boundedText(response,65536).catch(()=>'');let detail='';try{detail=String(JSON.parse(text).error??'')}catch{}throw new AppError(502,`The command sandbox refused the agent session (HTTP ${response.status}). ${detail}`.trim());}
  if(!response.body)throw new AppError(502,'The command sandbox returned no output.');
  const decoder=new TextDecoder();let pending='',stdout='',exit:{code?:number|null;signal?:string|null;timedOut?:boolean;truncated?:boolean}|undefined;

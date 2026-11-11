@@ -12,14 +12,14 @@ test('Vault access errors from every page lead to Vault without depending on the
 });
 test('service credentials route to their connection settings; model API keys and subscription accounts route to Model',()=>{
  for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack'])assert.equal(route(`Save the ${name} credential in the Vault first.`),`#/settings?section=Connections&tool=${name}`);
- for(const message of ['Save the Model credential in the Vault first.','Save the ChatGPT credential in the Vault first.','Continue with ChatGPT in Settings → Model first.','ChatGPT authentication expired or was revoked. Sign in again.','Sign in to Claude Code where Support runs, with your Claude subscription, then check the connection in Settings → Model.','Save an API key for the selected model provider first.'])assert.equal(route(message),'#/settings?section=Model',message);
+ for(const message of ['Continue with ChatGPT in Settings → Model first.','ChatGPT authentication expired or was revoked. Sign in again.','Sign in inside the sandbox: docker compose exec -u admin sandbox claude auth login. Current method: none','Save an API key for the selected model provider first.'])assert.equal(route(message),'#/settings?section=Model',message);
  assert.equal(route('YouTrack rejected the token.','Model'),'#/settings?section=Connections&tool=YouTrack');
  assert.equal(route('Service returned HTTP 401. Check access and configuration.','GitLab'),'#/settings?section=Connections&tool=GitLab');
  assert.equal(route('Connection returned HTTP 403. Check access and endpoint settings.','Model'),'#/logs?step=error&tool=Model');
 });
 test('configuration failures select the actual tool; Kubernetes never asks for a service token',()=>{
  for(const name of ['YouTrack','GitLab','Alertmanager','Prometheus','Outline','Slack','Kubernetes'] as ConnectionName[])assert.equal(route(`Configure and enable ${name} in Connections.`),`#/settings?section=Connections&tool=${name}`);
- for(const message of ['Enable Model in Connections and set its API base URL, model ID and vault API key.','Set the absolute path to the Claude executable in Settings → Model.','Could not start Claude CLI. Check its executable path and installation.'])assert.equal(route(message),'#/settings?section=Model');
+ for(const message of ['Enable Model in Connections and set its API base URL, model ID and vault API key.','Set the absolute path to the Claude executable in Settings → Model.','The Claude subscription runs in the sandbox. Turn on agent commands and make sure the sandbox and gateway are available.','Claude Code in the sandbox did not report a login status. Check that the sandbox image contains Claude Code.','Set SUPPORT_CLAUDE_ACCESS_PATH so Support knows the Claude configuration folder of the sandbox.'])assert.equal(route(message),'#/settings?section=Model');
  assert.equal(route('Kubernetes context prod is not enabled in Support. Enabled contexts: none.'),'#/settings?section=Connections&tool=Kubernetes');
  assert.equal(route('Kubernetes: HTTP 401 unauthorized.'),'#/settings?section=Connections&tool=Kubernetes');
 });
@@ -30,8 +30,8 @@ test('stale approvals, ambiguous writes, policy blocks and unknown errors never 
  for(const message of ['Ticket or plan changed. Review again.','Settings or credentials changed. Review again.','Connection interrupted. Check remote status before retrying any write.','Namespace excluded by Settings.','The current approval is required.','Cross-origin API access is not allowed.','Unexpected failure'])assert.equal(route(message,'GitLab'),null,message);
 });
 test('error banners retain details, render safe actions and never submit forms or retry writes',()=>{
- const html=renderToStaticMarkup(createElement(ErrorNotice,{message:'Save the Model credential in the Vault first.',context:'Model'}));
- assert.match(html,/Add the model API key in Settings/);assert.match(html,/Open Model settings/);assert.match(html,/type="button"/);assert.doesNotMatch(html,/type="submit"|>Refresh</);
+ const html=renderToStaticMarkup(createElement(ErrorNotice,{message:'Enable Model in Connections and set its API base URL, model ID and vault API key.',context:'Model'}));
+ assert.match(html,/Configure and enable the model in Settings/);assert.match(html,/Open Model settings/);assert.match(html,/type="button"/);assert.doesNotMatch(html,/type="submit"|>Refresh</);
  assert.equal(recoveryMessage('YouTrack rejected the token.'),'YouTrack rejected the token.');
  const unsafe=renderToStaticMarkup(createElement(ErrorNotice,{message:'<script>bad()</script> https://evil.example',context:'GitLab'}));assert.doesNotMatch(unsafe,/<script>|href=/);
 });

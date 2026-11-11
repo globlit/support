@@ -26,11 +26,6 @@ RUN set -eu; \
 
 RUN mkdir -p /app /data && chown node:node /app /data
 USER node
-ENV PATH=/home/node/.local/bin:$PATH \
-    DISABLE_AUTOUPDATER=1
-
-# Claude Code CLI for the "Claude subscription" model sign-in. Not needed with an API key.
-RUN curl -fsSL --proto '=https' https://claude.ai/install.sh | bash && claude --version
 
 WORKDIR /app
 COPY --chown=node:node package.json package-lock.json ./

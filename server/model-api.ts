@@ -1,6 +1,5 @@
 import {tokenUsage,rateLimits} from './model-telemetry.js';
 import type {TokenUsage,RateLimit} from '../src/telemetry-model.js';
-import {claudeCliFetch,claudeCliStatus} from './claude-cli.js';
 import {recordDiagnostic} from './diagnostics.js';
 import {responseFailure,readFailureBody,type ResponseFailure} from './model-errors.js';
 import {chatGPT} from './chatgpt.js';
@@ -9,7 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {Store,AppError} from './store.js';
 export type ModelProvider='anthropic'|'openai';
 export async function modelKey(store:Store){
- const c=store.snapshot().config;if(c.modelAuth==='claude_cli'){if(!store.key)throw new AppError(423,'Unlock the Vault first.');if(c.modelProvider!=='anthropic')throw new AppError(400,'Local Claude requires the Claude provider.');const status=await claudeCliStatus(c.connections.Model.path);if(!status.connected)throw new AppError(401,'Sign in to Claude Code where Support runs, with your Claude subscription, then check the connection in Settings → Model.');return 'local-cli-no-api-token';}if(c.modelAuth==='chatgpt'){if(c.modelProvider!=='openai'||c.connections.Model.endpoint!=='https://api.openai.com')throw new AppError(400,'ChatGPT sign-in requires OpenAI at https://api.openai.com.');return chatGPT(store).access();}
+ const c=store.snapshot().config;if(c.modelAuth==='claude_subscription')throw new AppError(400,'The Claude subscription runs in the sandbox. Turn on agent commands and make sure the sandbox and gateway are available.');if(c.modelAuth==='chatgpt'){if(c.modelProvider!=='openai'||c.connections.Model.endpoint!=='https://api.openai.com')throw new AppError(400,'ChatGPT sign-in requires OpenAI at https://api.openai.com.');return chatGPT(store).access();}
  const provider=store.snapshot().config.modelProvider;
  if((store.get<string>('modelCredentialProvider')??'anthropic')!==provider)throw new AppError(400,'Save an API key for the selected model provider first.');
  return store.readCredential('Model');
@@ -75,7 +74,7 @@ export function configuredModelFetch(store:Store,fetcher:typeof fetch=fetch):typ
   const id=randomUUID();
   if(usage)try{store.recordUsage({id,provider:c.modelProvider,auth:c.modelAuth,model:c.connections.Model.scope,...usage,limits});}catch{}
   if(store.vaultEpoch!==epoch)return;recordDiagnostic(store,{id,tool:'Model',operation:'Model usage',status:'ok',durationMs:0,output:usage?'Provider-reported token counts. No prompt or response text retained.':'Token usage not reported.',telemetry:{usage,limits,provider:c.modelProvider,auth:c.modelAuth,model:c.connections.Model.scope}},secrets);};
- if(c.modelAuth==='claude_cli'){if(c.modelProvider!=='anthropic')throw new AppError(400,'Local Claude requires the Claude provider.');const transport=claudeCliFetch(c.connections.Model.path,undefined,secrets,usage=>{onUsage(usage,[]);});return async(url,init)=>{try{return await transport(url,init)}catch(e){if(store.vaultEpoch===epoch)recordDiagnostic(store,{tool:'Model',operation:'Claude CLI failure',status:'error',durationMs:0,output:e instanceof AppError?e.message:'Local Claude request failed.'},secrets);throw e;}};}
+ if(c.modelAuth==='claude_subscription')throw new AppError(400,'The Claude subscription runs in the sandbox. Turn on agent commands and make sure the sandbox and gateway are available.');
  return modelFetch(c.modelProvider,fetcher,c.modelAuth==='chatgpt',{secrets,onUsage,onFailure:failure=>{
   if(store.vaultEpoch===epoch)recordDiagnostic(store,{tool:'Model',operation:c.modelProvider==='anthropic'?'Claude API failure':'Responses failure',status:'error',durationMs:0,code:failure.httpStatus,output:JSON.stringify(failure)},secrets);
  }});

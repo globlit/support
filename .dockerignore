@@ -4,3 +4,4 @@ dist
 .support-data
 .env*
 *.log
+__pycache__

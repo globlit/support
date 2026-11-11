@@ -5,7 +5,7 @@ import {z} from 'zod';
 import {boundedJSON} from './gitlab.js';
 import type {ResolvedState,TicketField} from '../src/model.js';
 import {AppError,Store} from './store.js';
-import type {SourceIssue,WorkSession,PlanAnnotation} from '../src/model.js';
+import type {SourceIssue,PlanAnnotation} from '../src/model.js';
 /** YouTrack project. YouTrack may omit `archived` for projects that are not archived; a missing value means false. */
 export const projectSchema=z.object({id:z.string().min(1),name:z.string(),shortName:z.string(),archived:z.boolean().nullish().transform(v=>v===true)});
 const alertIssueSchema=z.object({id:z.string().min(1),idReadable:z.string().min(1),description:z.string().nullable(),project:z.object({id:z.string().min(1)})});

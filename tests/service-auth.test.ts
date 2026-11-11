@@ -1,8 +1,8 @@
 import {test} from './authenticated-fixture.js';
 import assert from 'node:assert/strict';
-import {existsSync,mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {dirname,join} from 'node:path';
+import {join} from 'node:path';
 import {TestStore as Store} from './authenticated-fixture.js';
 import {Alertmanager} from '../server/alertmanager.js';
 import {serviceProbe} from '../server/health-poller.js';
@@ -12,7 +12,7 @@ const basic=(username:string,password:string)=>'Basic '+Buffer.from(username+':'
 function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'support-service-auth-')),store=new Store(dir);store.unlock('temporary test passphrase',true);
  const s=store.snapshot();
- store.config({...s.config,connections:{...s.config.connections,Alertmanager:{enabled:true,endpoint:'https://alerts.internal',scope:'',path:''},Prometheus:{enabled:true,endpoint:'https://metrics.internal',scope:'',path:''}}},s.configRevision);
+ store.config({...s.config,connections:{...s.config.connections,Alertmanager:{enabled:true,endpoint:'https://alerts.internal',scope:'',path:''},Prometheus:{enabled:true,endpoint:'',scope:'',path:''}},prometheusSources:[{id:'legacy',name:'prometheus',kind:'url',endpoint:'https://metrics.internal'}]},s.configRevision);
  const save=(input:unknown)=>{const v=credentialInput.parse(input);if('remove' in v)return store.removeCredential(v.name);if('kubernetes' in v)return store.credential(v.name,JSON.stringify(v.kubernetes));return store.credential(v.name,storedCredential(v));};
  return {store,save,done(){store.close();rmSync(dir,{recursive:true,force:true});}};
 }
@@ -79,10 +79,9 @@ test('Kubernetes context tokens are saved per context, validated, redacted, and 
  const f=fixture();try{
   const s=f.store.snapshot();f.store.config({...s.config,kubernetesContexts:[{name:'dev',server:'https://dev.internal:6443',enabled:true}]},s.configRevision);
   f.save({name:'Kubernetes/dev',kubernetes:{token:'kube-secret-token-123'}});
-  f.store.credential('Toolbox','{"v":1}');
-  assert.ok(f.store.secretValues().includes('kube-secret-token-123'));
+    assert.ok(f.store.secretValues().includes('kube-secret-token-123'));
   const next=f.store.snapshot();f.store.config({...next.config,kubernetesContexts:[]},next.configRevision);
-  assert.deepEqual(f.store.vaultStatus().credentials.filter(c=>c.startsWith('Kubernetes')||c==='Toolbox'),[]);
+  assert.deepEqual(f.store.vaultStatus().credentials.filter(c=>c.startsWith('Kubernetes')),[]);
  }finally{f.done();}
 });
 

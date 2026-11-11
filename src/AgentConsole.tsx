@@ -101,7 +101,7 @@ export function AgentConsole(){
   {selected&&<p className="agent-run-title" title={selected.title}>{selected.title}</p>}
   {halted&&<p className="agent-banner">The agent is stopped. Investigations, commands and tunnels were stopped, and new runs are blocked until you resume.</p>}
   {state&&!state.sandbox.configured&&<p className="agent-banner muted">No command sandbox is configured, so the agent cannot run commands.</p>}
-  {state?.sandbox.configured&&!state.sandbox.reachable&&<p className="agent-banner">The command sandbox is unreachable. Check the support-sandbox service.</p>}
+  {state?.sandbox.configured&&!state.sandbox.reachable&&<p className="agent-banner">The command sandbox is unreachable. Check the sandbox service.</p>}
   {filter==='queue'?<QueueView state={state}/>:<>
   <div className="agent-log" role="log" aria-label="Agent activity" ref={body} onScroll={e=>{const el=e.currentTarget;setFollow(el.scrollHeight-el.scrollTop-el.clientHeight<24);}}>
    {shown.length?shown.map((e,i)=><Fragment key={e.seq}>

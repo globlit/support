@@ -3,8 +3,7 @@ import {Markdown} from './Markdown';
 import type {WorkSession} from './model';
 export function PlanComment({note,queued,disabled,onDelete}:{note:WorkSession['notes'][number];queued:boolean;disabled:boolean;onDelete:()=>void}){
  const [expanded,setExpanded]=useState(false);
- const legacyQuote=note.text.match(/\nSelected text:\n([\s\S]*?)\n\nRequested change:\n/)?.[1]?.replace(/^> ?/gm,'');
- const quote=note.annotation?.quote??legacyQuote??'',rich=note.annotation?.markdown;
+ const quote=note.annotation?.quote??'',rich=note.annotation?.markdown;
  const message=note.text.split('\nRequested change:\n').slice(1).join('\nRequested change:\n')||note.text.replace(/^Revision requested: (?:\[Plan v\d+\]\n)?/,'');
  const long=quote.length>180||quote.split('\n').length>3;
  return <article className="plan-comment">

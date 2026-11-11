@@ -4,7 +4,6 @@
 #            Only support reaches it, on the agent network.
 # Variables:
 #   CLAUDE_ACCESS_PATH       Host folder shared with agent sessions, mounted at the same path. Default: ~/claude_access.
-#   SUPPORT_PROVISION_PATH   Host folder with the claude_oauth_token file. Default: ~/.config/support.
 name: support
 
 x-hardening: &hardening
@@ -23,17 +22,14 @@ services:
     image: support:local
     environment:
       SUPPORT_SANDBOX_URL: http://172.31.251.20:7070
-      # Address of the Git proxy (7071), the agent gateway (7072) and the tunnel relays.
+      # Address of the Git proxy (7071) and the agent gateway (7072).
       SUPPORT_RELAY_BIND: 172.31.251.10
-      # Claude subscription token that the agent gateway adds to model requests. The sandbox never receives it.
-      SUPPORT_CLAUDE_TOKEN_FILE: /run/support/claude_oauth_token
       # Shared folder of agent sessions, at the same path as on the host. Read-only here.
       SUPPORT_CLAUDE_ACCESS_PATH: ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}
     ports:
       - "127.0.0.1:4173:4173"
     volumes:
       - support-data:/data
-      - ${SUPPORT_PROVISION_PATH:-${HOME}/.config/support}:/run/support:ro
       - ${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}:${CLAUDE_ACCESS_PATH:-${HOME}/claude_access}:ro
     networks:
       agent:
