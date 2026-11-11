@@ -279,3 +279,48 @@ export async function relayPorts(locals:number[],tunnel:ChildProcess,address=pro
  if(tunnel.exitCode!==null||tunnel.signalCode!==null)close();else tunnel.once('exit',close);
  return relays;
 }
+
+const kubectlVerbs=new Set(['get','logs','contexts','resources','api-resources','config']);
+/**
+ * Runs a kubectl-style read through Toolbox for the agent's kubectl command. Accepts `get`, `logs`, `api-resources`
+ * (the Toolbox catalog), `contexts` and `config get-contexts`. Toolbox applies its policy: allowed contexts,
+ * namespaces and resources, sanitized output. Output flags other than JSON are replaced by JSON. Returns kubectl-like
+ * stdout, stderr and exit code: the object data as JSON, or the log text.
+ */
+export async function toolboxKubectl(config:Config,argv:unknown,signal:AbortSignal,files:ToolboxFiles|null){
+ const args=z.array(z.string().max(2000)).max(40).parse(argv);
+ const verb=args[0];
+ const usage='Supported: kubectl get, kubectl logs, kubectl api-resources, kubectl config get-contexts. Writes, exec, port-forward and describe are not available. Use get -o json and the events resource instead of describe, and toolbox_port_forward for tunnels.';
+ if(!verb||verb==='-h'||verb==='--help')return {stdout:usage,stderr:'',code:0};
+ if(!kubectlVerbs.has(verb))return {stdout:'',stderr:`kubectl ${verb} is not available in the agent sandbox. ${usage}`,code:1};
+ if(!config.connections.Toolbox.enabled)return {stdout:'',stderr:'Toolbox is disabled in Settings → Connections → Toolbox.',code:1};
+ let rest=args.slice(1);
+ let mode=verb;
+ if(verb==='config'){if(rest[0]!=='get-contexts'&&rest[0]!=='current-context')return {stdout:'',stderr:`kubectl config ${rest[0]??''} is not available. Use kubectl config get-contexts.`,code:1};mode='contexts';rest=[];}
+ if(verb==='api-resources'){mode='resources';rest=rest.filter(a=>a.startsWith('--context'));}
+ if(mode==='get'){
+  const kept:string[]=[];
+  for(let i=0;i<rest.length;i++){const a=rest[i];if(a==='-o'||a==='--output'){i++;continue;}if(a.startsWith('-o')&&a.length>2||a.startsWith('--output='))continue;kept.push(a);}
+  rest=[...kept,'-o','json'];
+ }
+ const binary=toolboxBinary();let run:Awaited<ReturnType<typeof toolboxRunConfig>>|undefined;
+ try{
+  run=await toolboxRunConfig(config,files);
+  const result=await new Promise<{stdout:string;stderr:string;code:number}>((resolve,reject)=>{
+   execFile(binary,['--config',run!.configPath,'kubectl',mode,...rest],{signal,timeout:60000,maxBuffer:16_000_000,encoding:'utf8',shell:false,env:run!.env},(error,stdout,stderr)=>{
+    const code=(error as {code?:unknown}|null)?.code;
+    if(error&&typeof code!=='number')return reject(error);
+    resolve({stdout:String(stdout),stderr:String(stderr),code:typeof code==='number'?code:0});
+   });
+  });
+  let value:{error?:string;data?:unknown;text?:string;diagnostics?:string}|unknown;try{value=JSON.parse(result.stdout);}catch{return {stdout:result.stdout,stderr:result.stderr,code:result.code};}
+  const v=value as {error?:string;data?:unknown;text?:string;diagnostics?:string};
+  if(v&&typeof v==='object'&&!Array.isArray(v)&&('data' in v||'text' in v||'error' in v)){
+   const stderr=[v.error,v.diagnostics].filter(Boolean).join('\n');
+   const stdout=v.text??(v.data===undefined?'':JSON.stringify(v.data,null,2));
+   return {stdout,stderr,code:v.error?1:result.code};
+  }
+  return {stdout:JSON.stringify(value,null,2),stderr:result.stderr,code:result.code};
+ }catch(e){throw toolboxFailure(e,'kubectl failed',signal);}
+ finally{await run?.cleanup();}
+}

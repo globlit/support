@@ -12,6 +12,8 @@ import {runSandboxCommand,cleanupSandboxRun,sandboxUrl,maxCommandSeconds} from '
 import {readToolboxLogs} from './toolbox.js';
 import {repoCheckout,proposeChange} from './repo-tools.js';
 import type {GitProxy} from './git-proxy.js';
+import type {AgentGateway} from './agent-gateway.js';
+import {agentEngineReady,runClaudeCode,savedSession} from './claude-code.js';
 import {sourcePage} from '../src/intake-model.js';
 import {PrometheusSources,prometheusEndpoints} from './prometheus-sources.js';
 import type {AnalysisRun,SourceIssue} from '../src/model.js';
@@ -56,6 +58,10 @@ export class Claude {
  private gitProxy?:GitProxy;
  /** Uses `proxy` for repository clones with history. Without it, repo_checkout uploads an archive. */
  useGitProxy(proxy:GitProxy){this.gitProxy=proxy;}
+ private gateway?:AgentGateway;
+ /** Runs investigations as Claude Code sessions in the sandbox, through `gateway`, when the configuration allows it. */
+ useGateway(gateway:AgentGateway){this.gateway=gateway;}
+ private resumeTimers=new Map<string,NodeJS.Timeout>();
  private active=new Map<string,AbortController>();
  constructor(private store:Store,private youtrack:YouTrack,private fetcher:typeof fetch=fetch,private toolboxReader=readToolbox){}
  status(id:string){const run=this.runs.get(id)??this.store.investigation(id);if(Date.parse(run.startedAt)<Date.now()-this.store.snapshot().config.retentionDays*86400000){this.runs.delete(id);this.store.pruneInvestigations();throw new AppError(404,'Investigation expired.');}if(run.state==='running'&&!this.active.has(id)&&this.store.activeRunId!==id){run.state='failed';run.error='Investigation interrupted. Start a fresh run.';for(const e of run.events)if(e.status==='running')e.status='failed';this.store.saveInvestigation(run);}return structuredClone(this.store.key?run:{...run,events:[],plan:undefined,replyDraft:undefined})}
@@ -75,6 +81,12 @@ export class Claude {
   run.events.push({at:m.at,text:`Engineer message: ${m.text}`});this.store.saveInvestigation(run);agentFeed.publish(runId,'engineer',m.text,m.id);
   return m;
  }
+ /** Records `text` as the answer to the unanswered questions of a finished run. */
+ answerQuestions(runId:string,text:string,by:string){
+  const run=this.runs.get(runId)??this.store.investigation(runId);const at=new Date().toISOString();let changed=false;
+  for(const q of run.questions??[])if(!q.answer){q.answer={text,at,by};changed=true;}
+  if(changed)this.store.saveInvestigation(run);
+ }
  private runListeners:{started(r:{runId:string;connection:string;id:string;title:string;fingerprint?:string}):void;finished(runId:string,state:'ready'|'failed'|'cancelled',error?:string):void}[]=[];
  /** Calls `listener` when an investigation starts and when it ends. */
  onRun(listener:Claude['runListeners'][number]){this.runListeners.push(listener);}
@@ -84,7 +96,11 @@ export class Claude {
  /** Aborts every running investigation. Returns how many were running. */
  cancelAll(){for(const c of this.active.values())c.abort(stopReason('Stopped by the kill switch (Stop all).'));return this.active.size;}
  private base(endpoint:string){const u=new URL(endpoint.replace(/\/+$/,'')+'/');if(u.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(u.hostname))throw new AppError(400,'Use HTTPS for model and tool connections.');return u}
- async start(id:string,expected:{revision:number;sourceUpdated:number},source:Pick<YouTrack,'work'|'issue'>=this.youtrack){
+ /**
+  * Starts an investigation. With `resume`, the run continues the Claude Code session of an earlier run with `prompt`
+  * instead of starting a new investigation of the request.
+  */
+ async start(id:string,expected:{revision:number;sourceUpdated:number},source:Pick<YouTrack,'work'|'issue'>=this.youtrack,resume?:{prompt:string;parentRunId:string}){
   assertAgentRunning(this.store);
   const config=this.store.snapshot().config;
   const model=config.connections.Model;
@@ -95,9 +111,11 @@ export class Claude {
   const run:AnalysisRun={id:randomUUID(),issueId:id,state:'running',events:[],startedAt:new Date().toISOString()};
   const release=this.store.claimAnalysis((source===this.youtrack?'youtrack:':'alert:')+id,run.id);
   const controller=new AbortController();this.active.set(run.id,controller);
-  const check=()=>{if(run.connection){assertAgentWork(this.store,{connection:run.connection,id});const w=this.store.getWorkSession(run.connection,id);if(w&&w.revision!==expected.revision)throw new AppError(409,'Handling or local work changed. Start a new investigation.');}if(controller.signal.aborted)throw new AppError(409,'Analysis cancelled.');if(revision!==this.store.snapshot().configRevision||epoch!==this.store.credentialEpoch||!this.store.key)throw new AppError(409,'Settings or vault changed. Start a new analysis.');};
+  const agentEngine=agentEngineReady(this.store.snapshot().config,this.gateway);
+  if(resume&&!agentEngine)throw new AppError(409,'Continuing a session needs the Claude Code engine: Claude provider, agent commands on, and the sandbox and gateway available.');
+  const check=()=>{if(agentEngine){if(controller.signal.aborted)throw new AppError(409,'Analysis cancelled.');if(!this.store.key)throw new AppError(409,'The Vault was locked.');if(run.connection)assertAgentWork(this.store,{connection:run.connection,id});return;}if(run.connection){assertAgentWork(this.store,{connection:run.connection,id});const w=this.store.getWorkSession(run.connection,id);if(w&&w.revision!==expected.revision)throw new AppError(409,'Handling or local work changed. Start a new investigation.');}if(controller.signal.aborted)throw new AppError(409,'Analysis cancelled.');if(revision!==this.store.snapshot().configRevision||epoch!==this.store.credentialEpoch||!this.store.key)throw new AppError(409,'Settings or vault changed. Start a new analysis.');};
   try {
-   const key=await modelKey(this.store);check();
+   const key=agentEngine&&config.modelAuth==='claude_cli'?'':await modelKey(this.store);check();
    const detail=await source.work(id);assertAgentWork(this.store,detail.issue);check();
    if(detail.issue.resolved||detail.issue.updated!==expected.sourceUpdated||detail.session.revision!==expected.revision)throw new AppError(409,'The ticket or work session changed. Refresh before analyzing.');
    Object.assign(run,{connection:detail.issue.connection,sourceUpdated:detail.issue.updated,sourceFingerprint:detail.issue.sourceFingerprint,model:model.scope,title:`${detail.issue.key} · ${detail.issue.title}`});this.runs.set(run.id,run);this.store.saveInvestigation(run);
@@ -105,9 +123,85 @@ export class Claude {
    this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(detail.issue.connection+':'+id,detail.issue.sourceFingerprint??String(detail.issue.updated),new Date().toISOString());
    // Tool traces are encrypted in the Vault.
    while(this.runs.size>50)this.runs.delete(this.runs.keys().next().value!);
-   void this.execute(run,detail.issue,expected.revision,base,key,model.scope,config,controller,check,source).finally(()=>{this.active.delete(run.id);release();});
+   if(resume)run.parentRunId=resume.parentRunId;
+   void (agentEngine?this.executeAgent(run,detail.issue,expected.revision,model.scope,config,controller,check,source,resume):this.execute(run,detail.issue,expected.revision,base,key,model.scope,config,controller,check,source)).finally(()=>{this.active.delete(run.id);release();});
    return this.status(run.id);
   } catch(e){this.active.delete(run.id);release();throw e;}
+ }
+ /**
+  * Runs an investigation as a Claude Code session in the sandbox. A new investigation of a request forks the
+  * request's earlier session, so that the agent keeps what it learned. A continuation resumes the session itself.
+  * A result with outcome plan becomes a plan version for review only when the session had successful checks.
+  */
+ private async executeAgent(run:AnalysisRun,issue:SourceIssue,sessionRevision:number,model:string,config:ReturnType<Store['snapshot']>['config'],controller:AbortController,check:()=>void,source:Pick<YouTrack,'work'|'issue'>,resume?:{prompt:string;parentRunId:string}){
+  run.engine='claude-code';
+  const timeout=setTimeout(()=>controller.abort(stopReason(`Stopped after the ${config.agentLimits.runMinutes}-minute run limit.`)),config.agentLimits.runMinutes*60_000+30_000);
+  agentFeed.start({runId:run.id,title:`${issue.key??issue.id} · ${issue.title}`.slice(0,160),route:{page:sourcePage(issue.connection),issue:issue.id},startedAt:run.startedAt});
+  const secrets=this.store.secretValues();
+  const redact=(value:string)=>{let s=value;for(const secret of secrets)if(secret&&secret.length>=6)s=s.split(secret).join('[redacted]');return s.replace(/("(?:password|token|secret|authorization|api[_-]?key)"\s*:\s*)"[^"]*"/gi,'$1"[redacted]"').replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,'[redacted private key]').replace(/\b(password|token|secret|authorization|api[_-]?key)\s*[:=]\s*[^\s,;"]+/gi,'$1=[redacted]');};
+  let saveTimer:NodeJS.Timeout|undefined;
+  const persist=()=>{saveTimer??=setTimeout(()=>{saveTimer=undefined;this.store.saveInvestigation(run);},1500);};
+  const event=(text:string)=>{run.events.push({at:new Date().toISOString(),text});persist();agentFeed.publish(run.id,'step',text);};
+  let limitedUntil:string|undefined,limited=false;
+  try{
+   const saved=savedSession(this.store,issue.connection,issue.id);
+   const current=this.store.workSession(issue);
+   const filteredJSON=(value:unknown)=>JSON.stringify(value,(key,value)=>/password|secret|token|authorization|api[_-]?key|private[_-]?key/i.test(key)?'[redacted]':typeof value==='string'?redact(value):value,1);
+   const prompt=resume?resume.prompt:[
+    saved?'A new investigation of the same request starts here. The request may have changed since your earlier work: use the current data below as the source of truth.':'Investigate this request.',
+    'Find the cause before proposing a change. Use every source available to you, keep notes in your working folder, and finish with submit_result.',
+    '```json',filteredJSON({request:issue,previousPlan:current.plans.at(-1)?.text,notes:current.notes.slice(-30),recentAlertHandoffs:current.alertHandoffs?.slice(-3)}),'```',
+   ].join('\n\n');
+   event(resume?'Continuing the agent session':saved?'Starting from the earlier session of this request':'Starting a new agent session');
+   check();
+   const outcome=await runClaudeCode({store:this.store,youtrack:this.youtrack,fetcher:this.fetcher,gateway:this.gateway!,gitProxy:this.gitProxy,run,issue,config,model,prompt,
+    resume:resume&&run.parentRunId?{sessionId:this.store.investigation(resume.parentRunId).sessionId??saved?.sessionId??'',fork:false}:saved?{sessionId:saved.sessionId,fork:true}:undefined,
+    signal:controller.signal,redact,persist,
+    onQuestion:q=>{for(const l of this.questionListeners)l(run,q);},
+    onLimit:resetAt=>{limited=true;limitedUntil=resetAt;}});
+   check();
+   const r=outcome.result;
+   if(!r)throw new AppError(502,'The agent ended without a result. Its notes are in the timeline.');
+   run.outcome=r.outcome;run.report=r.report;
+   for(const text of r.questions){if(!run.questions?.some(q=>q.text===text))run.questions=[...(run.questions??[]),{id:randomUUID(),text,at:new Date().toISOString()}];}
+   if(r.outcome==='plan'&&outcome.checks>0){
+    const fresh=await source.issue(issue.id);check();
+    if(fresh.connection!==issue.connection||fresh.resolved)throw new AppError(409,'The request was closed or moved during the investigation.');
+    const open=(run.questions??[]).filter(q=>!q.answer);
+    const proposals=(run.proposals??[]).map(p=>`- **${p.title}**: ${p.files.length} file${p.files.length===1?'':'s'} in \`${p.project}\`. Review the diff in the implementation step.`);
+    const text=[r.report,...(proposals.length?['## Proposed code changes',...proposals]:[]),...(open.length?['## Open questions',...open.map(q=>`- ${q.text}`)]:[])].join('\n\n');
+    this.store.transaction(()=>{
+     const session=this.store.workSession(fresh);
+     session.plans.push({version:session.plans.length+1,text:text.slice(0,60000),at:new Date().toISOString()});
+     if(r.replyDraft)session.draft=r.replyDraft;delete session.sourceChangedAt;session.pendingRevision=false;session.approval=null;session.revision++;session.updatedAt=new Date().toISOString();session.analysis={model,events:run.events.filter(e=>e.tool!=='note').slice(-200).map(({at,text})=>({at,text}))};
+     this.store.saveWorkSession(session);
+    });
+    run.plan=text;run.replyDraft=r.replyDraft;run.planVersion=this.store.workSession(fresh).plans.at(-1)?.version;
+    event('Plan ready for engineer review');
+   }else if(r.outcome==='plan'){run.outcome='inconclusive';run.report=`${r.report}\n\n> Support did not create a plan version: no check of this session succeeded.`;event('Plan refused: no successful check');}
+   else event(r.outcome==='diagnosis'?'Diagnosis ready':r.outcome==='needs_input'?'Questions for the engineer':'Investigation inconclusive');
+   run.state='ready';
+  }catch(e){
+   run.state=controller.signal.aborted?'cancelled':'failed';
+   run.error=limited?`The model usage limit was reached${limitedUntil?`. It resets at ${new Date(limitedUntil).toLocaleString('en-GB',{timeZone:config.timezone})}`:''}. The session continues automatically after the reset.`:controller.signal.aborted&&controller.signal.reason instanceof AppError?controller.signal.reason.message:e instanceof AppError?e.message:'The agent session failed.';
+   event(run.error);
+   if(limited&&run.connection)this.scheduleResume(run,limitedUntil);
+  }finally{
+   clearTimeout(timeout);clearTimeout(saveTimer);run.finishedAt=new Date().toISOString();
+   for(const e of run.events)if(e.status==='running'){e.status='failed';e.result??='No result recorded.';}
+   this.store.saveInvestigation(run);
+   for(const l of this.runListeners)l.finished(run.id,run.state==='running'?'failed':run.state,run.error);
+   agentFeed.end(run.id,run.state==='ready'?(run.outcome==='plan'&&run.planVersion?'Plan ready for review':run.outcome==='needs_input'?'Waiting for your answers':run.outcome==='diagnosis'?'Diagnosis ready':'Finished without a conclusion'):run.state==='cancelled'?run.error??'Stopped':`Failed: ${run.error??'unknown error'}`);
+  }
+ }
+ private resumers:((run:AnalysisRun,prompt:string)=>Promise<unknown>)[]=[];
+ /** Sets how a run is continued, by source. Used by automatic resumes after a usage limit. */
+ onResume(resumer:(run:AnalysisRun,prompt:string)=>Promise<unknown>){this.resumers=[resumer];}
+ private scheduleResume(run:AnalysisRun,resetAt?:string){
+  const delay=Math.min(6*3600_000,Math.max(60_000,(resetAt?Date.parse(resetAt):Date.now()+3600_000)-Date.now()+30_000));
+  clearTimeout(this.resumeTimers.get(run.id));
+  const t=setTimeout(()=>{this.resumeTimers.delete(run.id);for(const r of this.resumers)void r(run,'The usage limit has reset. Continue where you stopped.').catch(()=>{});},delay);t.unref();
+  this.resumeTimers.set(run.id,t);
  }
  private async execute(run:AnalysisRun,issue:SourceIssue,sessionRevision:number,base:URL,key:string,model:string,config:ReturnType<Store['snapshot']>['config'],controller:AbortController,check:()=>void,source:Pick<YouTrack,'work'|'issue'>){
   const modelTransport=configuredModelFetch(this.store,this.fetcher);

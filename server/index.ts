@@ -3,6 +3,7 @@ import {AgentQueue} from './agent-queue.js';
 import {agentFeed,agentHalted,setAgentHalted,type FeedEntry} from './agent-feed.js';
 import {killAllSandbox,sandboxHealth} from './sandbox.js';
 import {GitProxy} from './git-proxy.js';
+import {AgentGateway} from './agent-gateway.js';
 import {PrometheusSources} from './prometheus-sources.js';
 import {deployment} from './deployment.js';
 import {Sessions} from './sessions.js';
@@ -53,6 +54,8 @@ const youtrack=new YouTrack(store,transport);
 const claude=new Claude(store,youtrack,transport);
 const gitProxy=new GitProxy(store);
 if(process.env.SUPPORT_RELAY_BIND?.trim())gitProxy.listen(process.env.SUPPORT_RELAY_BIND.trim(),Number(process.env.SUPPORT_GIT_PROXY_PORT??7071)).then(()=>claude.useGitProxy(gitProxy),e=>console.error('Git proxy not started:',e instanceof Error?e.message:e));
+const gateway=new AgentGateway(store);
+if(process.env.SUPPORT_RELAY_BIND?.trim())gateway.listen(process.env.SUPPORT_RELAY_BIND.trim(),Number(process.env.SUPPORT_GATEWAY_PORT??7072)).then(()=>claude.useGateway(gateway),e=>console.error('Agent gateway not started:',e instanceof Error?e.message:e));
 const agentQueue=new AgentQueue(store,id=>claude.isActive(id));
 claude.onRun({started:r=>agentQueue.started(r),finished:(id,state,error)=>agentQueue.finished(id,state,error)});
 /** Kill switch, running investigations and sandbox status, as shown in the agent console. */
@@ -74,6 +77,24 @@ const pipelines=new Pipelines(store,youtrack,transport,resolveSource);
 const resolutions=new Resolutions(store,youtrack,transport,resolveSource);
 const replies=new IncomingReplies(store,resolveSource,slack,resolutions,transport);
 const slackTimer=setInterval(()=>void slack.tick(agentQueue),5000);slackTimer.unref();
+/**
+ * Continues a finished Claude Code session with the engineer's text, as a new run of the same request. Answers the
+ * open questions of the earlier run. A running session receives the text as a message instead.
+ */
+async function continueRun(runId:string,text:string,by:string){
+ if(claude.isActive(runId))return {message:claude.message(runId,{text},by)};
+ const parent=claude.status(runId);
+ if(!parent.connection||!parent.sessionId)throw new AppError(409,'This run has no agent session to continue. Start a new investigation.');
+ const kind=sourceKind(parent.connection);
+ const detail=kind==='alert'?await alerts.work(parent.issueId):kind==='slack'?await slack.work(parent.issueId):await youtrack.work(parent.issueId);
+ const expected={revision:detail.session.revision,sourceUpdated:detail.issue.updated};
+ const open=(parent.questions??[]).filter(q=>!q.answer);
+ const prompt=open.length?`The engineer answered your questions:\n${open.map(q=>`- ${q.text}`).join('\n')}\n\nAnswer:\n${text}`:`Message from the engineer:\n${text}`;
+ const run=kind==='alert'?await alerts.analyze(parent.issueId,expected,claude,{prompt,parentRunId:runId}):await claude.start(parent.issueId,expected,kind==='slack'?slack:youtrack,{prompt,parentRunId:runId});
+ claude.answerQuestions(runId,text,by);
+ return {run};
+}
+claude.onResume((run,prompt)=>continueRun(run.id,prompt,'Support'));
 agentQueue.register('youtrack',{load:id=>youtrack.work(id),start:(id,expected)=>claude.start(id,expected)});
 agentQueue.register('alert',{load:id=>alerts.work(id),start:(id,expected)=>alerts.analyze(id,expected,claude),onStartError:(id,error)=>alerts.recordStartFailure(id,error)});
 agentQueue.register('slack',{load:id=>slack.work(id),start:(id,expected)=>claude.start(id,expected,slack)});
@@ -118,6 +139,8 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   return;
  }
  const agentMessage=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/message$/);
+ const agentContinue=path.match(/^\/api\/agent\/runs\/([0-9a-f-]{36})\/continue$/);
+ if(agentContinue&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(16000)}).strict().parse(await body(req));return send(res,await continueRun(agentContinue[1],v.text,session.principal.name));}
  if(agentMessage&&req.method==='POST'){const v=z.object({text:z.string().trim().min(1).max(4000),replyTo:z.string().uuid().optional()}).strict().parse(await body(req));return send(res,claude.message(agentMessage[1],v,session.principal.name));}
  const agentRunStop=path.match(/^\/api\/agent\/runs\/([a-f0-9-]+)\/stop$/);
  if(agentRunStop&&req.method==='POST'){await body(req);claude.cancel(agentRunStop[1]);return send(res,await agentState());}
@@ -174,7 +197,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  const slackTicket=path.match(/^\/api\/slack\/([a-f0-9]{64})\/ticket\/(prepare|save|approve|reconcile)$/);
  if(slackTicket&&req.method==='POST'){const id=slackTicket[1],action=slackTicket[2];if(action==='reconcile'){await body(req);return send(res,await slackTickets.reconcile(id));}if(action==='prepare'){const v=z.object({projectId:z.string().min(1).max(100)}).strict().parse(await body(req));return send(res,await slackTickets.prepare(id,v.projectId));}if(action==='save')return send(res,await slackTickets.save(id,alertDraftInput.parse(await body(req))));const v=z.object({hash:z.string().length(64)}).strict().parse(await body(req));return send(res,await slackTickets.approve(id,v.hash));}
  const slackMatch=path.match(/^\/api\/slack\/([a-f0-9]{64})(?:\/(analyze|action))?$/);
- if(slackMatch){const id=slackMatch[1],action=slackMatch[2];if(!action&&req.method==='GET')return send(res,await slack.work(id));if(req.method==='POST'){if(action==='analyze'){const v=z.object({revision:z.number().int(),sourceUpdated:z.number()}).strict().parse(await body(req));return send(res,await claude.start(id,v,slack),202);}if(action==='action'){const v=z.object({action:z.enum(['note','draft','plan','approve','revise','delete-note']),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional(),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional()}).strict().parse(await body(req));return send(res,await slack.action(id,v));}}}
+ if(slackMatch){const id=slackMatch[1],action=slackMatch[2];if(!action&&req.method==='GET')return send(res,await slack.work(id));if(req.method==='POST'){if(action==='analyze'){const v=z.object({revision:z.number().int(),sourceUpdated:z.number()}).strict().parse(await body(req));return send(res,await claude.start(id,v,slack),202);}if(action==='action'){const v=z.object({action:z.enum(['note','draft','plan','approve','unapprove','revise','delete-note']),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional(),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional()}).strict().parse(await body(req));return send(res,await slack.action(id,v));}}}
 
  if(path==='/api/alerts'&&req.method==='GET')return send(res,alerts.queue(claude));
  if(path==='/api/alerts/poll'&&req.method==='POST'){await alerts.poll();return send(res,alerts.queue(claude));}
@@ -198,7 +221,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
   if(!action&&req.method==='GET')return send(res,await alerts.work(id));
   if(req.method==='POST'){
    if(action==='analyze'){const v=z.object({revision:z.number().int(),sourceUpdated:z.number()}).strict().parse(await body(req));return send(res,await alerts.analyze(id,v,claude),202);}
-   if(action==='action'){const v=z.object({action:z.enum(['note','draft','plan','approve','revise','delete-note']),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional(),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional()}).strict().parse(await body(req));return send(res,await alerts.action(id,v));}
+   if(action==='action'){const v=z.object({action:z.enum(['note','draft','plan','approve','unapprove','revise','delete-note']),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional(),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional()}).strict().parse(await body(req));return send(res,await alerts.action(id,v));}
    if(action==='link'){const v=z.object({ticketId:z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/)}).strict().parse(await body(req));return send(res,await alerts.link(id,v.ticketId,youtrack));}
   }
  }
@@ -240,7 +263,7 @@ const server=createServer({maxHeaderSize:16384,headersTimeout:10000,requestTimeo
  if(path==='/api/youtrack/issues'&&req.method==='GET'){const offset=z.coerce.number().int().min(0).max(100000).parse(url.searchParams.get('offset')??0);return send(res,await youtrack.list(offset,true));}
  const ytMatch=path.match(/^\/api\/youtrack\/issues\/([a-zA-Z0-9_-]+)(\/action)?$/);
  if(ytMatch&&req.method==='GET'&&!ytMatch[2])return send(res,await youtrack.work(ytMatch[1]));
- if(ytMatch&&req.method==='POST'&&ytMatch[2]){const input=z.object({action:z.enum(['note','draft','plan','approve','revise','delete-note']),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional(),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional()}).strict().parse(await body(req));return send(res,await youtrack.action(ytMatch[1],input));}
+ if(ytMatch&&req.method==='POST'&&ytMatch[2]){const input=z.object({action:z.enum(['note','draft','plan','approve','unapprove','revise','delete-note']),revision:z.number().int(),sourceUpdated:z.number(),text:z.string().max(16000).optional(),annotation:z.object({start:z.number().int().min(0).max(64000).optional(),end:z.number().int().min(0).max(64000).optional(),version:z.number().int().positive(),quote:z.string().max(3000),markdown:z.string().max(12000).optional(),kind:z.enum(['comment','recheck','remove'])}).strict().optional()}).strict().parse(await body(req));return send(res,await youtrack.action(ytMatch[1],input));}
  if(path==='/api/state'&&req.method==='GET'){const s=store.snapshot();return send(res,{...s,tickets:[],runtime:{...s.runtime,mode:'Live workspace',deployment:runtime.mode,workspaceId:workspaceIdentity(store).workspaceId,principal:session.principal}});}
  if(path==='/api/config'&&req.method==='PUT'){const data=z.object({config:z.unknown(),revision:z.number().int()}).strict().parse(await body(req));return send(res,store.config(data.config,data.revision));}
  if(path==='/api/config/export'&&req.method==='GET'){const state=store.snapshot();return send(res,{format:1,config:state.config});}

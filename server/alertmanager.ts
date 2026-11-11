@@ -135,8 +135,8 @@ export class Alertmanager {
  }
  /** Records a failed automatic start on the alert case, as shown in the alert's investigation step. */
  recordStartFailure(id:string,error:unknown){const c=this.store.alert(id);c.autoAttempt=c.episodes;this.store.db.prepare('INSERT OR REPLACE INTO investigation_attempts VALUES (?,?,?)').run(c.connection+':'+c.id,this.source(c).sourceFingerprint??String(c.updated),new Date().toISOString());c.run={id:'',issueId:c.id,state:'failed',startedAt:new Date().toISOString(),events:[],error:error instanceof AppError?error.message:'Investigation could not start.'};this.store.saveAlert(c);}
- async analyze(id:string,expected:{revision:number;sourceUpdated:number},claude:Claude){
-  assertHandling(this.store,{connection:this.store.alert(id).connection,id});const run=await claude.start(id,expected,this);
+ async analyze(id:string,expected:{revision:number;sourceUpdated:number},claude:Claude,resume?:{prompt:string;parentRunId:string}){
+  assertHandling(this.store,{connection:this.store.alert(id).connection,id});const run=await claude.start(id,expected,this,resume);
   const c=this.store.alert(id);c.autoAttempt=c.episodes;c.run=run;this.store.saveAlert(c);return run;
  }
  private syncRuns(claude:Claude){for(const c of this.store.alertCases())if(c.run?.state==='running'){

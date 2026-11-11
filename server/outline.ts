@@ -3,6 +3,18 @@ import {AppError,type Store} from './store.js';
 import {boundedJSON,serviceBase} from './gitlab.js';
 import type {Config} from '../src/model.js';
 
+/**
+ * Returns other queries to try when a search finds nothing: the text without punctuation, then each distinctive
+ * word, longest first. For a host name such as netpol.sahar.fr, the parts without the top-level domain are tried.
+ * At most 6 variants.
+ */
+export function searchVariants(query:string){
+ const words=query.toLowerCase().split(/[^a-z0-9_-]+/i).filter(Boolean);
+ const tlds=new Set(['fr','com','net','org','io','eu','dev','local','internal','lan','cloud']);
+ const distinct=[...new Set(words.filter(w=>w.length>=3&&!tlds.has(w)))].sort((a,b)=>b.length-a.length);
+ const variants=[words.join(' '),...distinct].filter(v=>v&&v!==query.toLowerCase());
+ return [...new Set(variants)].slice(0,6);
+}
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Longest document text returned to the agent, in characters. */
 export const outlineTextLimit=16000;
@@ -69,8 +81,11 @@ export class OutlineReader {
   const allowed=await this.collectionId();
   let collectionId=allowed;
   if(collection){const id=await this.resolve(collection);if(!id)throw new AppError(404,`Outline collection ${collection} was not found. Use outline_collections.`);if(allowed&&id!==allowed)throw new AppError(403,'The collection is outside the allowed Outline collection.');collectionId=id;}
-  const result=searchResult.parse(await this.call('documents.search',{query,...(collectionId?{collectionId}:{}),limit:10}));
-  return {results:result.data.filter(r=>!collectionId||!r.document.collectionId||r.document.collectionId===collectionId).map(r=>({id:r.document.id,title:r.document.title,url:this.link(r.document.url),updatedAt:r.document.updatedAt,context:r.context?.replace(/<\/?b>/g,'').slice(0,500)}))};
+  const run=async(q:string)=>searchResult.parse(await this.call('documents.search',{query:q,...(collectionId?{collectionId}:{}),limit:10})).data.filter(r=>!collectionId||!r.document.collectionId||r.document.collectionId===collectionId);
+  let data=await run(query);const tried=[query];
+  for(const variant of searchVariants(query)){if(data.length)break;tried.push(variant);data=await run(variant);}
+  const result={data};
+  return {...(tried.length>1?{queriesTried:tried,matchedQuery:data.length?tried.at(-1):undefined}:{}),results:result.data.map(r=>({id:r.document.id,title:r.document.title,url:this.link(r.document.url),updatedAt:r.document.updatedAt,context:r.context?.replace(/<\/?b>/g,'').slice(0,500)}))};
  }
  /** Reads one document as Markdown. Fails for a document outside the allowed collection, when one is set. */
  async read(input:unknown){
